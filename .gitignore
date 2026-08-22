@@ -1,0 +1,41 @@
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+env/
+
+# === 機密・資格情報（絶対にコミットしない） ===
+.env*
+*token*
+*secret*
+*credential*
+*.key
+id_rsa
+cookies.txt
+
+# === 巨大バイナリ / 同梱ツール ===
+cloudflared.exe
+ffmpeg.exe
+**/ffmpeg.exe
+*.zip
+models/
+
+# === ビルド成果物（ユーザー名を含む絶対パスが残るため除外） ===
+build/
+dist/
+VRCYouTubeStreamer/
+
+# === 実行時に生成される状態ファイル ===
+hls_output/
+**/hls_output/
+config.json
+*.log
+*.m3u8
+*.ts
+
+# === 無関係な作業残骸 ===
+ag-stop-probe.json
+config.yml
+standby_test.png
