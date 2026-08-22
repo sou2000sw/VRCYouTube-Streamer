@@ -5,6 +5,7 @@ import http.server
 import socketserver
 import threading
 import time
+import ipaddress
 from urllib.parse import urlparse
 from streamer_core import HLS_DIR, StreamerCore, log_print
 
@@ -697,6 +698,7 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 RATE_LIMIT_LOCK = threading.Lock()
 LAST_QUEUE_REQUESTS = {} # {ip: timestamp}
 QUEUE_RATE_LIMIT_SECONDS = 2.5
+MAX_REQUEST_BODY_BYTES = 64 * 1024
 
 class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, streamer_core=None, shutdown_callback=None, **kwargs):
@@ -704,16 +706,78 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         self.shutdown_callback = shutdown_callback
         super().__init__(*args, directory=HLS_DIR, **kwargs)
 
+    def _self_origins(self):
+        """自分自身のオリジンとして認めるURLの集合"""
+        port = self.streamer_core.config.get("port", 8000) if self.streamer_core else 8000
+        origins = set()
+        for host in ("127.0.0.1", "localhost", "[::1]"):
+            origins.add(f"http://{host}:{port}")
+        tunnel = (self.streamer_core.tunnel_raw_url if self.streamer_core else "") or ""
+        if tunnel:
+            origins.add(tunnel.rstrip("/"))
+        return origins
+
+    def _origin_is_self(self):
+        """
+        CSRF対策: Originヘッダが自分自身のオリジンか判定。
+        ブラウザはPOSTに必ずOriginを付けるため、「Origin無し」= 非ブラウザ由来
+        （VRCBeacon等のネイティブ/サーバサイドクライアント）とみなして許可する。
+        """
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        return origin.rstrip("/") in self._self_origins()
+
+    def _host_header_is_safe(self):
+        """
+        DNSリビンディング対策: Hostヘッダがドメイン名の場合は拒否する。
+        攻撃者ドメインを 127.0.0.1 に解決させる手口はHostが独自ドメインになるため弾ける。
+        """
+        raw_host = self.headers.get("Host", "")
+        if not raw_host:
+            return True
+        hostname = urlparse(f"http://{raw_host}").hostname or ""
+        hostname = hostname.lower()
+        if hostname in ("localhost", ""):
+            return True
+        try:
+            ipaddress.ip_address(hostname)
+            return True  # IPリテラル直打ちはリビンディングの対象外
+        except ValueError:
+            pass
+        tunnel = (self.streamer_core.tunnel_raw_url if self.streamer_core else "") or ""
+        tunnel_host = (urlparse(tunnel).hostname or "").lower() if tunnel else ""
+        return bool(tunnel_host) and hostname == tunnel_host
+
     def is_local_request(self):
-        """ローカルホスト（127.0.0.1 / ::1）からの直接通信か判定（Cloudflare等の外部Proxy経由はFalse）"""
+        """
+        ホストPC本人からの操作か判定（ここがTrueだと全操作が許可される）。
+        以下をすべて満たす場合のみTrue:
+          1. Cloudflare等のProxyヘッダが付いていない
+          2. TCP接続元がループバック
+          3. Originヘッダが無い、または自分自身のオリジン（第三者サイトからのCSRFを排除）
+          4. Hostヘッダがドメイン名でない（DNSリビンディングを排除）
+        """
         if "cf-connecting-ip" in self.headers or "x-forwarded-for" in self.headers:
             return False
         client_ip = self.client_address[0] if self.client_address else ""
-        return client_ip in ("127.0.0.1", "::1", "localhost")
+        if client_ip not in ("127.0.0.1", "::1", "localhost"):
+            return False
+        if not self._origin_is_self():
+            log_print(f"[APIServer] Rejected local privilege: cross-site Origin {self.headers.get('Origin')!r}")
+            return False
+        if not self._host_header_is_safe():
+            log_print(f"[APIServer] Rejected local privilege: suspicious Host {self.headers.get('Host')!r}")
+            return False
+        return True
 
     def check_rate_limit(self):
-        """連投（DoS・スパム）防止レートリミット"""
-        client_ip = self.headers.get("cf-connecting-ip") or self.headers.get("x-forwarded-for") or self.client_address[0]
+        """
+        連投（DoS・スパム）防止レートリミット。
+        キーにはCloudflareが上書きする CF-Connecting-IP か接続元IPのみを使う。
+        X-Forwarded-For はクライアントが自由に詐称できるためキーに含めない。
+        """
+        client_ip = self.headers.get("cf-connecting-ip") or self.client_address[0]
         now = time.time()
         with RATE_LIMIT_LOCK:
             last_time = LAST_QUEUE_REQUESTS.get(client_ip, 0)
@@ -837,8 +901,17 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        # ボディ取得
-        content_len = int(self.headers.get("Content-Length", 0))
+        # ボディ取得（サイズ上限つき: 巨大bodyによるメモリ枯渇を防ぐ）
+        try:
+            content_len = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            content_len = 0
+        if content_len > MAX_REQUEST_BODY_BYTES:
+            self.send_json_response(413, {
+                "success": False,
+                "message": f"Request body too large (max {MAX_REQUEST_BODY_BYTES} bytes)"
+            })
+            return
         body = self.rfile.read(content_len) if content_len > 0 else b"{}"
         try:
             body_json = json.loads(body.decode("utf-8")) if body else {}
@@ -1037,8 +1110,9 @@ class APIServer:
         port = self.streamer_core.config.get("port", 8000)
         host = self.streamer_core.config.get("host", "127.0.0.1")
         
-        # 0.0.0.0 や 127.0.0.1 でバインド
-        bind_host = "" if host in ("0.0.0.0", "127.0.0.1", "localhost") else host
+        # 0.0.0.0 を指定した場合のみ全インターフェースへ公開する。
+        # 127.0.0.1 / localhost はループバック限定でバインドする（"" は 0.0.0.0 と同義なので使わない）。
+        bind_host = "" if host == "0.0.0.0" else host
 
         try:
             self.httpd = ThreadedHTTPServer((bind_host, port), self.create_handler)

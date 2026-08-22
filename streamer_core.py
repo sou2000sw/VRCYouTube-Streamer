@@ -89,12 +89,34 @@ def is_safe_url(url):
         return False, "Access to local/private network addresses is forbidden"
 
     import ipaddress
+    import socket
+
+    def _is_forbidden_ip(ip_str):
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        # IPv4射影IPv6 (::ffff:127.0.0.1) は元のIPv4に戻して判定する
+        mapped = getattr(ip, "ipv4_mapped", None)
+        if mapped is not None:
+            ip = mapped
+        return (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+    # 表記そのものがIPアドレスの場合
+    if _is_forbidden_ip(host):
+        return False, "Access to private/loopback IP is forbidden"
+
+    # ホスト名を実際に解決して判定する。
+    # これにより 10進表記 (http://2130706433/) や、内部IPを指すドメイン名も弾ける。
     try:
-        ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            return False, "Access to private/loopback IP is forbidden"
-    except ValueError:
-        pass # ドメイン名の場合はOK
+        resolved = socket.getaddrinfo(host, None)
+    except Exception:
+        return False, "Hostname could not be resolved"
+
+    for info in resolved:
+        if _is_forbidden_ip(info[4][0]):
+            return False, "Hostname resolves to a private/loopback address"
 
     return True, "OK"
 
@@ -322,7 +344,6 @@ class StreamerCore:
         ydl_opts = {
             "format": "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1]/best",
             "quiet": True,
-            "nocheckcertificate": True,
             "extractor_args": {
                 "youtube": {
                     "player_client": ["ios", "android", "tv"]
