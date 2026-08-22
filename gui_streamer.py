@@ -301,6 +301,10 @@ class App(ctk.CTk):
         self.geometry("680x620")
         self.minsize(540, 480)
 
+        # ウィンドウの✕ボタンでも on_closing() を通す。
+        # これが無いと shutdown() が呼ばれず、cloudflared / ffmpeg の子プロセスが孤児化する。
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
         # テーマと配色の設定
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")
