@@ -39,3 +39,6 @@ config.json
 ag-stop-probe.json
 config.yml
 standby_test.png
+
+# === 配布パッケージ（ビルド成果物） ===
+release/
