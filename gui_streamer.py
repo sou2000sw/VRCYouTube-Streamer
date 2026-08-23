@@ -130,7 +130,18 @@ class SettingsWindow(ctk.CTkToplevel):
         mode_val = "Fullscreen (フル画面)" if curr_mode == "fullscreen" else "Compact (右下に小さく)"
         self.seg_qr_mode = ctk.CTkSegmentedButton(form_frame, values=["Compact (右下に小さく)", "Fullscreen (フル画面)"])
         self.seg_qr_mode.set(mode_val)
-        self.seg_qr_mode.pack(fill="x", padx=15, pady=(2, 8))
+        self.seg_qr_mode.pack(fill="x", padx=15, pady=(2, 4))
+
+        self.lbl_qr_warn = ctk.CTkLabel(
+            form_frame,
+            text="⚠️ 注意: 動画オーバーレイ有効時はリアルタイム再エンコード処理のためバッファ（読み込み待ち）が発生しやすくなります。",
+            font=ctk.CTkFont(size=11),
+            text_color="#F59E0B",
+            anchor="w",
+            wraplength=440,
+            justify="left"
+        )
+        self.lbl_qr_warn.pack(fill="x", padx=15, pady=(0, 8))
 
         # 8. Cloudflare トンネル起動設定
         self.switch_tunnel = ctk.CTkSwitch(form_frame, text="🌐 Enable Cloudflare Tunnel (トンネル自動起動)")
