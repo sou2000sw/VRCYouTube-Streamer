@@ -58,6 +58,7 @@ DEFAULT_CONFIG = {
     "allow_web_playback_control": True,
     "image_display_duration": 15,
     "image_auto_advance": True,
+    "overlay_qr_enabled": False,
     "overlay_qr_video": False,
     "overlay_qr_image": False,
     "overlay_qr_mode": "bottom-right"
@@ -280,6 +281,7 @@ class StreamerCore:
             "image_paused": self.image_paused,
             "image_display_duration": int(self.config.get("image_display_duration", 15)),
             "image_auto_advance": bool(self.config.get("image_auto_advance", True)),
+            "overlay_qr_enabled": bool(self.config.get("overlay_qr_enabled", False) or self.config.get("overlay_qr_video", False) or self.config.get("overlay_qr_image", False)),
             "overlay_qr_video": bool(self.config.get("overlay_qr_video", False)),
             "overlay_qr_image": bool(self.config.get("overlay_qr_image", False)),
             "overlay_qr_mode": str(self.config.get("overlay_qr_mode", "bottom-right")),
@@ -540,7 +542,7 @@ class StreamerCore:
         if seek_seconds > 0:
             input_opts.extend(["-ss", str(int(seek_seconds))])
 
-        overlay_video = bool(self.config.get("overlay_qr_video", False))
+        overlay_video = bool(self.config.get("overlay_qr_enabled", False) or self.config.get("overlay_qr_video", False))
         qr_overlay_file = self.generate_qr_overlay_image() if overlay_video else None
 
         cmd = [get_ffmpeg_cmd(), "-re", "-fflags", "+genpts"]
@@ -555,7 +557,8 @@ class StreamerCore:
             cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])
             mode = self.config.get("overlay_qr_mode", "bottom-right")
             if mode == "fullscreen":
-                overlay_filter = f"[0:v][{qr_idx}:v]overlay=0:0:shortest=1[vout]"
+                # 動画の画面解像度に合わせてオーバーレイ画像を自動スケーリング（見切れ防止）
+                overlay_filter = f"[{qr_idx}:v]scale=w=main_w:h=main_h[scaled_qr];[0:v][scaled_qr]overlay=0:0:shortest=1[vout]"
             else:
                 overlay_filter = f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-25:main_h-overlay_h-25:shortest=1[vout]"
 
@@ -956,8 +959,8 @@ class StreamerCore:
             return None
 
     def get_image_for_playback(self, image_path):
-        """写真再生時、overlay_qr_image設定に応じてQRコード・URLを合成した画像パスを返す"""
-        overlay_enabled = bool(self.config.get("overlay_qr_image", False))
+        """写真再生時、overlay_qr_enabled設定に応じてQRコード・URLを合成した画像パスを返す"""
+        overlay_enabled = bool(self.config.get("overlay_qr_enabled", False) or self.config.get("overlay_qr_image", False))
         if not overlay_enabled:
             return image_path
 

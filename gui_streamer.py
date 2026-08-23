@@ -117,15 +117,11 @@ class SettingsWindow(ctk.CTkToplevel):
         self.switch_photo_advance.pack(anchor="w", padx=15, pady=(2, 6))
 
         # 7. QRコード上書き表示 (ウォーターマーク) 設定
-        self.switch_qr_video = ctk.CTkSwitch(form_frame, text="🔲 QR Overlay on Video (動画にQR上書き表示 ※CPU負荷微増)")
-        if cfg.get("overlay_qr_video", False):
-            self.switch_qr_video.select()
-        self.switch_qr_video.pack(anchor="w", padx=15, pady=(2, 6))
-
-        self.switch_qr_image = ctk.CTkSwitch(form_frame, text="🖼 QR Overlay on Photos (写真にQR上書き表示)")
-        if cfg.get("overlay_qr_image", False):
-            self.switch_qr_image.select()
-        self.switch_qr_image.pack(anchor="w", padx=15, pady=(2, 6))
+        is_qr_on = bool(cfg.get("overlay_qr_enabled", False) or cfg.get("overlay_qr_video", False) or cfg.get("overlay_qr_image", False))
+        self.switch_qr_overlay = ctk.CTkSwitch(form_frame, text="🔲 QR Overlay (動画・写真にQR・URL上書き表示)")
+        if is_qr_on:
+            self.switch_qr_overlay.select()
+        self.switch_qr_overlay.pack(anchor="w", padx=15, pady=(2, 6))
 
         self.lbl_qr_mode = ctk.CTkLabel(form_frame, text="📐 Overlay Layout (表示レイアウト):", anchor="w")
         self.lbl_qr_mode.pack(fill="x", padx=15, pady=(4, 2))
@@ -276,14 +272,16 @@ class SettingsWindow(ctk.CTkToplevel):
             old_port = self.streamer_core.config.get("port", 8000)
 
             qr_mode = "fullscreen" if "Fullscreen" in self.seg_qr_mode.get() else "bottom-right"
+            qr_enabled = bool(self.switch_qr_overlay.get())
 
             new_cfg = {
                 "port": port,
                 "hls_segment_time": seg_time,
                 "image_display_duration": photo_dur,
                 "image_auto_advance": photo_advance,
-                "overlay_qr_video": bool(self.switch_qr_video.get()),
-                "overlay_qr_image": bool(self.switch_qr_image.get()),
+                "overlay_qr_enabled": qr_enabled,
+                "overlay_qr_video": qr_enabled,
+                "overlay_qr_image": qr_enabled,
                 "overlay_qr_mode": qr_mode,
                 "enable_tunnel": bool(self.switch_tunnel.get()),
                 "video_transition_wait_seconds": wait_time,
