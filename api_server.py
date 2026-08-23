@@ -359,7 +359,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 <div class="control-btn-group">
                     <button class="btn-sm" id="btn-prev" onclick="prevItem()" disabled>⏮ 前へ (Prev)</button>
                     <button class="btn-sm" id="btn-skip" onclick="skipCurrentVideo()">⏭ スキップ (Skip)</button>
-                    <button class="btn-sm btn-active" id="btn-photo-pause" onclick="togglePhotoPause()" style="display:none;">⏱ 自動送り: ON</button>
+                    <button class="btn-sm btn-active" id="btn-photo-pause" onclick="togglePhotoPause()">⏱ 自動送り: ON</button>
                     <button class="btn-sm" id="btn-shuffle-now" onclick="shuffleNow()">🔀 並び替え (Shuffle)</button>
                     <button class="btn-sm" id="btn-loop-toggle" onclick="toggleLoop()">🔁 ループ: OFF</button>
                     <button class="btn-sm" id="btn-shuffle-toggle" onclick="toggleShuffle()">🔀 シャッフル: OFF</button>
@@ -682,7 +682,6 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                     // 写真関連状態の同期
                     isCurrentItemImage = !!data.is_image;
                     currentPhotoPaused = !!data.image_paused;
-                    btnPhotoPause.style.display = isCurrentItemImage ? "inline-block" : "none";
                     btnPhotoPause.textContent = currentPhotoPaused ? "⏱ 自動送り: OFF" : "⏱ 自動送り: ON";
                     btnPhotoPause.className = "btn-sm " + (currentPhotoPaused ? "" : "btn-active");
 
