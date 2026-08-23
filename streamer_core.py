@@ -557,8 +557,8 @@ class StreamerCore:
             cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])
             mode = self.config.get("overlay_qr_mode", "bottom-right")
             if mode == "fullscreen":
-                # 動画の画面解像度に合わせてオーバーレイ画像を自動スケーリング（見切れ防止）
-                overlay_filter = f"[{qr_idx}:v]scale=w=main_w:h=main_h[scaled_qr];[0:v][scaled_qr]overlay=0:0:shortest=1[vout]"
+                # scale2refで動画解像度に合わせてオーバーレイ画像を自動スケーリング（見切れ防止）
+                overlay_filter = f"[{qr_idx}:v][0:v]scale2ref[qr_scaled][vmain];[vmain][qr_scaled]overlay=0:0:shortest=1[vout]"
             else:
                 overlay_filter = f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-25:main_h-overlay_h-25:shortest=1[vout]"
 
