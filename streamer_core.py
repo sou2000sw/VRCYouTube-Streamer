@@ -2,13 +2,17 @@ import os
 import sys
 import time
 import re
+import io
 import json
 import random
+import socket
 import threading
 import subprocess
+import urllib.request
+import urllib.parse
 import yt_dlp
 import qrcode
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -22,13 +26,26 @@ else:
 
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 HLS_DIR = os.path.join(APP_DIR, "hls_output")
+IMAGE_CACHE_DIR = os.path.join(HLS_DIR, "images")
 STANDBY_IMAGE_PATH = os.path.join(HLS_DIR, "standby.png")
 CLOUDFLARED_EXE = os.path.join(BASE_PATH, "cloudflared.exe")
 LOCAL_FFMPEG = os.path.join(APP_DIR, "ffmpeg.exe")
 
+def get_local_ip():
+    """LAN内の自ホストIPアドレスを取得 (例: 192.168.1.100)"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
+
 DEFAULT_CONFIG = {
     "host": "127.0.0.1",
     "port": 8000,
+    "enable_tunnel": True,
     "hls_segment_time": 3,
     "hls_list_size": 10,
     "video_transition_wait_seconds": 5,
@@ -37,7 +54,9 @@ DEFAULT_CONFIG = {
     "shuffle": False,
     "allow_web_queue_add": True,
     "allow_web_queue_edit": True,
-    "allow_web_playback_control": True
+    "allow_web_playback_control": True,
+    "image_display_duration": 15,
+    "image_auto_advance": True
 }
 
 def log_print(msg):
@@ -120,14 +139,25 @@ def is_safe_url(url):
 
     return True, "OK"
 
+def is_image_url_or_file(path_or_url):
+    """パスまたはURLが画像形式かどうかを判定"""
+    if not path_or_url or not isinstance(path_or_url, str):
+        return False
+    clean = path_or_url.split("?")[0].split("#")[0].lower()
+    return clean.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
+
 class StreamerCore:
-    def __init__(self, override_port=None, override_host=None):
+    def __init__(self, override_port=None, override_host=None, override_enable_tunnel=None):
         self.config = DEFAULT_CONFIG.copy()
         self.load_config()
         if override_port is not None:
             self.config["port"] = override_port
         if override_host is not None:
             self.config["host"] = override_host
+        if override_enable_tunnel is not None:
+            self.config["enable_tunnel"] = bool(override_enable_tunnel)
+
+        self.enable_tunnel = bool(self.config.get("enable_tunnel", True))
 
         os.makedirs(HLS_DIR, exist_ok=True)
         self.clean_hls_dir()
@@ -138,7 +168,8 @@ class StreamerCore:
         self.tunnel_proc = None
         self.current_stdin = None
 
-        self.play_queue = [] # list of dict: [{"title": "...", "url": "...", "duration": ...}]
+        self.play_queue = [] # list of dict: [{"title": "...", "url": "...", "duration": ..., "type": "video"|"image"}]
+        self.history_stack = [] # 履歴管理用 (最大20件)
         self.queue_lock = threading.Lock()
         self.process_lock = threading.Lock()
 
@@ -146,10 +177,11 @@ class StreamerCore:
         # status: "offline", "buffering", "streaming", "finishing", "error"
         self.status = "offline"
         self.status_detail = "Offline (Queue Empty)"
-        self.current_video = None # {"title": "...", "url": "...", "duration": ...}
+        self.current_video = None # {"title": "...", "url": "...", "duration": ..., "type": ...}
         self.tunnel_url = "" # "https://xxx.trycloudflare.com/stream.m3u8"
         self.tunnel_raw_url = "" # "https://xxx.trycloudflare.com"
         self.is_running = True
+        self.image_paused = False # 写真スライドショー一時停止フラグ
 
         self.skip_event = threading.Event()
         self.video_done_event = threading.Event()
@@ -179,6 +211,8 @@ class StreamerCore:
     def save_config(self, new_config=None):
         if new_config:
             self.config.update(new_config)
+            if "enable_tunnel" in new_config:
+                self.enable_tunnel = bool(new_config["enable_tunnel"])
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
@@ -191,17 +225,37 @@ class StreamerCore:
     def get_status_data(self):
         with self.queue_lock:
             queue_copy = [dict(item) for item in self.play_queue]
+            has_prev = len(self.history_stack) >= 2
 
-        stream_url = f"{self.tunnel_raw_url}/stream.m3u8" if self.tunnel_raw_url else ""
+        port = self.config.get("port", 8000)
+        if self.tunnel_raw_url:
+            stream_url = f"{self.tunnel_raw_url}/stream.m3u8"
+            public_url = self.tunnel_raw_url
+        elif not self.enable_tunnel:
+            stream_url = f"http://localhost:{port}/stream.m3u8"
+            public_url = f"http://localhost:{port}"
+        else:
+            stream_url = ""
+            public_url = ""
+
+        is_image = bool(self.current_video and self.current_video.get("type") == "image")
+
         return {
             "status": self.status,
             "status_detail": self.status_detail,
-            "tunnel_url": self.tunnel_raw_url,
+            "tunnel_url": public_url,
             "stream_url": stream_url,
+            "local_url": f"http://localhost:{port}",
+            "enable_tunnel": self.enable_tunnel,
             "current_video": self.current_video,
             "queue": queue_copy,
             "loop_queue": bool(self.config.get("loop_queue", False)),
             "shuffle": bool(self.config.get("shuffle", False)),
+            "is_image": is_image,
+            "image_paused": self.image_paused,
+            "image_display_duration": int(self.config.get("image_display_duration", 15)),
+            "image_auto_advance": bool(self.config.get("image_auto_advance", True)),
+            "has_prev": has_prev,
             "permissions": {
                 "allow_web_queue_add": bool(self.config.get("allow_web_queue_add", True)),
                 "allow_web_queue_edit": bool(self.config.get("allow_web_queue_edit", True)),
@@ -227,6 +281,50 @@ class StreamerCore:
         log_print("[Core] Queue shuffled.")
         return True
 
+    def toggle_image_pause(self):
+        self.image_paused = not self.image_paused
+        log_print(f"[Core] Photo pause toggled: {self.image_paused}")
+        return self.image_paused
+
+    def set_image_pause(self, paused: bool):
+        self.image_paused = bool(paused)
+        log_print(f"[Core] Photo pause set to: {self.image_paused}")
+        return self.image_paused
+
+    def set_image_duration(self, seconds: int):
+        try:
+            sec = max(3, min(600, int(seconds)))
+            self.config["image_display_duration"] = sec
+            self.save_config()
+            log_print(f"[Core] Photo display duration set to: {sec}s")
+            return sec
+        except Exception:
+            return self.config.get("image_display_duration", 15)
+
+    def set_image_auto_advance(self, enabled: bool):
+        self.config["image_auto_advance"] = bool(enabled)
+        self.save_config()
+        log_print(f"[Core] Photo auto advance set to: {self.config['image_auto_advance']}")
+        return self.config["image_auto_advance"]
+
+    def play_prev(self):
+        """直前に再生したアイテムに戻る"""
+        with self.queue_lock:
+            if len(self.history_stack) >= 2:
+                # 現在再生中の履歴をポップ
+                self.history_stack.pop()
+                prev_item = self.history_stack.pop()
+                # 現在のアイテムをキュー先頭に復元
+                if self.current_video:
+                    self.play_queue.insert(0, self.current_video)
+                # prev_item をキューの最前面に挿入
+                self.play_queue.insert(0, prev_item)
+                log_print(f"[Core] Navigating to prev item: {prev_item.get('title')}")
+                self.skip_video()
+                return True
+        log_print("[Core] No previous item in history.")
+        return False
+
     def ensure_hls_receiver(self):
         """HLS受信FFmpegが動いていれば維持し、未起動/停止時のみ起動する（ストリーム連続性を保持）"""
         with self.process_lock:
@@ -244,9 +342,11 @@ class StreamerCore:
 
         cmd = [
             get_ffmpeg_cmd(), "-y",
+            "-fflags", "+nobuffer+flush_packets",
             "-i", "pipe:0",
             "-c:v", "copy",
             "-c:a", "copy",
+            "-flush_packets", "1",
             "-f", "hls",
             "-hls_time", seg_time,
             "-hls_list_size", list_size,
@@ -276,7 +376,11 @@ class StreamerCore:
     def relay_stream_data(self, proc_to_read, stdin_to_write, stop_event):
         try:
             while not stop_event.is_set() and self.is_running:
-                data = proc_to_read.stdout.read(65536)
+                # read1 があれば即座に利用可能なパケット（1TSパケットでも）を読み出して遅延を防ぐ
+                if hasattr(proc_to_read.stdout, "read1"):
+                    data = proc_to_read.stdout.read1(65536)
+                else:
+                    data = proc_to_read.stdout.read(8192)
                 if not data:
                     break
                 try:
@@ -442,11 +546,191 @@ class StreamerCore:
                          args=(proc, stop_event), daemon=True).start()
         return stop_event
 
+    def optimize_image_to_cache(self, img_input, output_filename=None):
+        """PIL画像、バイナリ、またはファイルパスから 1920x1080 黒帯付き最適化画像を生成して保存"""
+        os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
+        if not output_filename:
+            output_filename = f"photo_{int(time.time())}_{random.randint(1000, 9999)}.png"
+        output_path = os.path.join(IMAGE_CACHE_DIR, output_filename)
+
+        try:
+            if isinstance(img_input, str):
+                img = Image.open(img_input)
+            elif isinstance(img_input, (bytes, bytearray)):
+                img = Image.open(io.BytesIO(img_input))
+            elif isinstance(img_input, Image.Image):
+                img = img_input
+            else:
+                return None
+
+            # EXIF回転補正
+            img = ImageOps.exif_transpose(img)
+
+            # RGBモードに変換
+            if img.mode != "RGB":
+                img = img.convert("RGBA")
+                canvas = Image.new("RGBA", img.size, (0, 0, 0, 255))
+                img = Image.alpha_composite(canvas, img).convert("RGB")
+
+            # 1920x1080 (16:9) 黒背景にアスペクト比維持でレターボックス配置
+            target_w, target_h = 1920, 1080
+            src_w, src_h = img.size
+
+            ratio = min(target_w / src_w, target_h / src_h)
+            new_w = max(1, int(src_w * ratio))
+            new_h = max(1, int(src_h * ratio))
+
+            img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+            final_img = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+            offset_x = (target_w - new_w) // 2
+            offset_y = (target_h - new_h) // 2
+            final_img.paste(img_resized, (offset_x, offset_y))
+
+            final_img.save(output_path, "PNG")
+            return output_path
+        except Exception as e:
+            log_print(f"[Core] Error optimizing image: {e}")
+            return None
+
+    def add_image_file(self, file_path, title=None):
+        """ローカル画像ファイルを最適化してキューに追加"""
+        with self.queue_lock:
+            if len(self.play_queue) >= MAX_QUEUE_CAPACITY:
+                log_print(f"[Core] Queue capacity reached ({MAX_QUEUE_CAPACITY}).")
+                return None
+
+        cached_path = self.optimize_image_to_cache(file_path)
+        if not cached_path:
+            return None
+
+        if not title:
+            title = os.path.splitext(os.path.basename(file_path))[0]
+
+        duration = int(self.config.get("image_display_duration", 15))
+        item = {
+            "type": "image",
+            "title": f"🖼 {title}",
+            "url": os.path.basename(file_path),
+            "path": cached_path,
+            "duration": duration
+        }
+        with self.queue_lock:
+            self.play_queue.append(item)
+        log_print(f"[Core] Added photo to queue: {title} ({duration}s)")
+        return item
+
+    def add_image_bytes(self, image_bytes, original_filename="photo.jpg"):
+        """アップロードされた画像バイナリを最適化してキューに追加"""
+        with self.queue_lock:
+            if len(self.play_queue) >= MAX_QUEUE_CAPACITY:
+                log_print(f"[Core] Queue capacity reached ({MAX_QUEUE_CAPACITY}).")
+                return None
+
+        cached_path = self.optimize_image_to_cache(image_bytes)
+        if not cached_path:
+            return None
+
+        title = os.path.splitext(os.path.basename(original_filename))[0] or "Uploaded Photo"
+        duration = int(self.config.get("image_display_duration", 15))
+        item = {
+            "type": "image",
+            "title": f"🖼 {title}",
+            "url": original_filename,
+            "path": cached_path,
+            "duration": duration
+        }
+        with self.queue_lock:
+            self.play_queue.append(item)
+        log_print(f"[Core] Added uploaded photo to queue: {title} ({duration}s)")
+        return item
+
+    def play_image(self, image_info):
+        """最適化済み静止画像をFFmpegネイティブでHLS配信（安全・低遅延）"""
+        image_path = image_info.get("path")
+        if not image_path or not os.path.exists(image_path):
+            log_print(f"[Player] Image file not found: {image_path}")
+            self.current_video = {"title": "Image not found", "url": "", "duration": 0, "type": "image"}
+            self.status = "error"
+            self.status_detail = "Image file not found"
+            return None
+
+        if not self.ensure_hls_receiver():
+            self.current_video = {"title": "FFmpeg Error", "url": "", "duration": 0, "type": "image"}
+            self.status = "error"
+            self.status_detail = "FFmpeg Error"
+            return None
+
+        cmd = [
+            get_ffmpeg_cmd(), "-re",
+            "-loop", "1", "-i", os.path.abspath(image_path),
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-profile:v", "baseline",
+            "-level", "3.1",
+            "-bf", "0",
+            "-g", "30",
+            "-keyint_min", "30",
+            "-sc_threshold", "0",
+            "-pix_fmt", "yuv420p",
+            "-r", "30",
+            "-b:v", "1500k",
+            "-maxrate", "1500k",
+            "-bufsize", "1000k",
+            "-c:a", "aac", "-b:a", "64k",
+            "-fflags", "+nobuffer+flush_packets",
+            "-flush_packets", "1",
+            "-muxdelay", "0",
+            "-muxpreload", "0",
+            "-f", "mpegts", "pipe:1"
+        ]
+
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, bufsize=0,
+                creationflags=CREATE_NO_WINDOW
+            )
+        except Exception as e:
+            log_print(f"[Player] Error starting Photo sender: {e}")
+            self.status = "error"
+            self.status_detail = f"Photo sender error: {e}"
+            return None
+
+        with self.process_lock:
+            self.send_proc = proc
+
+        stop_event = threading.Event()
+        threading.Thread(target=self.relay_stream_data,
+                         args=(proc, self.current_stdin, stop_event), daemon=True).start()
+        threading.Thread(target=self.watch_send_proc,
+                         args=(proc, stop_event), daemon=True).start()
+        return stop_event
+
     def add_to_queue(self, url):
-        """URL（単体またはプレイリスト）を解析してキューに追加"""
+        """URL（動画または画像）を解析してキューに追加"""
         with self.queue_lock:
             if len(self.play_queue) >= MAX_QUEUE_CAPACITY:
                 log_print(f"[Core] Cannot add items: Queue reached max capacity ({MAX_QUEUE_CAPACITY}).")
+                return []
+
+        # 画像URLの場合
+        if is_image_url_or_file(url):
+            is_safe, reason = is_safe_url(url)
+            if not is_safe:
+                log_print(f"[Core] Rejected unsafe image URL: {reason}")
+                return []
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    img_bytes = resp.read(10 * 1024 * 1024) # max 10MB
+                filename = url.split("/")[-1].split("?")[0] or "web_photo.png"
+                item = self.add_image_bytes(img_bytes, filename)
+                return [item] if item else []
+            except Exception as e:
+                log_print(f"[Core] Failed to fetch image URL: {e}")
                 return []
 
         items = self.expand_playlist(url)
@@ -492,7 +776,9 @@ class StreamerCore:
     def generate_standby_image(self):
         """待機用画面（QRコード & URL付き 1920x1080）を生成して保存"""
         is_tunnel_ready = bool(self.tunnel_raw_url and "trycloudflare.com" in self.tunnel_raw_url)
-        url = self.tunnel_raw_url if is_tunnel_ready else f"http://localhost:{self.config.get('port', 8000)}"
+        is_tunnel_enabled = getattr(self, "enable_tunnel", True)
+        port = self.config.get("port", 8000)
+        url = self.tunnel_raw_url if is_tunnel_ready else f"http://localhost:{port}"
 
         width, height = 1920, 1080
         img = Image.new("RGB", (width, height), color="#0F172A") # Dark slate
@@ -515,6 +801,8 @@ class StreamerCore:
         
         if is_tunnel_ready:
             draw.text((width // 2, 140), "Queue is Empty — Request a video from your smartphone or browser!", fill="#94A3B8", anchor="mm", font=font_sub)
+        elif not is_tunnel_enabled:
+            draw.text((width // 2, 140), f"Local Test Mode (http://localhost:{port}) — Add videos via Web!", fill="#34D399", anchor="mm", font=font_sub)
         else:
             draw.text((width // 2, 140), "Connecting to Cloudflare Tunnel... Please wait a moment.", fill="#F59E0B", anchor="mm", font=font_sub)
 
@@ -551,6 +839,9 @@ class StreamerCore:
         if is_tunnel_ready:
             draw.text((width // 2, url_box_y), f"Web Request URL: {url}", fill="#F8FAFC", anchor="mm", font=font_url)
             draw.text((width // 2, url_box_y + 45), "Scan this QR code with your phone or visit the URL to add YouTube videos to the queue.", fill="#64748B", anchor="mm", font=font_info)
+        elif not is_tunnel_enabled:
+            draw.text((width // 2, url_box_y), f"Local Stream URL: {url}/stream.m3u8", fill="#38BDF8", anchor="mm", font=font_url)
+            draw.text((width // 2, url_box_y + 45), f"Open {url} in your PC browser to request videos locally.", fill="#64748B", anchor="mm", font=font_info)
         else:
             draw.text((width // 2, url_box_y), "Public URL will appear here once connected...", fill="#94A3B8", anchor="mm", font=font_url)
             draw.text((width // 2, url_box_y + 45), "Establishing secure tunnel to Cloudflare network.", fill="#64748B", anchor="mm", font=font_info)
@@ -585,9 +876,25 @@ class StreamerCore:
                 get_ffmpeg_cmd(), "-re",
                 "-loop", "1", "-i", os.path.abspath(STANDBY_IMAGE_PATH),
                 "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-                "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage", "-pix_fmt", "yuv420p",
-                "-r", "25", "-g", "50",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-profile:v", "baseline",
+                "-level", "3.1",
+                "-bf", "0",
+                "-g", "30",
+                "-keyint_min", "30",
+                "-sc_threshold", "0",
+                "-pix_fmt", "yuv420p",
+                "-r", "30",
+                "-b:v", "1500k",
+                "-maxrate", "1500k",
+                "-bufsize", "1000k",
                 "-c:a", "aac", "-b:a", "64k",
+                "-fflags", "+nobuffer+flush_packets",
+                "-flush_packets", "1",
+                "-muxdelay", "0",
+                "-muxpreload", "0",
                 "-f", "mpegts", "pipe:1"
             ]
 
@@ -663,12 +970,73 @@ class StreamerCore:
                     time.sleep(0.5)
                     continue
 
-                log_print(f"[Monitor] Loading: {next_item.get('title')}")
+                # 履歴に追加 (最大20件)
+                with self.queue_lock:
+                    self.history_stack.append(next_item)
+                    if len(self.history_stack) > 20:
+                        self.history_stack.pop(0)
+
+                is_img = (next_item.get("type") == "image")
+                log_print(f"[Monitor] Loading: {next_item.get('title')} (is_image: {is_img})")
                 self.current_video = next_item
-                self.status = "buffering"
-                self.status_detail = f"Loading: {next_item.get('title')}..."
                 self.skip_event.clear()
                 self.video_done_event.clear()
+
+                if is_img:
+                    self.status = "streaming"
+                    self.status_detail = f"Showing Photo: {next_item.get('title')}"
+                    stop_event = self.play_image(next_item)
+                    if stop_event is None:
+                        log_print("[Monitor] Failed to display photo. Skipping to next.")
+                        self.status = "error"
+                        self.status_detail = "Failed to load photo"
+                        time.sleep(1)
+                        continue
+
+                    # 写真スライドショーのタイマー監視（一時停止対応）
+                    elapsed = 0.0
+                    while self.is_running and not self.skip_event.is_set():
+                        auto_advance = bool(self.config.get("image_auto_advance", True))
+                        if not self.image_paused and auto_advance:
+                            elapsed += 0.2
+                            duration = float(self.config.get("image_display_duration", 15))
+                            if elapsed >= duration:
+                                log_print(f"[Monitor] Photo display time elapsed ({duration}s).")
+                                break
+                        time.sleep(0.2)
+                        with self.process_lock:
+                            proc = self.send_proc
+                            h_proc = self.hls_proc
+                        if proc and proc.poll() is not None:
+                            break
+                        if h_proc and h_proc.poll() is not None:
+                            log_print("[Monitor] Receiver FFmpeg crashed or exited during photo.")
+                            self.status = "error"
+                            self.status_detail = "Offline (Receiver Error)"
+                            break
+
+                    stop_event.set()
+                    with self.process_lock:
+                        proc = self.send_proc
+                        if proc:
+                            kill_proc(proc)
+                        self.send_proc = None
+
+                    if self.config.get("loop_queue", False) and next_item:
+                        with self.queue_lock:
+                            self.play_queue.append(next_item)
+                        log_print(f"[Monitor] Loop queue: re-added photo '{next_item.get('title')}' to end of queue.")
+
+                    if self.skip_event.is_set():
+                        log_print("[Monitor] Photo skipped.")
+                        self.skip_event.clear()
+                    self.video_done_event.clear()
+                    time.sleep(0.3)
+                    continue
+
+                # 動画再生フロー
+                self.status = "buffering"
+                self.status_detail = f"Loading: {next_item.get('title')}..."
 
                 stop_event = self.play_video(next_item)
                 if stop_event is None:
@@ -729,6 +1097,13 @@ class StreamerCore:
                 time.sleep(1)
 
     def start_tunnel(self):
+        if not getattr(self, "enable_tunnel", True):
+            port = self.config.get("port", 8000)
+            self.tunnel_raw_url = f"http://localhost:{port}"
+            self.tunnel_url = f"http://localhost:{port}/stream.m3u8"
+            log_print(f"[Tunnel] Tunnel is DISABLED. Using local URL: {self.tunnel_url}")
+            return None
+
         log_print("Starting Cloudflare Quick Tunnel...")
         if not os.path.exists(CLOUDFLARED_EXE):
             log_print(f"Error: cloudflared.exe not found at {CLOUDFLARED_EXE}")

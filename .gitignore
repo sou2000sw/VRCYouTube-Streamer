@@ -25,6 +25,7 @@ models/
 # === ビルド成果物（ユーザー名を含む絶対パスが残るため除外） ===
 build/
 dist/
+dist*/
 VRCYouTubeStreamer/
 
 # === 実行時に生成される状態ファイル ===

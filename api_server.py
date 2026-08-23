@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import json
 import http.server
 import socketserver
@@ -215,6 +216,34 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             background-color: #dc2626;
             color: #fff;
         }
+        /* Photo Upload Dropzone */
+        .upload-drop-zone {
+            border: 2px dashed var(--border-color);
+            border-radius: 8px;
+            padding: 20px 14px;
+            text-align: center;
+            background-color: #0f172a;
+            cursor: pointer;
+            transition: border-color 0.2s, background-color 0.2s;
+            margin-top: 8px;
+        }
+        .upload-drop-zone:hover, .upload-drop-zone.dragover {
+            border-color: var(--primary);
+            background-color: rgba(56, 189, 248, 0.05);
+        }
+        .select-sm {
+            background-color: #0f172a;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+            outline: none;
+            cursor: pointer;
+        }
+        .select-sm:focus {
+            border-color: var(--primary);
+        }
         .queue-list {
             list-style: none;
             padding: 0;
@@ -284,7 +313,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
     <div class="container">
         <header>
             <h1>VRCYouTube Web Request & Remote</h1>
-            <p class="subtitle">Scan QR or enter YouTube URL to add videos & control the stream</p>
+            <p class="subtitle">Scan QR or enter YouTube URL / Photo to add videos & control the stream</p>
         </header>
 
         <!-- 1. Video Player Card -->
@@ -297,27 +326,56 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
 
         <!-- 2. Add Video Form Card -->
         <div class="card">
-            <div class="queue-title">➕ 動画をリクエスト (Add to Queue)</div>
+            <div class="queue-title">🎬 動画をリクエスト (Add Video)</div>
             <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
                 YouTubeの動画またはプレイリストURLを入力してキューに追加できます
             </div>
             <div class="form-row">
-                <input type="text" id="url-input" placeholder="https://www.youtube.com/watch?v=... / プレイリストURL">
+                <input type="text" id="url-input" placeholder="https://www.youtube.com/watch?v=... / プレイリストURL / 画像URL">
                 <button id="add-btn">キューに追加</button>
             </div>
             <div id="msg-box" class="msg-box"></div>
         </div>
 
-        <!-- 3. Playback Controls Card -->
+        <!-- 3. Share Photo Upload Card -->
+        <div class="card">
+            <div class="queue-title">🖼️ 写真・画像を共有 (Share Photo)</div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                スマートフォンやPCから写真をアップロードして配信スクリーンに表示できます
+            </div>
+            <div class="upload-drop-zone" id="upload-zone" onclick="document.getElementById('photo-input').click()">
+                <input type="file" id="photo-input" accept="image/*" style="display:none" onchange="handlePhotoUpload(this.files)">
+                <div style="font-size: 26px; margin-bottom: 2px;">📷</div>
+                <div style="font-size: 13px; font-weight: 600; color: var(--primary);">タップして写真を選択 / ドロップ</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">JPEG, PNG, WebP, GIF (最大20MB)</div>
+            </div>
+            <div id="photo-msg-box" class="msg-box"></div>
+        </div>
+
+        <!-- 4. Playback Controls Card -->
         <div class="card" id="playback-control-card">
             <div class="queue-header">
                 <div class="queue-title">🎛️ 再生コントロール (Playback Control)</div>
                 <div class="control-btn-group">
+                    <button class="btn-sm" id="btn-prev" onclick="prevItem()" disabled>⏮ 前へ (Prev)</button>
                     <button class="btn-sm" id="btn-skip" onclick="skipCurrentVideo()">⏭ スキップ (Skip)</button>
-                    <button class="btn-sm" id="btn-shuffle-now" onclick="shuffleNow()">🔀 並び替え (Shuffle List)</button>
+                    <button class="btn-sm btn-active" id="btn-photo-pause" onclick="togglePhotoPause()" style="display:none;">⏱ 自動送り: ON</button>
+                    <button class="btn-sm" id="btn-shuffle-now" onclick="shuffleNow()">🔀 並び替え (Shuffle)</button>
                     <button class="btn-sm" id="btn-loop-toggle" onclick="toggleLoop()">🔁 ループ: OFF</button>
                     <button class="btn-sm" id="btn-shuffle-toggle" onclick="toggleShuffle()">🔀 シャッフル: OFF</button>
                 </div>
+            </div>
+            <div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border-color); padding-top: 8px;">
+                <span>⏱ 写真表示時間 (Photo Duration):</span>
+                <select id="select-duration" class="select-sm" onchange="changeDuration(this.value)">
+                    <option value="5">5 秒 (5s)</option>
+                    <option value="10">10 秒 (10s)</option>
+                    <option value="15" selected>15 秒 (15s)</option>
+                    <option value="20">20 秒 (20s)</option>
+                    <option value="30">30 秒 (30s)</option>
+                    <option value="60">60 秒 (60s)</option>
+                    <option value="120">120 秒 (120s)</option>
+                </select>
             </div>
         </div>
 
@@ -361,17 +419,24 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
         const urlInput = document.getElementById('url-input');
         const addBtn = document.getElementById('add-btn');
         const msgBox = document.getElementById('msg-box');
+        const photoMsgBox = document.getElementById('photo-msg-box');
+        const uploadZone = document.getElementById('upload-zone');
         const queueList = document.getElementById('queue-list');
         const queueHeaderTitle = document.getElementById('queue-header-title');
         const modeBadges = document.getElementById('mode-badges');
+        const btnPrev = document.getElementById('btn-prev');
+        const btnSkip = document.getElementById('btn-skip');
+        const btnPhotoPause = document.getElementById('btn-photo-pause');
+        const btnShuffleNow = document.getElementById('btn-shuffle-now');
         const btnLoop = document.getElementById('btn-loop-toggle');
         const btnShuffle = document.getElementById('btn-shuffle-toggle');
-        const btnSkip = document.getElementById('btn-skip');
-        const btnShuffleNow = document.getElementById('btn-shuffle-now');
+        const selectDuration = document.getElementById('select-duration');
         const streamUrl = window.location.origin + '/stream.m3u8';
 
         let currentLoopState = false;
         let currentShuffleState = false;
+        let currentPhotoPaused = false;
+        let isCurrentItemImage = false;
         let userPermissions = {
             allow_web_queue_add: true,
             allow_web_queue_edit: true,
@@ -397,7 +462,76 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             setTimeout(() => { msgBox.style.display = "none"; }, 5000);
         }
 
-        // 3. 動画追加処理 (Add to Queue)
+        function showPhotoMsg(text, isError) {
+            photoMsgBox.textContent = text;
+            photoMsgBox.className = "msg-box " + (isError ? "msg-error" : "msg-success");
+            photoMsgBox.style.display = "block";
+            setTimeout(() => { photoMsgBox.style.display = "none"; }, 5000);
+        }
+
+        // 3. 写真アップロード (Share Photo) & Drag and Drop
+        if (uploadZone) {
+            ['dragenter', 'dragover'].forEach(eventName => {
+                uploadZone.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    uploadZone.classList.add('dragover');
+                }, false);
+            });
+            ['dragleave', 'drop'].forEach(eventName => {
+                uploadZone.addEventListener(eventName, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    uploadZone.classList.remove('dragover');
+                }, false);
+            });
+            uploadZone.addEventListener('drop', (e) => {
+                const dt = e.dataTransfer;
+                const files = dt.files;
+                if (files && files.length > 0) {
+                    handlePhotoUpload(files);
+                }
+            });
+        }
+
+        function handlePhotoUpload(files) {
+            if (!files || files.length === 0) return;
+            if (!userPermissions.allow_web_queue_add) {
+                showPhotoMsg("⚠ ホストによって写真追加が無効化されています", true);
+                return;
+            }
+
+            const file = files[0];
+            if (file.size > 20 * 1024 * 1024) {
+                showPhotoMsg("⚠ ファイルサイズが大きすぎます (最大20MB)", true);
+                return;
+            }
+
+            showPhotoMsg("⏳ 写真をアップロード中...", false);
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            fetch('/api/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(r => r.json())
+            .then(res => {
+                if (res.success) {
+                    showPhotoMsg("✓ 写真をキューに追加しました！", false);
+                    document.getElementById('photo-input').value = "";
+                    fetchStatus();
+                } else {
+                    showPhotoMsg("⚠ " + (res.message || "写真のアップロードに失敗しました"), true);
+                }
+            })
+            .catch(e => {
+                showPhotoMsg("⚠ 通信エラーが発生しました: " + e, true);
+            });
+        }
+
+        // 4. 動画追加処理 (Add to Queue)
         function handleAddQueue() {
             if (!userPermissions.allow_web_queue_add) {
                 showMsg("⚠ ホストによって動画追加が無効化されています", true);
@@ -421,7 +555,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                     urlInput.value = "";
                     fetchStatus();
                 } else {
-                    showMsg("⚠ " + (res.message || "動画の追加に失敗しました"), true);
+                    showMsg("⚠ " + (res.message || "追加に失敗しました"), true);
                 }
             })
             .catch(e => {
@@ -438,7 +572,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             if (e.key === 'Enter') handleAddQueue();
         });
 
-        // 4. 再生コントロール操作
+        // 5. 再生コントロール操作
         function sendControl(action, payload = {}) {
             return fetch('/api/control', {
                 method: 'POST',
@@ -459,52 +593,53 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             });
         }
 
+        function prevItem() {
+            if (!userPermissions.allow_web_playback_control) return;
+            sendControl('prev').then(() => showMsg("✓ 前の項目に戻りました", false));
+        }
+
         function skipCurrentVideo() {
-            if (!userPermissions.allow_web_playback_control) {
-                showMsg("⚠ ホストによってスキップ操作が無効化されています", true);
-                return;
-            }
+            if (!userPermissions.allow_web_playback_control) return;
             sendControl('skip').then(() => showMsg("✓ スキップをリクエストしました", false));
         }
 
+        function togglePhotoPause() {
+            if (!userPermissions.allow_web_playback_control) return;
+            sendControl('toggle_image_pause').then(() => {
+                currentPhotoPaused = !currentPhotoPaused;
+                btnPhotoPause.textContent = currentPhotoPaused ? "⏱ 自動送り: OFF" : "⏱ 自動送り: ON";
+                btnPhotoPause.className = "btn-sm " + (currentPhotoPaused ? "" : "btn-active");
+            });
+        }
+
+        function changeDuration(val) {
+            if (!userPermissions.allow_web_playback_control) return;
+            sendControl('set_image_duration', { duration: parseInt(val, 10) });
+        }
+
         function shuffleNow() {
-            if (!userPermissions.allow_web_playback_control) {
-                showMsg("⚠ ホストによってシャッフル操作が無効化されています", true);
-                return;
-            }
+            if (!userPermissions.allow_web_playback_control) return;
             sendControl('shuffle').then(() => showMsg("✓ キューをシャッフルしました", false));
         }
 
         function toggleLoop() {
-            if (!userPermissions.allow_web_playback_control) {
-                showMsg("⚠ ホストによってループ設定の変更が無効化されています", true);
-                return;
-            }
+            if (!userPermissions.allow_web_playback_control) return;
             sendControl('set_loop', { enabled: !currentLoopState });
         }
 
         function toggleShuffle() {
-            if (!userPermissions.allow_web_playback_control) {
-                showMsg("⚠ ホストによってシャッフル設定の変更が無効化されています", true);
-                return;
-            }
+            if (!userPermissions.allow_web_playback_control) return;
             sendControl('set_shuffle', { enabled: !currentShuffleState });
         }
 
         function moveQueueItem(idx, direction) {
-            if (!userPermissions.allow_web_queue_edit) {
-                showMsg("⚠ ホストによってキューの並び替えが無効化されています", true);
-                return;
-            }
+            if (!userPermissions.allow_web_queue_edit) return;
             const targetIdx = idx + direction;
             sendControl('move_item', { from_index: idx, to_index: targetIdx });
         }
 
         function deleteQueueItem(idx) {
-            if (!userPermissions.allow_web_queue_edit) {
-                showMsg("⚠ ホストによってキューの削除が無効化されています", true);
-                return;
-            }
+            if (!userPermissions.allow_web_queue_edit) return;
             sendControl('delete_item', { index: idx }).then(res => {
                 if (res && res.success) {
                     showMsg("✓ アイテムを削除しました", false);
@@ -512,7 +647,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             });
         }
 
-        // 4. 定期ステータス・キュー取得
+        // 6. 定期ステータス・キュー取得
         function formatDuration(sec) {
             if (!sec || sec <= 0) return "";
             const m = Math.floor(sec / 60);
@@ -535,10 +670,24 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                     if (data.permissions) {
                         userPermissions = data.permissions;
                         addBtn.disabled = !userPermissions.allow_web_queue_add;
+                        btnPrev.disabled = !userPermissions.allow_web_playback_control || !data.has_prev;
                         btnSkip.disabled = !userPermissions.allow_web_playback_control;
+                        btnPhotoPause.disabled = !userPermissions.allow_web_playback_control;
                         btnShuffleNow.disabled = !userPermissions.allow_web_playback_control;
                         btnLoop.disabled = !userPermissions.allow_web_playback_control;
                         btnShuffle.disabled = !userPermissions.allow_web_playback_control;
+                        selectDuration.disabled = !userPermissions.allow_web_playback_control;
+                    }
+
+                    // 写真関連状態の同期
+                    isCurrentItemImage = !!data.is_image;
+                    currentPhotoPaused = !!data.image_paused;
+                    btnPhotoPause.style.display = isCurrentItemImage ? "inline-block" : "none";
+                    btnPhotoPause.textContent = currentPhotoPaused ? "⏱ 自動送り: OFF" : "⏱ 自動送り: ON";
+                    btnPhotoPause.className = "btn-sm " + (currentPhotoPaused ? "" : "btn-active");
+
+                    if (data.image_display_duration && selectDuration.value != data.image_display_duration) {
+                        selectDuration.value = String(data.image_display_duration);
                     }
 
                     // モード状態の同期
@@ -555,6 +704,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                     let badges = [];
                     if (data.loop_queue) badges.push("🔁 Loop ON");
                     if (data.shuffle) badges.push("🔀 Shuffle ON");
+                    if (isCurrentItemImage) badges.push("🖼 Photo");
                     modeBadges.textContent = badges.join(" • ");
 
                     // キュー一覧描画
@@ -565,14 +715,16 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
 
                     let html = "";
                     if (curr) {
+                        const currIcon = (curr.type === 'image' || (curr.title && curr.title.startsWith("🖼"))) ? "🖼" : "🎬";
                         html += '<li class="queue-item active">'
                               + '<span class="queue-idx">▶</span>'
+                              + '<span style="margin-right:2px;">' + currIcon + '</span>'
                               + '<span class="queue-name" style="font-weight:600; color: #38bdf8;">' + escapeHtml(curr.title || "Unknown") + '</span>'
-                              + '<span class="queue-duration">' + formatDuration(curr.duration) + '</span>'
+                              + '<span class="queue-duration">' + (curr.type === 'image' ? (curr.duration + 's') : formatDuration(curr.duration)) + '</span>'
                               + '</li>';
                     }
                     if (items.length === 0 && !curr) {
-                        html = '<li style="color: var(--text-muted); font-size: 12px; padding: 8px;">(キューは空です。URLを入力して追加してください)</li>';
+                        html = '<li style="color: var(--text-muted); font-size: 12px; padding: 8px;">(キューは空です。URLまたは写真を追加してください)</li>';
                     } else {
                         items.forEach((item, idx) => {
                             let actionBtns = "";
@@ -586,10 +738,14 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                                            + '</div>';
                             }
 
+                            const itemIcon = (item.type === 'image' || (item.title && item.title.startsWith("🖼"))) ? "🖼" : "🎬";
+                            const durStr = (item.type === 'image' || (item.title && item.title.startsWith("🖼"))) ? (item.duration + 's') : formatDuration(item.duration);
+
                             html += '<li class="queue-item">'
                                   + '<span class="queue-idx">#' + (idx + 1) + '</span>'
+                                  + '<span style="margin-right:2px;">' + itemIcon + '</span>'
                                   + '<span class="queue-name">' + escapeHtml(item.title || "Unknown") + '</span>'
-                                  + '<span class="queue-duration">' + formatDuration(item.duration) + '</span>'
+                                  + '<span class="queue-duration">' + durStr + '</span>'
                                   + actionBtns
                                   + '</li>';
                         });
@@ -699,6 +855,31 @@ RATE_LIMIT_LOCK = threading.Lock()
 LAST_QUEUE_REQUESTS = {} # {ip: timestamp}
 QUEUE_RATE_LIMIT_SECONDS = 2.5
 MAX_REQUEST_BODY_BYTES = 64 * 1024
+MAX_UPLOAD_BODY_BYTES = 20 * 1024 * 1024 # 20MB
+
+def parse_multipart_file(body_bytes, content_type_header):
+    """multipart/form-data からファイルバイナリとファイル名を取得"""
+    m = re.search(r'boundary=([^;]+)', content_type_header)
+    if not m:
+        return None, None
+    boundary = m.group(1).strip().strip('"').encode("utf-8")
+    parts = body_bytes.split(b"--" + boundary)
+    for part in parts:
+        if b"filename=" in part:
+            header_end = part.find(b"\r\n\r\n")
+            if header_end == -1:
+                header_end = part.find(b"\n\n")
+                if header_end == -1:
+                    continue
+                body_start = header_end + 2
+            else:
+                body_start = header_end + 4
+            headers_part = part[:header_end].decode("utf-8", errors="ignore")
+            m_fn = re.search(r'filename="([^"]+)"', headers_part)
+            filename = m_fn.group(1) if m_fn else "photo.jpg"
+            file_data = part[body_start:].rstrip(b"\r\n--")
+            return file_data, filename
+    return None, None
 
 class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, streamer_core=None, shutdown_callback=None, **kwargs):
@@ -712,6 +893,16 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         origins = set()
         for host in ("127.0.0.1", "localhost", "[::1]"):
             origins.add(f"http://{host}:{port}")
+
+        from streamer_core import get_local_ip
+        local_ip = get_local_ip()
+        origins.add(f"http://{local_ip}:{port}")
+
+        raw_host = self.headers.get("Host", "")
+        if raw_host:
+            origins.add(f"http://{raw_host}")
+            origins.add(f"https://{raw_host}")
+
         tunnel = (self.streamer_core.tunnel_raw_url if self.streamer_core else "") or ""
         if tunnel:
             origins.add(tunnel.rstrip("/"))
@@ -751,18 +942,29 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
 
     def is_local_request(self):
         """
-        ホストPC本人からの操作か判定（ここがTrueだと全操作が許可される）。
-        以下をすべて満たす場合のみTrue:
-          1. Cloudflare等のProxyヘッダが付いていない
-          2. TCP接続元がループバック
-          3. Originヘッダが無い、または自分自身のオリジン（第三者サイトからのCSRFを排除）
-          4. Hostヘッダがドメイン名でない（DNSリビンディングを排除）
+        ホストPC本人またはローカルテスト時の同一LANからの操作か判定。
         """
         if "cf-connecting-ip" in self.headers or "x-forwarded-for" in self.headers:
             return False
         client_ip = self.client_address[0] if self.client_address else ""
-        if client_ip not in ("127.0.0.1", "::1", "localhost"):
+        
+        # ループバック判定
+        is_loopback = client_ip in ("127.0.0.1", "::1", "localhost")
+        
+        # プライベートLAN判定 (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+        is_private_lan = False
+        try:
+            ip_obj = ipaddress.ip_address(client_ip)
+            is_private_lan = ip_obj.is_private or ip_obj.is_loopback
+        except Exception:
+            pass
+
+        # トンネル無効（ローカルテストモード）時は同一LANからの全操作を許可
+        is_tunnel_disabled = bool(self.streamer_core and not self.streamer_core.enable_tunnel)
+
+        if not is_loopback and not (is_tunnel_disabled and is_private_lan):
             return False
+
         if not self._origin_is_self():
             log_print(f"[APIServer] Rejected local privilege: cross-site Origin {self.headers.get('Origin')!r}")
             return False
@@ -877,7 +1079,10 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             tunnel_stream_url = ""
             if self.streamer_core:
                 if self.streamer_core.tunnel_url:
-                    tunnel_stream_url = f"{self.streamer_core.tunnel_url}/stream.m3u8"
+                    tunnel_stream_url = self.streamer_core.tunnel_url
+                elif not self.streamer_core.enable_tunnel:
+                    port = self.streamer_core.config.get("port", 8000)
+                    tunnel_stream_url = f"http://localhost:{port}/stream.m3u8"
                 else:
                     tunnel_stream_url = "(トンネルURL準備中...)"
             else:
@@ -901,7 +1106,67 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        # ボディ取得（サイズ上限つき: 巨大bodyによるメモリ枯渇を防ぐ）
+        # 1. API: Photo Upload (写真・画像アップロード)
+        if path == "/api/upload":
+            if not self.is_local_request() and not self.streamer_core.config.get("allow_web_queue_add", True):
+                self.send_json_response(403, {
+                    "success": False,
+                    "message": "Forbidden: Adding photos from Web is disabled by the host."
+                })
+                return
+
+            if not self.is_local_request() and not self.check_rate_limit():
+                self.send_json_response(429, {
+                    "success": False,
+                    "message": "Rate limit exceeded. Please wait a few seconds before uploading another photo."
+                })
+                return
+
+            try:
+                content_len = int(self.headers.get("Content-Length", 0))
+            except (TypeError, ValueError):
+                content_len = 0
+
+            if content_len <= 0 or content_len > MAX_UPLOAD_BODY_BYTES:
+                self.send_json_response(413, {
+                    "success": False,
+                    "message": f"Invalid upload size or payload exceeds limit (max {MAX_UPLOAD_BODY_BYTES // (1024*1024)}MB)"
+                })
+                return
+
+            if not self.streamer_core:
+                self.send_json_response(500, {"success": False, "message": "Streamer core not available"})
+                return
+
+            body_bytes = self.rfile.read(content_len)
+            content_type = self.headers.get("Content-Type", "")
+
+            img_bytes, filename = None, "photo.jpg"
+            if "multipart/form-data" in content_type:
+                img_bytes, filename = parse_multipart_file(body_bytes, content_type)
+            else:
+                img_bytes = body_bytes
+                filename = "uploaded_image.png"
+
+            if not img_bytes:
+                self.send_json_response(400, {"success": False, "message": "Could not parse image data from upload request"})
+                return
+
+            item = self.streamer_core.add_image_bytes(img_bytes, original_filename=filename)
+            if item:
+                self.send_json_response(200, {
+                    "success": True,
+                    "message": f"Successfully uploaded photo: {item.get('title')}",
+                    "item": item
+                })
+            else:
+                self.send_json_response(400, {
+                    "success": False,
+                    "message": "Failed to process image (unsupported image format or queue full)"
+                })
+            return
+
+        # ボディ取得（JSON用サイズ上限 64KB）
         try:
             content_len = int(self.headers.get("Content-Length", 0))
         except (TypeError, ValueError):
@@ -921,13 +1186,13 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
 
         log_print(f"[APIServer] POST {path} body: {body_json}")
 
-        # 1. API: Queue (動画追加)
+        # 2. API: Queue (動画・画像URL追加)
         if path == "/api/queue":
             # 外部からの動画追加 許可チェック
             if not self.is_local_request() and not self.streamer_core.config.get("allow_web_queue_add", True):
                 self.send_json_response(403, {
                     "success": False,
-                    "message": "Forbidden: Adding videos from Web is disabled by the host."
+                    "message": "Forbidden: Adding items from Web is disabled by the host."
                 })
                 return
 
@@ -935,7 +1200,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             if not self.is_local_request() and not self.check_rate_limit():
                 self.send_json_response(429, {
                     "success": False,
-                    "message": "Rate limit exceeded. Please wait a few seconds before adding another video."
+                    "message": "Rate limit exceeded. Please wait a few seconds before adding another item."
                 })
                 return
 
@@ -961,11 +1226,11 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 self.send_json_response(400, {
                     "success": False,
-                    "message": "Failed to resolve or add video URL (check URL format, safety, or queue capacity)"
+                    "message": "Failed to resolve or add URL (check URL format, safety, or queue capacity)"
                 })
             return
 
-        # 2. API: Control (再生・キュー制御)
+        # 3. API: Control (再生・キュー制御)
         elif path == "/api/control":
             action = body_json.get("action", "").strip().lower()
             if not self.streamer_core:
@@ -991,8 +1256,8 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                     })
                     return
 
-            # 再生制御操作（スキップ・ループ・シャッフル）の権限チェック
-            if action in ("skip", "set_loop", "set_shuffle", "shuffle") and not is_local:
+            # 再生制御操作の権限チェック
+            if action in ("skip", "prev", "set_loop", "set_shuffle", "shuffle", "toggle_image_pause", "set_image_pause", "set_image_duration", "set_image_auto_advance") and not is_local:
                 if not self.streamer_core.config.get("allow_web_playback_control", True):
                     self.send_json_response(403, {
                         "success": False,
@@ -1003,6 +1268,27 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             if action == "skip":
                 self.streamer_core.skip()
                 self.send_json_response(200, {"success": True, "message": "Action 'skip' processed."})
+            elif action == "prev":
+                ok = self.streamer_core.play_prev()
+                if ok:
+                    self.send_json_response(200, {"success": True, "message": "Action 'prev' processed."})
+                else:
+                    self.send_json_response(400, {"success": False, "message": "No previous item in history."})
+            elif action == "toggle_image_pause":
+                paused = self.streamer_core.toggle_image_pause()
+                self.send_json_response(200, {"success": True, "image_paused": paused, "message": f"Photo pause toggled to {paused}."})
+            elif action == "set_image_pause":
+                paused = bool(body_json.get("paused", True))
+                self.streamer_core.set_image_pause(paused)
+                self.send_json_response(200, {"success": True, "image_paused": paused, "message": f"Photo pause set to {paused}."})
+            elif action == "set_image_duration":
+                duration = body_json.get("duration", 15)
+                sec = self.streamer_core.set_image_duration(duration)
+                self.send_json_response(200, {"success": True, "duration": sec, "message": f"Photo duration set to {sec}s."})
+            elif action == "set_image_auto_advance":
+                enabled = bool(body_json.get("enabled", True))
+                self.streamer_core.set_image_auto_advance(enabled)
+                self.send_json_response(200, {"success": True, "image_auto_advance": enabled, "message": f"Photo auto advance set to {enabled}."})
             elif action == "clear_queue":
                 self.streamer_core.clear_queue()
                 self.send_json_response(200, {"success": True, "message": "Action 'clear_queue' processed."})
@@ -1045,7 +1331,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 self.send_json_response(400, {
                     "success": False,
-                    "message": f"Unknown action: '{action}'. Available actions: 'skip', 'clear_queue', 'stop', 'delete_item', 'move_item', 'shuffle', 'set_loop', 'set_shuffle'."
+                    "message": f"Unknown action: '{action}'."
                 })
             return
 
@@ -1108,15 +1394,21 @@ class APIServer:
 
     def start(self):
         port = self.streamer_core.config.get("port", 8000)
-        host = self.streamer_core.config.get("host", "127.0.0.1")
+        host = self.streamer_core.config.get("host", "0.0.0.0")
         
-        # 0.0.0.0 を指定した場合のみ全インターフェースへ公開する。
-        # 127.0.0.1 / localhost はループバック限定でバインドする（"" は 0.0.0.0 と同義なので使わない）。
-        bind_host = "" if host == "0.0.0.0" else host
+        # 0.0.0.0 または トンネル無効時（ローカルテスト時）は全インターフェースへバインドしてLAN内からアクセス可能にする
+        is_tunnel_disabled = bool(self.streamer_core and not self.streamer_core.enable_tunnel)
+        if host in ("0.0.0.0", "") or is_tunnel_disabled:
+            bind_host = ""
+        else:
+            bind_host = host
+
+        from streamer_core import get_local_ip
+        local_ip = get_local_ip()
 
         try:
             self.httpd = ThreadedHTTPServer((bind_host, port), self.create_handler)
-            log_print(f"[APIServer] Listening on {host}:{port}")
+            log_print(f"[APIServer] Listening on {host or '0.0.0.0'}:{port} (Local: http://127.0.0.1:{port}, LAN: http://{local_ip}:{port})")
             self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
             self.server_thread.start()
             return True

@@ -6,7 +6,7 @@ import argparse
 import signal
 import threading
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 import qrcode
 from PIL import Image
 
@@ -44,8 +44,8 @@ class SettingsWindow(ctk.CTkToplevel):
         self.streamer_core = streamer_core
 
         self.title("Settings & API Reference / 設定・API仕様")
-        self.geometry("520x620")
-        self.minsize(480, 500)
+        self.geometry("520x660")
+        self.minsize(480, 520)
 
         # 最前面表示とモーダル化
         self.transient(parent)
@@ -79,21 +79,28 @@ class SettingsWindow(ctk.CTkToplevel):
         self.entry_seg.insert(0, str(cfg.get("hls_segment_time", 3)))
         self.entry_seg.pack(fill="x", padx=15, pady=(2, 8))
 
-        # 3. 動画切り替わり時の待機秒数
+        # 3. 写真スライドショー表示秒数
+        self.lbl_photo_dur = ctk.CTkLabel(form_frame, text="Photo Display Duration [sec] (写真表示秒数):", anchor="w")
+        self.lbl_photo_dur.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_photo_dur = ctk.CTkEntry(form_frame)
+        self.entry_photo_dur.insert(0, str(cfg.get("image_display_duration", 15)))
+        self.entry_photo_dur.pack(fill="x", padx=15, pady=(2, 8))
+
+        # 4. 動画切り替わり時の待機秒数
         self.lbl_wait = ctk.CTkLabel(form_frame, text="Transition Wait Duration [sec] (動画切替待機秒数):", anchor="w")
         self.lbl_wait.pack(fill="x", padx=15, pady=(2, 0))
         self.entry_wait = ctk.CTkEntry(form_frame)
         self.entry_wait.insert(0, str(cfg.get("video_transition_wait_seconds", 5)))
         self.entry_wait.pack(fill="x", padx=15, pady=(2, 8))
 
-        # 4. プレイヤーバッファ保持セグメント数 (Live Sync Count)
+        # 5. プレイヤーバッファ保持セグメント数 (Live Sync Count)
         self.lbl_sync = ctk.CTkLabel(form_frame, text="Web Player Live Sync Count (再生同期バッファ数):", anchor="w")
         self.lbl_sync.pack(fill="x", padx=15, pady=(2, 0))
         self.entry_sync = ctk.CTkEntry(form_frame)
         self.entry_sync.insert(0, str(cfg.get("live_sync_duration_count", 4)))
         self.entry_sync.pack(fill="x", padx=15, pady=(2, 10))
 
-        # 5. ループ再生 & シャッフル再生のデフォルト設定
+        # 6. ループ再生 & シャッフル再生のデフォルト設定
         self.switch_loop = ctk.CTkSwitch(form_frame, text="🔁 Loop Queue (キュー保持・繰り返し再生)")
         if cfg.get("loop_queue", False):
             self.switch_loop.select()
@@ -102,13 +109,24 @@ class SettingsWindow(ctk.CTkToplevel):
         self.switch_shuffle = ctk.CTkSwitch(form_frame, text="🔀 Shuffle Play (シャッフル再生モード)")
         if cfg.get("shuffle", False):
             self.switch_shuffle.select()
-        self.switch_shuffle.pack(anchor="w", padx=15, pady=(2, 10))
+        self.switch_shuffle.pack(anchor="w", padx=15, pady=(2, 6))
 
-        # 6. Webリモコン (外部ブラウザ/スマホ) 権限設定
+        self.switch_photo_advance = ctk.CTkSwitch(form_frame, text="⏱ Auto Advance Photos (写真の自動送り)")
+        if cfg.get("image_auto_advance", True):
+            self.switch_photo_advance.select()
+        self.switch_photo_advance.pack(anchor="w", padx=15, pady=(2, 6))
+
+        # 7. Cloudflare トンネル起動設定
+        self.switch_tunnel = ctk.CTkSwitch(form_frame, text="🌐 Enable Cloudflare Tunnel (トンネル自動起動)")
+        if cfg.get("enable_tunnel", True):
+            self.switch_tunnel.select()
+        self.switch_tunnel.pack(anchor="w", padx=15, pady=(2, 10))
+
+        # 8. Webリモコン (外部ブラウザ/スマホ) 権限設定
         self.lbl_web_perms = ctk.CTkLabel(form_frame, text="📱 Web Remote Permissions (ブラウザ操作権限):", font=ctk.CTkFont(weight="bold"), anchor="w")
         self.lbl_web_perms.pack(fill="x", padx=15, pady=(8, 4))
 
-        self.switch_web_add = ctk.CTkSwitch(form_frame, text="Allow Adding Videos (スマホからの動画追加を許可)")
+        self.switch_web_add = ctk.CTkSwitch(form_frame, text="Allow Adding Media (スマホからの動画・写真追加を許可)")
         if cfg.get("allow_web_queue_add", True):
             self.switch_web_add.select()
         self.switch_web_add.pack(anchor="w", padx=15, pady=(2, 4))
@@ -139,6 +157,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
         api_doc_text = """【起動コマンド引数 (CLI)】
   --headless / -hl       : GUIを表示せずAPIサーバーとして起動
+  --no-tunnel / -nt      : Cloudflareトンネルを起動しない（ローカルテストモード）
   --port / -p <ポート>   : サーバーポート番号 (デフォルト: 8000)
   --host <アドレス>      : ホストアドレス (デフォルト: 127.0.0.1)
 
@@ -160,16 +179,22 @@ class SettingsWindow(ctk.CTkToplevel):
   }
 
 ■ POST /api/queue
-  キューに動画・プレイリストURLを追加。
+  キューに動画・プレイリスト・画像URLを追加。
   リクエスト例:
   {
     "url": "https://www.youtube.com/watch?v=..."
   }
 
+■ POST /api/upload
+  写真・画像バイナリをアップロードしてキューに追加 (multipart/form-data または image/*)。
+
 ■ POST /api/control
   再生およびキューの操作。
   リクエスト例:
-  - スキップ:             { "action": "skip" }
+  - スキップ (次へ):      { "action": "skip" }
+  - 前へ戻る (Prev):      { "action": "prev" }
+  - 写真一時停止トグル:   { "action": "toggle_image_pause" }
+  - 写真表示秒数変更:     { "action": "set_image_duration", "duration": 15 }
   - キュー全消去:         { "action": "clear_queue" }
   - 停止＆キュー消去:     { "action": "stop" }
   - キュー即時シャッフル: { "action": "shuffle" }
@@ -185,7 +210,7 @@ class SettingsWindow(ctk.CTkToplevel):
   現在の設定JSONを取得。
 
 ■ POST /api/config
-  設定JSONを更新・保存 (例: {"loop_queue": true, "shuffle": true})
+  設定JSONを更新・保存 (例: {"loop_queue": true, "shuffle": true, "image_display_duration": 15})
 """
         self.api_textbox = ctk.CTkTextbox(self.api_ref_frame, height=260, font=ctk.CTkFont(family="Consolas", size=11))
         self.api_textbox.insert("1.0", api_doc_text)
@@ -216,14 +241,16 @@ class SettingsWindow(ctk.CTkToplevel):
         try:
             port = int(self.entry_port.get().strip())
             seg_time = int(self.entry_seg.get().strip())
+            photo_dur = int(self.entry_photo_dur.get().strip())
             wait_time = int(self.entry_wait.get().strip())
             sync_count = int(self.entry_sync.get().strip())
             loop_queue = bool(self.switch_loop.get())
             shuffle = bool(self.switch_shuffle.get())
+            photo_advance = bool(self.switch_photo_advance.get())
 
             if port <= 0 or port > 65535:
                 raise ValueError("Port must be between 1 and 65535.")
-            if seg_time <= 0 or wait_time < 0 or sync_count <= 0:
+            if seg_time <= 0 or photo_dur <= 0 or wait_time < 0 or sync_count <= 0:
                 raise ValueError("Durations and counts must be positive integers.")
 
             old_port = self.streamer_core.config.get("port", 8000)
@@ -231,6 +258,9 @@ class SettingsWindow(ctk.CTkToplevel):
             new_cfg = {
                 "port": port,
                 "hls_segment_time": seg_time,
+                "image_display_duration": photo_dur,
+                "image_auto_advance": photo_advance,
+                "enable_tunnel": bool(self.switch_tunnel.get()),
                 "video_transition_wait_seconds": wait_time,
                 "live_sync_duration_count": sync_count,
                 "loop_queue": loop_queue,
@@ -354,18 +384,24 @@ class App(ctk.CTk):
         self.add_frame = ctk.CTkFrame(self)
         self.add_frame.pack(fill="x", padx=20, pady=5)
 
-        self.url_entry = ctk.CTkEntry(self.add_frame, placeholder_text="Paste YouTube URL or Playlist URL here...")
+        self.url_entry = ctk.CTkEntry(self.add_frame, placeholder_text="Paste YouTube URL / Photo URL here...")
         self.url_entry.pack(side="left", fill="x", expand=True, padx=(10, 5), pady=10)
         self.url_entry.bind("<Return>", lambda e: self.add_to_queue())
 
-        self.add_btn = ctk.CTkButton(self.add_frame, text="Add to Queue", width=100, command=self.add_to_queue)
+        self.add_btn = ctk.CTkButton(self.add_frame, text="Add Video", width=85, command=self.add_to_queue)
         self.add_btn.pack(side="right", padx=(5, 10), pady=10)
+
+        self.add_photo_btn = ctk.CTkButton(self.add_frame, text="🖼 Add Photo", width=95, fg_color="#2E4053", hover_color="#1F2A36", command=self.add_photo_file)
+        self.add_photo_btn.pack(side="right", padx=(0, 5), pady=10)
 
         # 5. Bottom Control Frame
         self.control_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.control_frame.pack(side="bottom", fill="x", padx=20, pady=(5, 15))
 
-        self.skip_btn = ctk.CTkButton(self.control_frame, text="Skip", fg_color="#E74C3C", hover_color="#C0392B", command=self.streamer_core.skip)
+        self.prev_btn = ctk.CTkButton(self.control_frame, text="⏮ Prev", width=70, fg_color="#2E4053", hover_color="#1F2A36", command=self.play_prev)
+        self.prev_btn.pack(side="left", padx=(0, 6))
+
+        self.skip_btn = ctk.CTkButton(self.control_frame, text="⏭ Skip", width=70, fg_color="#E74C3C", hover_color="#C0392B", command=self.streamer_core.skip)
         self.skip_btn.pack(side="left", padx=(0, 10))
 
         self.clear_btn = ctk.CTkButton(self.control_frame, text="Clear Queue", fg_color="#7F8C8D", hover_color="#707B7C", command=self.clear_queue)
@@ -533,20 +569,52 @@ class App(ctk.CTk):
 
     def open_qr_code(self):
         url = self.streamer_core.tunnel_raw_url or self.streamer_core.tunnel_url
-        if not url or "trycloudflare.com" not in url:
+        if not url:
             port = self.streamer_core.config.get("port", 8000)
             url = f"http://localhost:{port}"
         QRCodeWindow(self, url)
 
     def copy_url(self):
         url = self.streamer_core.tunnel_url
-        if url and "trycloudflare.com" in url:
+        if not url and not getattr(self.streamer_core, "enable_tunnel", True):
+            port = self.streamer_core.config.get("port", 8000)
+            url = f"http://localhost:{port}/stream.m3u8"
+        if url:
             self.clipboard_clear()
             self.clipboard_append(url)
             self.copy_btn.configure(text="Copied!")
             self.after(2000, lambda: self.copy_btn.configure(text="Copy URL"))
         else:
             messagebox.showwarning("Warning", "URL is not ready yet.")
+
+    def add_photo_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Photo / Image",
+            filetypes=[
+                ("Image Files", "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif"),
+                ("All Files", "*.*")
+            ]
+        )
+        if not file_path:
+            return
+
+        self.add_photo_btn.configure(state="disabled", text="Adding...")
+
+        def bg_add():
+            item = self.streamer_core.add_image_file(file_path)
+            if item:
+                log_print(f"Added photo to queue: {item.get('title')}")
+                self.last_queue_titles = None
+            else:
+                log_print("Failed to add photo.")
+            self.after(0, lambda: self.add_photo_btn.configure(state="normal", text="🖼 Add Photo"))
+
+        threading.Thread(target=bg_add, daemon=True).start()
+
+    def play_prev(self):
+        ok = self.streamer_core.play_prev()
+        if ok:
+            self.last_queue_titles = None
 
     def add_to_queue(self):
         url = self.url_entry.get().strip()
@@ -560,9 +628,10 @@ class App(ctk.CTk):
             items = self.streamer_core.add_to_queue(url)
             if items:
                 log_print(f"Added {len(items)} items to queue.")
+                self.last_queue_titles = None
             else:
                 log_print("No items added (Failed to parse or empty).")
-            self.after(0, lambda: self.add_btn.configure(state="normal", text="Add to Queue"))
+            self.after(0, lambda: self.add_btn.configure(state="normal", text="Add Video"))
 
         threading.Thread(target=bg_add, daemon=True).start()
 
@@ -590,6 +659,10 @@ class App(ctk.CTk):
             if self.streamer_core.is_running:
                 self.after(500, self.update_ui_loop)
             return
+
+        # Prevボタンの活性状態同期
+        has_prev = len(self.streamer_core.history_stack) >= 2
+        self.prev_btn.configure(state="normal" if has_prev else "disabled")
 
         # Loop & Shuffle スイッチの状態同期
         core_loop = bool(self.streamer_core.config.get("loop_queue", False))
@@ -658,7 +731,7 @@ class App(ctk.CTk):
                     title_lbl.pack(pady=(5, 4))
 
                     url = self.streamer_core.tunnel_raw_url or self.streamer_core.tunnel_url
-                    if not url or "trycloudflare.com" not in url:
+                    if not url:
                         port = self.streamer_core.config.get("port", 8000)
                         url = f"http://localhost:{port}"
 
@@ -770,14 +843,30 @@ def run_headless_mode(streamer_core, api_server):
 def main():
     parser = argparse.ArgumentParser(description="VRCYouTube Streamer and API Server")
     parser.add_argument("--headless", "-hl", action="store_true", help="Run in headless API server mode without GUI")
+    parser.add_argument("--tunnel", action="store_true", help="Explicitly enable Cloudflare tunnel")
+    parser.add_argument("--no-tunnel", "-nt", action="store_true", help="Disable Cloudflare tunnel (run in local test mode)")
     parser.add_argument("--port", "-p", type=int, default=None, help="Port for API and HLS server (default: 8000 or config.json)")
     parser.add_argument("--host", type=str, default=None, help="Host address to bind (default: 127.0.0.1 or config.json)")
 
     args = parser.parse_args()
 
-    # cloudflared.exeの存在確認
-    if not os.path.exists(CLOUDFLARED_EXE):
-        msg = f"cloudflared.exe is missing from the directory:\n{CLOUDFLARED_EXE}\n\nPlease place it in the same directory as this script."
+    # トンネル有効/無効の判定
+    override_tunnel = None
+    if args.tunnel:
+        override_tunnel = True
+    elif args.no_tunnel:
+        override_tunnel = False
+
+    # コアの初期化
+    core = StreamerCore(
+        override_port=args.port,
+        override_host=args.host,
+        override_enable_tunnel=override_tunnel
+    )
+
+    # cloudflared.exeの存在確認 (トンネル有効時のみ必須)
+    if core.enable_tunnel and not os.path.exists(CLOUDFLARED_EXE):
+        msg = f"cloudflared.exe is missing from the directory:\n{CLOUDFLARED_EXE}\n\nPlease place it in the same directory as this script, or launch with --no-tunnel for local testing."
         log_print(f"ERROR: {msg}")
         if not args.headless:
             try:
@@ -788,9 +877,6 @@ def main():
             except Exception:
                 pass
         sys.exit(1)
-
-    # コアの初期化
-    core = StreamerCore(override_port=args.port, override_host=args.host)
 
     # APIサーバーの初期化
     server = APIServer(streamer_core=core)

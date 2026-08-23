@@ -3,6 +3,64 @@ import sys
 import subprocess
 import shutil
 
+def generate_startup_shortcuts():
+    """dist/ ディレクトリおよびルートディレクトリに各種起動用バッチファイルを作成"""
+    os.makedirs("dist", exist_ok=True)
+    
+    # 1. dist用: ローカルテスト起動バッチ (トンネルなし)
+    bat_dist_local = os.path.abspath("dist/VRCYouTubeStreamer (Local Test).bat")
+    with open(bat_dist_local, "w", encoding="cp932", errors="replace") as f:
+        f.write('@echo off\r\n'
+                'echo ======================================================\r\n'
+                'echo Starting VRCYouTube Streamer in Local Test Mode\r\n'
+                'echo (Cloudflare Tunnel: DISABLED)\r\n'
+                'echo Local URL: http://localhost:8000\r\n'
+                'echo ======================================================\r\n'
+                'start "" "%~dp0VRCYouTubeStreamer.exe" --no-tunnel\r\n')
+    print(f"Created startup shortcut: {bat_dist_local}", flush=True)
+
+    # 2. dist用: 通常起動バッチ (トンネルあり)
+    bat_dist_normal = os.path.abspath("dist/VRCYouTubeStreamer (Normal).bat")
+    with open(bat_dist_normal, "w", encoding="cp932", errors="replace") as f:
+        f.write('@echo off\r\n'
+                'echo ======================================================\r\n'
+                'echo Starting VRCYouTube Streamer in Normal Mode\r\n'
+                'echo (Cloudflare Tunnel: ENABLED)\r\n'
+                'echo ======================================================\r\n'
+                'start "" "%~dp0VRCYouTubeStreamer.exe" --tunnel\r\n')
+    print(f"Created startup shortcut: {bat_dist_normal}", flush=True)
+
+    # 3. dist用: ヘッドレスローカル起動バッチ
+    bat_dist_headless = os.path.abspath("dist/VRCYouTubeStreamer (Headless Test).bat")
+    with open(bat_dist_headless, "w", encoding="cp932", errors="replace") as f:
+        f.write('@echo off\r\n'
+                'echo ======================================================\r\n'
+                'echo Starting VRCYouTube Streamer in Headless Local Mode\r\n'
+                'echo (Cloudflare Tunnel: DISABLED, GUI: DISABLED)\r\n'
+                'echo ======================================================\r\n'
+                '"%~dp0VRCYouTubeStreamer.exe" --headless --no-tunnel\r\n'
+                'pause\r\n')
+    print(f"Created startup shortcut: {bat_dist_headless}", flush=True)
+
+    # 4. プロジェクトルート用: Pythonスクリプト直接起動バッチ
+    bat_root_local = os.path.abspath("Start_LocalTest.bat")
+    with open(bat_root_local, "w", encoding="cp932", errors="replace") as f:
+        f.write('@echo off\r\n'
+                'cd /d "%~dp0"\r\n'
+                'echo Starting VRCYouTube Streamer in Local Test Mode (No Tunnel)...\r\n'
+                'python gui_streamer.py --no-tunnel\r\n'
+                'pause\r\n')
+    print(f"Created root shortcut: {bat_root_local}", flush=True)
+
+    bat_root_normal = os.path.abspath("Start_Normal.bat")
+    with open(bat_root_normal, "w", encoding="cp932", errors="replace") as f:
+        f.write('@echo off\r\n'
+                'cd /d "%~dp0"\r\n'
+                'echo Starting VRCYouTube Streamer (Normal Mode - Tunnel Enabled)...\r\n'
+                'python gui_streamer.py --tunnel\r\n'
+                'pause\r\n')
+    print(f"Created root shortcut: {bat_root_normal}", flush=True)
+
 def copy_ffmpeg_to_dist():
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path:
@@ -59,10 +117,13 @@ def build():
     try:
         subprocess.run(cmd, check=True)
         copy_ffmpeg_to_dist()
+        generate_startup_shortcuts()
         print("\n==================================================", flush=True)
         print("Build completed successfully!", flush=True)
         print("The executable and portable files are in 'dist' directory:")
         print(f"  {os.path.abspath('dist/VRCYouTubeStreamer.exe')}")
+        print(f"  {os.path.abspath('dist/VRCYouTubeStreamer (Local Test).bat')}")
+        print(f"  {os.path.abspath('dist/VRCYouTubeStreamer (Normal).bat')}")
         print(f"  {os.path.abspath('dist/ffmpeg.exe')} (if copied)")
         print("==================================================\n", flush=True)
     except subprocess.CalledProcessError as e:
@@ -76,10 +137,13 @@ def build():
         try:
             subprocess.run(cmd, check=True)
             copy_ffmpeg_to_dist()
+            generate_startup_shortcuts()
             print("\n==================================================", flush=True)
             print("Build completed successfully!", flush=True)
             print("The executable and portable files are in 'dist' directory:")
             print(f"  {os.path.abspath('dist/VRCYouTubeStreamer.exe')}")
+            print(f"  {os.path.abspath('dist/VRCYouTubeStreamer (Local Test).bat')}")
+            print(f"  {os.path.abspath('dist/VRCYouTubeStreamer (Normal).bat')}")
             print(f"  {os.path.abspath('dist/ffmpeg.exe')} (if copied)")
             print("==================================================\n", flush=True)
         except Exception as e2:
