@@ -1,5 +1,18 @@
 # 更新履歴 (CHANGELOG)
 
+## [2.1.0] - 2026-08-24
+
+### 🚀 新機能 (New Features)
+- **ストリーム映像へのQRコード上書き表示（QR Code Overlay）**:
+  - **動画再生時のQRオーバーレイ**:
+    - 設定 `overlay_qr_video` が有効な場合、FFmpegの `overlay` フィルタでYouTube等の動画映像右下にWebリクエスト用QRコードをリアルタイム合成。
+    - 無効時（デフォルト）は従来通り `-c:v copy` のストリームコピー（CPU負荷ほぼゼロ）で動作。
+  - **写真スライドショー時のQRオーバーレイ**:
+    - 設定 `overlay_qr_image` が有効な場合、写真の右下に白角丸カード付きQRコードを自動合成。
+  - **設定ダイアログ (Settings UI) & API 連動**:
+    - GUI設定画面（⚙ Settings）から動画・写真それぞれのQRオーバーレイを個別にON/OFF切り替え可能。
+    - `config.json` および `/api/config`, `/api/status` で設定・状態を完全同期。
+
 ## [2.0.1] - 2026-08-24
 
 ### 🔄 ロールバック & プロセスライフサイクル安定化 (Rollback & Process Lifecycle Fix)

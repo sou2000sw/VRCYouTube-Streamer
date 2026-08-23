@@ -116,13 +116,24 @@ class SettingsWindow(ctk.CTkToplevel):
             self.switch_photo_advance.select()
         self.switch_photo_advance.pack(anchor="w", padx=15, pady=(2, 6))
 
-        # 7. Cloudflare トンネル起動設定
+        # 7. QRコード上書き表示 (ウォーターマーク) 設定
+        self.switch_qr_video = ctk.CTkSwitch(form_frame, text="🔲 QR Overlay on Video (動画にQR上書き表示 ※CPU負荷微増)")
+        if cfg.get("overlay_qr_video", False):
+            self.switch_qr_video.select()
+        self.switch_qr_video.pack(anchor="w", padx=15, pady=(2, 6))
+
+        self.switch_qr_image = ctk.CTkSwitch(form_frame, text="🖼 QR Overlay on Photos (写真にQR上書き表示)")
+        if cfg.get("overlay_qr_image", False):
+            self.switch_qr_image.select()
+        self.switch_qr_image.pack(anchor="w", padx=15, pady=(2, 6))
+
+        # 8. Cloudflare トンネル起動設定
         self.switch_tunnel = ctk.CTkSwitch(form_frame, text="🌐 Enable Cloudflare Tunnel (トンネル自動起動)")
         if cfg.get("enable_tunnel", True):
             self.switch_tunnel.select()
         self.switch_tunnel.pack(anchor="w", padx=15, pady=(2, 10))
 
-        # 8. Webリモコン (外部ブラウザ/スマホ) 権限設定
+        # 9. Webリモコン (外部ブラウザ/スマホ) 権限設定
         self.lbl_web_perms = ctk.CTkLabel(form_frame, text="📱 Web Remote Permissions (ブラウザ操作権限):", font=ctk.CTkFont(weight="bold"), anchor="w")
         self.lbl_web_perms.pack(fill="x", padx=15, pady=(8, 4))
 
@@ -260,6 +271,8 @@ class SettingsWindow(ctk.CTkToplevel):
                 "hls_segment_time": seg_time,
                 "image_display_duration": photo_dur,
                 "image_auto_advance": photo_advance,
+                "overlay_qr_video": bool(self.switch_qr_video.get()),
+                "overlay_qr_image": bool(self.switch_qr_image.get()),
                 "enable_tunnel": bool(self.switch_tunnel.get()),
                 "video_transition_wait_seconds": wait_time,
                 "live_sync_duration_count": sync_count,

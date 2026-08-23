@@ -28,6 +28,7 @@ CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 HLS_DIR = os.path.join(APP_DIR, "hls_output")
 IMAGE_CACHE_DIR = os.path.join(HLS_DIR, "images")
 STANDBY_IMAGE_PATH = os.path.join(HLS_DIR, "standby.png")
+QR_OVERLAY_PATH = os.path.join(HLS_DIR, "qr_overlay.png")
 CLOUDFLARED_EXE = os.path.join(BASE_PATH, "cloudflared.exe")
 LOCAL_FFMPEG = os.path.join(APP_DIR, "ffmpeg.exe")
 
@@ -56,7 +57,9 @@ DEFAULT_CONFIG = {
     "allow_web_queue_edit": True,
     "allow_web_playback_control": True,
     "image_display_duration": 15,
-    "image_auto_advance": True
+    "image_auto_advance": True,
+    "overlay_qr_video": False,
+    "overlay_qr_image": False
 }
 
 def log_print(msg):
@@ -255,6 +258,8 @@ class StreamerCore:
             "image_paused": self.image_paused,
             "image_display_duration": int(self.config.get("image_display_duration", 15)),
             "image_auto_advance": bool(self.config.get("image_auto_advance", True)),
+            "overlay_qr_video": bool(self.config.get("overlay_qr_video", False)),
+            "overlay_qr_image": bool(self.config.get("overlay_qr_image", False)),
             "has_prev": has_prev,
             "permissions": {
                 "allow_web_queue_add": bool(self.config.get("allow_web_queue_add", True)),
@@ -509,6 +514,9 @@ class StreamerCore:
         if headers_str:
             input_opts.extend(["-headers", headers_str])
 
+        overlay_video = bool(self.config.get("overlay_qr_video", False))
+        qr_overlay_file = self.generate_qr_overlay_image() if overlay_video else None
+
         cmd = [get_ffmpeg_cmd(), "-re", "-fflags", "+genpts"]
         cmd.extend(input_opts)
         cmd.extend(["-i", video_url])
@@ -516,13 +524,41 @@ class StreamerCore:
             cmd.extend(input_opts)
             cmd.extend(["-i", audio_url])
         
-        cmd.extend(["-map", "0:v:0"])
-        if audio_url:
-            cmd.extend(["-map", "1:a:0"])
+        if overlay_video and qr_overlay_file and os.path.exists(qr_overlay_file):
+            qr_idx = 2 if audio_url else 1
+            cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])
+            cmd.extend([
+                "-filter_complex", f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-30:main_h-overlay_h-30:shortest=1[vout]",
+                "-map", "[vout]"
+            ])
+            if audio_url:
+                cmd.extend(["-map", "1:a:0"])
+            else:
+                cmd.extend(["-map", "0:a:0?"])
+            cmd.extend([
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-profile:v", "baseline",
+                "-level", "3.1",
+                "-pix_fmt", "yuv420p",
+                "-g", "60",
+                "-keyint_min", "60",
+                "-b:v", "2500k",
+                "-maxrate", "3000k",
+                "-bufsize", "2000k",
+                "-c:a", "aac", "-b:a", "128k",
+                "-af", "aresample=async=1",
+                "-f", "mpegts", "pipe:1"
+            ])
         else:
-            cmd.extend(["-map", "0:a:0?"])
-        cmd.extend(["-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                    "-af", "aresample=async=1", "-f", "mpegts", "pipe:1"])
+            cmd.extend(["-map", "0:v:0"])
+            if audio_url:
+                cmd.extend(["-map", "1:a:0"])
+            else:
+                cmd.extend(["-map", "0:a:0?"])
+            cmd.extend(["-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                        "-af", "aresample=async=1", "-f", "mpegts", "pipe:1"])
 
         try:
             proc = subprocess.Popen(
@@ -655,6 +691,9 @@ class StreamerCore:
             self.status_detail = "Image file not found"
             return None
 
+        # QRオーバーレイが有効な場合はQR合成済み画像パスを取得
+        playback_image_path = self.get_image_for_playback(image_path)
+
         if not self.ensure_hls_receiver():
             self.current_video = {"title": "FFmpeg Error", "url": "", "duration": 0, "type": "image"}
             self.status = "error"
@@ -663,7 +702,7 @@ class StreamerCore:
 
         cmd = [
             get_ffmpeg_cmd(), "-re",
-            "-loop", "1", "-i", os.path.abspath(image_path),
+            "-loop", "1", "-i", os.path.abspath(playback_image_path),
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
             "-c:v", "libx264",
             "-preset", "ultrafast",
@@ -772,6 +811,77 @@ class StreamerCore:
                 self.play_queue.insert(to_idx, item)
                 return True
         return False
+
+    def generate_qr_overlay_image(self):
+        """動画・写真ストリーム上に重ねて表示する小型QRコードカード (RGBA) を生成"""
+        is_tunnel_ready = bool(self.tunnel_raw_url and "trycloudflare.com" in self.tunnel_raw_url)
+        is_tunnel_enabled = getattr(self, "enable_tunnel", True)
+        port = self.config.get("port", 8000)
+        url = self.tunnel_raw_url if is_tunnel_ready else f"http://{get_local_ip()}:{port}"
+
+        try:
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_M,
+                box_size=5,
+                border=1,
+            )
+            qr.add_data(url)
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="#0F172A", back_color="#FFFFFF").convert("RGBA")
+
+            qr_w, qr_h = qr_img.size
+            card_w = qr_w + 16
+            card_h = qr_h + 16
+
+            # 角丸白カード (高い視認性を保ちつつアルファブレンド)
+            card = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(card)
+            
+            radius = 10
+            draw.rounded_rectangle(
+                [(0, 0), (card_w - 1, card_h - 1)],
+                radius=radius,
+                fill=(255, 255, 255, 240),
+                outline=(203, 213, 225, 240),
+                width=1
+            )
+            
+            card.paste(qr_img, (8, 8), qr_img)
+            card.save(QR_OVERLAY_PATH, "PNG")
+            return QR_OVERLAY_PATH
+        except Exception as e:
+            log_print(f"[Core] Error generating QR overlay image: {e}")
+            return None
+
+    def get_image_for_playback(self, image_path):
+        """写真再生時、overlay_qr_image設定に応じてQRコードを右下に合成した画像パスを返す"""
+        overlay_enabled = bool(self.config.get("overlay_qr_image", False))
+        if not overlay_enabled:
+            return image_path
+
+        qr_path = self.generate_qr_overlay_image()
+        if not qr_path or not os.path.exists(qr_path):
+            return image_path
+
+        try:
+            base_img = Image.open(image_path).convert("RGBA")
+            qr_img = Image.open(qr_path).convert("RGBA")
+
+            bw, bh = base_img.size
+            qw, qh = qr_img.size
+
+            pos_x = bw - qw - 30
+            pos_y = bh - qh - 30
+
+            base_img.alpha_composite(qr_img, dest=(pos_x, pos_y))
+
+            temp_path = os.path.join(IMAGE_CACHE_DIR, f"playback_overlay_{int(time.time())}.png")
+            base_img.convert("RGB").save(temp_path, "PNG")
+            return temp_path
+        except Exception as e:
+            log_print(f"[Core] Failed to composite QR overlay onto image: {e}")
+            return image_path
 
     def generate_standby_image(self):
         """待機用画面（QRコード & URL付き 1920x1080）を生成して保存"""
