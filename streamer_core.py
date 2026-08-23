@@ -782,11 +782,16 @@ class StreamerCore:
         log_print("[Core] Shutting down StreamerCore...")
         self.is_running = False
         with self.process_lock:
-            kill_proc(self.send_proc)
-            kill_proc(self.hls_proc)
-            if self.tunnel_proc:
+            if self.current_stdin:
                 try:
-                    self.tunnel_proc.terminate()
+                    self.current_stdin.close()
                 except Exception:
                     pass
+                self.current_stdin = None
+            kill_proc(self.send_proc)
+            kill_proc(self.hls_proc)
+            kill_proc(self.tunnel_proc)
+            self.send_proc = None
+            self.hls_proc = None
+            self.tunnel_proc = None
         log_print("[Core] Shutdown complete.")

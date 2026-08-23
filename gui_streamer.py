@@ -734,9 +734,13 @@ class App(ctk.CTk):
     def on_closing(self):
         if messagebox.askokcancel("Quit", "Do you want to quit the streamer?"):
             log_print("Shutting down streamer server and processes...")
-            self.streamer_core.shutdown()
-            self.api_server.stop()
+            try:
+                self.streamer_core.shutdown()
+                self.api_server.stop()
+            except Exception as e:
+                log_print(f"Error during shutdown: {e}")
             self.destroy()
+            os._exit(0)
 
 def run_headless_mode(streamer_core, api_server):
     log_print("==================================================")
