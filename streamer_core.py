@@ -221,6 +221,19 @@ class StreamerCore:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
             log_print(f"[Core] Saved config to {CONFIG_FILE}")
+
+            # 最新設定でQRオーバーレイ・待機画像を即座に再生成
+            self.generate_qr_overlay_image()
+            self.generate_standby_image()
+
+            # 待機中（キュー空）なら待機ストリームを即座に新しい画像でリロード
+            with self.queue_lock:
+                is_queue_empty = len(self.play_queue) == 0 and self.current_video is None
+            if is_queue_empty and self.send_proc:
+                log_print("[Core] Hot-reloading standby stream with updated settings...")
+                with self.process_lock:
+                    kill_proc(self.send_proc)
+
             return True
         except Exception as e:
             log_print(f"[Core] Failed to save config: {e}")
@@ -968,7 +981,8 @@ class StreamerCore:
         is_tunnel_ready = bool(self.tunnel_raw_url and "trycloudflare.com" in self.tunnel_raw_url)
         is_tunnel_enabled = getattr(self, "enable_tunnel", True)
         port = self.config.get("port", 8000)
-        url = self.tunnel_raw_url if is_tunnel_ready else f"http://localhost:{port}"
+        url = self.tunnel_raw_url if is_tunnel_ready else (f"http://{get_local_ip()}:{port}" if not is_tunnel_enabled else f"http://localhost:{port}")
+        mode = self.config.get("overlay_qr_mode", "bottom-right")
 
         width, height = 1920, 1080
         img = Image.new("RGB", (width, height), color="#0F172A") # Dark slate
@@ -978,63 +992,108 @@ class StreamerCore:
         draw.rectangle([(0, 0), (width, 90)], fill="#1E293B")
         draw.rectangle([(0, height - 70), (width, height)], fill="#1E293B")
 
-        # 2. Header text
         try:
             font_title = ImageFont.truetype("arial.ttf", 52)
+            font_head = ImageFont.truetype("arial.ttf", 44)
             font_sub = ImageFont.truetype("arial.ttf", 30)
             font_url = ImageFont.truetype("arial.ttf", 34)
             font_info = ImageFont.truetype("arial.ttf", 24)
+            font_card_url = ImageFont.truetype("arial.ttf", 16)
         except Exception:
-            font_title = font_sub = font_url = font_info = ImageFont.load_default()
+            font_title = font_head = font_sub = font_url = font_info = font_card_url = ImageFont.load_default()
 
         draw.text((width // 2, 45), "VRCYouTube Live Streamer", fill="#38BDF8", anchor="mm", font=font_title)
-        
-        if is_tunnel_ready:
-            draw.text((width // 2, 140), "Queue is Empty — Request a video from your smartphone or browser!", fill="#94A3B8", anchor="mm", font=font_sub)
-        elif not is_tunnel_enabled:
-            draw.text((width // 2, 140), f"Local Test Mode (http://localhost:{port}) — Add videos via Web!", fill="#34D399", anchor="mm", font=font_sub)
+
+        if mode == "fullscreen":
+            # ==================== フル画面モード (中央大画面QR) ====================
+            if is_tunnel_ready:
+                draw.text((width // 2, 140), "Queue is Empty — Request a video from your smartphone or browser!", fill="#94A3B8", anchor="mm", font=font_sub)
+            elif not is_tunnel_enabled:
+                draw.text((width // 2, 140), f"Local Test Mode (http://localhost:{port}) — Add videos via Web!", fill="#34D399", anchor="mm", font=font_sub)
+            else:
+                draw.text((width // 2, 140), "Connecting to Cloudflare Tunnel... Please wait a moment.", fill="#F59E0B", anchor="mm", font=font_sub)
+
+            try:
+                qr = qrcode.QRCode(
+                    version=1,
+                    error_correction=qrcode.constants.ERROR_CORRECT_M,
+                    box_size=12,
+                    border=2,
+                )
+                qr.add_data(url)
+                qr.make(fit=True)
+                qr_img = qr.make_image(fill_color="#0F172A", back_color="#FFFFFF").convert("RGB")
+                
+                qr_w, qr_h = qr_img.size
+                qr_x = (width - qr_w) // 2
+                qr_y = (height - qr_h) // 2 - 15
+
+                card_pad = 22
+                draw.rectangle(
+                    [(qr_x - card_pad, qr_y - card_pad), (qr_x + qr_w + card_pad, qr_y + qr_h + card_pad)],
+                    fill="#FFFFFF"
+                )
+                img.paste(qr_img, (qr_x, qr_y))
+            except Exception as e:
+                log_print(f"[Core] Error generating QR code: {e}")
+
+            url_box_y = height - 160
+            if is_tunnel_ready:
+                draw.text((width // 2, url_box_y), f"Web Request URL: {url}", fill="#F8FAFC", anchor="mm", font=font_url)
+                draw.text((width // 2, url_box_y + 45), "Scan this QR code with your phone or visit the URL to add YouTube videos to the queue.", fill="#64748B", anchor="mm", font=font_info)
+            elif not is_tunnel_enabled:
+                draw.text((width // 2, url_box_y), f"Local Stream URL: {url}/stream.m3u8", fill="#38BDF8", anchor="mm", font=font_url)
+                draw.text((width // 2, url_box_y + 45), f"Open {url} in your PC browser to request videos locally.", fill="#64748B", anchor="mm", font=font_info)
+            else:
+                draw.text((width // 2, url_box_y), "Public URL will appear here once connected...", fill="#94A3B8", anchor="mm", font=font_url)
+                draw.text((width // 2, url_box_y + 45), "Establishing secure tunnel to Cloudflare network.", fill="#64748B", anchor="mm", font=font_info)
+
         else:
-            draw.text((width // 2, 140), "Connecting to Cloudflare Tunnel... Please wait a moment.", fill="#F59E0B", anchor="mm", font=font_sub)
+            # ==================== 右下コンパクトモード (右下に小さく配置) ====================
+            # 画面左側〜中央: リクエスト手順と案内
+            draw.text((120, 260), "Now Idle • Queue is Empty", fill="#F8FAFC", anchor="lt", font=font_head)
+            draw.text((120, 330), "Add YouTube videos or photos to start streaming!", fill="#94A3B8", anchor="lt", font=font_sub)
 
-        # 3. QR Code Generation
-        try:
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_M,
-                box_size=12,
-                border=2,
-            )
-            qr.add_data(url)
-            qr.make(fit=True)
-            qr_img = qr.make_image(fill_color="#0F172A", back_color="#FFFFFF").convert("RGB")
-            
-            # Place QR Code at Center
-            qr_w, qr_h = qr_img.size
-            qr_x = (width - qr_w) // 2
-            qr_y = (height - qr_h) // 2 - 15
+            # Web Request URL (大きく完全表記)
+            draw.rectangle([(120, 420), (1200, 560)], fill="#1E293B", outline="#334155", width=2)
+            draw.text((150, 450), "Web Request URL (手入力・ブラウザ用):", fill="#38BDF8", anchor="lt", font=font_info)
+            draw.text((150, 495), url, fill="#FFFFFF", anchor="lt", font=font_url)
 
-            # Draw border card around QR
-            card_pad = 22
-            draw.rectangle(
-                [(qr_x - card_pad, qr_y - card_pad), (qr_x + qr_w + card_pad, qr_y + qr_h + card_pad)],
-                fill="#FFFFFF"
-            )
-            img.paste(qr_img, (qr_x, qr_y))
-        except Exception as e:
-            log_print(f"[Core] Error generating QR code: {e}")
-            qr_y = height // 2
+            draw.text((120, 610), "📱 Scan the QR code on the right with your smartphone", fill="#CBD5E1", anchor="lt", font=font_info)
+            draw.text((120, 655), "🌐 Or enter the Web Request URL above in any browser", fill="#94A3B8", anchor="lt", font=font_info)
 
-        # 4. URL and Instructions under QR
-        url_box_y = height - 160
-        if is_tunnel_ready:
-            draw.text((width // 2, url_box_y), f"Web Request URL: {url}", fill="#F8FAFC", anchor="mm", font=font_url)
-            draw.text((width // 2, url_box_y + 45), "Scan this QR code with your phone or visit the URL to add YouTube videos to the queue.", fill="#64748B", anchor="mm", font=font_info)
-        elif not is_tunnel_enabled:
-            draw.text((width // 2, url_box_y), f"Local Stream URL: {url}/stream.m3u8", fill="#38BDF8", anchor="mm", font=font_url)
-            draw.text((width // 2, url_box_y + 45), f"Open {url} in your PC browser to request videos locally.", fill="#64748B", anchor="mm", font=font_info)
-        else:
-            draw.text((width // 2, url_box_y), "Public URL will appear here once connected...", fill="#94A3B8", anchor="mm", font=font_url)
-            draw.text((width // 2, url_box_y + 45), "Establishing secure tunnel to Cloudflare network.", fill="#64748B", anchor="mm", font=font_info)
+            # 画面右下: QRコードカード (完全URL付き)
+            try:
+                qr = qrcode.QRCode(
+                    version=1,
+                    error_correction=qrcode.constants.ERROR_CORRECT_M,
+                    box_size=7,
+                    border=2,
+                )
+                qr.add_data(url)
+                qr.make(fit=True)
+                qr_img = qr.make_image(fill_color="#0F172A", back_color="#FFFFFF").convert("RGB")
+                
+                qr_w, qr_h = qr_img.size
+                card_w = qr_w + 32
+                card_h = qr_h + 80
+                card_x = width - card_w - 90
+                card_y = (height - card_h) // 2 + 30
+
+                # 白角丸カード
+                draw.rounded_rectangle(
+                    [(card_x, card_y), (card_x + card_w, card_y + card_h)],
+                    radius=14,
+                    fill="#FFFFFF",
+                    outline="#E2E8F0",
+                    width=2
+                )
+                img.paste(qr_img, (card_x + 16, card_y + 16))
+
+                draw.text((card_x + card_w // 2, card_y + qr_h + 30), "Scan to Request", fill="#64748B", anchor="mm", font=font_card_url)
+                draw.text((card_x + card_w // 2, card_y + qr_h + 55), "スマホでスキャン", fill="#0F172A", anchor="mm", font=font_card_url)
+            except Exception as e:
+                log_print(f"[Core] Error generating compact QR code on standby: {e}")
 
         draw.text((width // 2, height - 35), "VRChat YouTube Streamer • Powered by yt-dlp & FFmpeg", fill="#475569", anchor="mm", font=font_info)
 
