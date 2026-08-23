@@ -149,6 +149,18 @@ VRCYouTubeStreamer.exe --headless --port 8080
 
 ---
 
+## ⚠️ トラブルシューティング & よくある質問
+
+### 1. トンネルURLが生成されない / 「Tunnel failed to connect」になる
+* **原因: Cloudflare Quick Tunnel の一時的な IP レート制限 (Error 1015 / HTTP 429)**
+  * 短時間にアプリの起動・再起動を連続して繰り返した場合、Cloudflare 側の無料 Quick Tunnel API（`trycloudflare.com`）によって接続元 IP アドレスに一時的な接続制限（クールダウン）がかけられることがあります。
+* **対処法**:
+  1. **数分〜10分程度待機する（推奨）**: プロセスを停止した状態で数分待つと、Cloudflare 側のレート制限が自動的に解除され、再び URL が発行されるようになります。
+  2. **回線 IP を変更する**: お急ぎの場合は、ルーターの再起動やスマホのテザリング回線に一時切り替えることで即座に再接続が可能です。
+  3. **ローカル環境でのテスト**: 同一 PC または同一 Wi-Fi 内での再生テストであれば、トンネル URL ではなく `http://localhost:8000/stream.m3u8` やローカル IP を直接プレイヤーに入力してストリーミング動作を確認できます。
+
+---
+
 ## 🛠 プロジェクト構造
 
 * `streamer_core.py`: ストリーミングエンジン（キュー管理、`yt-dlp`、`ffmpeg`、`cloudflared`、設定管理）
