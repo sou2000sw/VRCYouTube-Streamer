@@ -189,6 +189,8 @@ class StreamerCore:
 
         self.skip_event = threading.Event()
         self.video_done_event = threading.Event()
+        self.reload_stream_event = threading.Event()
+        self.current_video_start_time = None
 
     def clean_hls_dir(self):
         try:
@@ -226,13 +228,19 @@ class StreamerCore:
             self.generate_qr_overlay_image()
             self.generate_standby_image()
 
-            # 待機中（キュー空）なら待機ストリームを即座に新しい画像でリロード
             with self.queue_lock:
-                is_queue_empty = len(self.play_queue) == 0 and self.current_video is None
+                is_queue_empty = (len(self.play_queue) == 0 and self.current_video is None)
+                is_playing = (self.current_video is not None)
+
+            # 待機中（キュー空）なら待機ストリームを即座にリロード
             if is_queue_empty and self.send_proc:
                 log_print("[Core] Hot-reloading standby stream with updated settings...")
                 with self.process_lock:
                     kill_proc(self.send_proc)
+            elif is_playing:
+                # 動画または写真の再生中なら、即座に現在のストリームをホットリロード
+                log_print("[Core] Triggering hot-reload of active stream with updated settings...")
+                self.reload_stream_event.set()
 
             return True
         except Exception as e:
@@ -490,7 +498,7 @@ class StreamerCore:
             headers = info.get("http_headers", {})
             return video_url, audio_url, info.get("title", "Unknown"), info.get("duration", 0), headers
 
-    def play_video(self, video_info):
+    def play_video(self, video_info, seek_seconds=0):
         url = video_info["url"]
         try:
             video_url, audio_url, title, duration, headers = self.get_stream_urls(url)
@@ -499,7 +507,8 @@ class StreamerCore:
                 "url": url,
                 "duration": duration
             }
-            log_print(f"[Player] Now Playing: {title}")
+            self.current_video_start_time = time.time() - max(0, seek_seconds)
+            log_print(f"[Player] Now Playing: {title} (seek: {int(seek_seconds)}s)")
         except Exception as e:
             log_print(f"[Player] Failed to get stream URL: {e}")
             self.current_video = {"title": f"Failed: {video_info.get('title', 'Unknown')}", "url": url, "duration": 0}
@@ -528,6 +537,8 @@ class StreamerCore:
         ]
         if headers_str:
             input_opts.extend(["-headers", headers_str])
+        if seek_seconds > 0:
+            input_opts.extend(["-ss", str(int(seek_seconds))])
 
         overlay_video = bool(self.config.get("overlay_qr_video", False))
         qr_overlay_file = self.generate_qr_overlay_image() if overlay_video else None
@@ -1242,9 +1253,23 @@ class StreamerCore:
                         time.sleep(1)
                         continue
 
-                    # 写真スライドショーのタイマー監視（一時停止対応）
+                    # 写真スライドショーのタイマー監視（一時停止対応 & ホットリロード対応）
                     elapsed = 0.0
                     while self.is_running and not self.skip_event.is_set():
+                        # 設定変更による即時ホットリロード要求
+                        if self.reload_stream_event.is_set():
+                            self.reload_stream_event.clear()
+                            log_print("[Monitor] Hot-reloading active photo stream with updated QR settings...")
+                            stop_event.set()
+                            with self.process_lock:
+                                if self.send_proc:
+                                    kill_proc(self.send_proc)
+                                self.send_proc = None
+                            time.sleep(0.1)
+                            stop_event = self.play_image(next_item)
+                            if stop_event is None:
+                                break
+
                         auto_advance = bool(self.config.get("image_auto_advance", True))
                         if not self.image_paused and auto_advance:
                             elapsed += 0.2
@@ -1298,9 +1323,24 @@ class StreamerCore:
                 self.status = "streaming"
                 self.status_detail = "Active (Streaming)"
 
-                # 終了 or スキップを待つ
-                while self.is_running:
-                    if self.video_done_event.wait(timeout=0.5):
+                # 終了 or スキップを待つ (ホットリロード対応)
+                while self.is_running and not self.skip_event.is_set():
+                    # 設定変更による即時ホットリロード要求
+                    if self.reload_stream_event.is_set():
+                        self.reload_stream_event.clear()
+                        seek = max(0, time.time() - (self.current_video_start_time or time.time()))
+                        log_print(f"[Monitor] Hot-reloading active video stream with updated QR settings at seek={int(seek)}s...")
+                        stop_event.set()
+                        with self.process_lock:
+                            if self.send_proc:
+                                kill_proc(self.send_proc)
+                            self.send_proc = None
+                        time.sleep(0.1)
+                        stop_event = self.play_video(next_item, seek_seconds=seek)
+                        if stop_event is None:
+                            break
+
+                    if self.video_done_event.wait(timeout=0.4):
                         break
                     with self.process_lock:
                         proc = self.send_proc
