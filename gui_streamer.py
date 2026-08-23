@@ -127,6 +127,15 @@ class SettingsWindow(ctk.CTkToplevel):
             self.switch_qr_image.select()
         self.switch_qr_image.pack(anchor="w", padx=15, pady=(2, 6))
 
+        self.lbl_qr_mode = ctk.CTkLabel(form_frame, text="📐 Overlay Layout (表示レイアウト):", anchor="w")
+        self.lbl_qr_mode.pack(fill="x", padx=15, pady=(4, 2))
+
+        curr_mode = cfg.get("overlay_qr_mode", "bottom-right")
+        mode_val = "Fullscreen (フル画面)" if curr_mode == "fullscreen" else "Compact (右下に小さく)"
+        self.seg_qr_mode = ctk.CTkSegmentedButton(form_frame, values=["Compact (右下に小さく)", "Fullscreen (フル画面)"])
+        self.seg_qr_mode.set(mode_val)
+        self.seg_qr_mode.pack(fill="x", padx=15, pady=(2, 8))
+
         # 8. Cloudflare トンネル起動設定
         self.switch_tunnel = ctk.CTkSwitch(form_frame, text="🌐 Enable Cloudflare Tunnel (トンネル自動起動)")
         if cfg.get("enable_tunnel", True):
@@ -266,6 +275,8 @@ class SettingsWindow(ctk.CTkToplevel):
 
             old_port = self.streamer_core.config.get("port", 8000)
 
+            qr_mode = "fullscreen" if "Fullscreen" in self.seg_qr_mode.get() else "bottom-right"
+
             new_cfg = {
                 "port": port,
                 "hls_segment_time": seg_time,
@@ -273,6 +284,7 @@ class SettingsWindow(ctk.CTkToplevel):
                 "image_auto_advance": photo_advance,
                 "overlay_qr_video": bool(self.switch_qr_video.get()),
                 "overlay_qr_image": bool(self.switch_qr_image.get()),
+                "overlay_qr_mode": qr_mode,
                 "enable_tunnel": bool(self.switch_tunnel.get()),
                 "video_transition_wait_seconds": wait_time,
                 "live_sync_duration_count": sync_count,

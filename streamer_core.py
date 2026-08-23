@@ -59,7 +59,8 @@ DEFAULT_CONFIG = {
     "image_display_duration": 15,
     "image_auto_advance": True,
     "overlay_qr_video": False,
-    "overlay_qr_image": False
+    "overlay_qr_image": False,
+    "overlay_qr_mode": "bottom-right"
 }
 
 def log_print(msg):
@@ -260,6 +261,7 @@ class StreamerCore:
             "image_auto_advance": bool(self.config.get("image_auto_advance", True)),
             "overlay_qr_video": bool(self.config.get("overlay_qr_video", False)),
             "overlay_qr_image": bool(self.config.get("overlay_qr_image", False)),
+            "overlay_qr_mode": str(self.config.get("overlay_qr_mode", "bottom-right")),
             "has_prev": has_prev,
             "permissions": {
                 "allow_web_queue_add": bool(self.config.get("allow_web_queue_add", True)),
@@ -527,8 +529,14 @@ class StreamerCore:
         if overlay_video and qr_overlay_file and os.path.exists(qr_overlay_file):
             qr_idx = 2 if audio_url else 1
             cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])
+            mode = self.config.get("overlay_qr_mode", "bottom-right")
+            if mode == "fullscreen":
+                overlay_filter = f"[0:v][{qr_idx}:v]overlay=0:0:shortest=1[vout]"
+            else:
+                overlay_filter = f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-25:main_h-overlay_h-25:shortest=1[vout]"
+
             cmd.extend([
-                "-filter_complex", f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-30:main_h-overlay_h-30:shortest=1[vout]",
+                "-filter_complex", overlay_filter,
                 "-map", "[vout]"
             ])
             if audio_url:
@@ -813,49 +821,118 @@ class StreamerCore:
         return False
 
     def generate_qr_overlay_image(self):
-        """動画・写真ストリーム上に重ねて表示する小型QRコードカード (RGBA) を生成"""
+        """動画・写真ストリーム上に重ねて表示するQRコードカード (RGBA) を生成（右下コンパクト/フル画面）"""
         is_tunnel_ready = bool(self.tunnel_raw_url and "trycloudflare.com" in self.tunnel_raw_url)
         is_tunnel_enabled = getattr(self, "enable_tunnel", True)
         port = self.config.get("port", 8000)
         url = self.tunnel_raw_url if is_tunnel_ready else f"http://{get_local_ip()}:{port}"
+        mode = self.config.get("overlay_qr_mode", "bottom-right")
 
         try:
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_M,
-                box_size=5,
-                border=1,
-            )
-            qr.add_data(url)
-            qr.make(fit=True)
-            qr_img = qr.make_image(fill_color="#0F172A", back_color="#FFFFFF").convert("RGBA")
+            if mode == "fullscreen":
+                # --- フル画面オーバーレイモード (1920x1080 半透明ダーク) ---
+                width, height = 1920, 1080
+                img = Image.new("RGBA", (width, height), color=(15, 23, 42, 225)) # 半透明ダークスレート
+                draw = ImageDraw.Draw(img)
 
-            qr_w, qr_h = qr_img.size
-            card_w = qr_w + 16
-            card_h = qr_h + 16
+                draw.rectangle([(0, 0), (width, 90)], fill=(30, 41, 59, 240))
+                draw.rectangle([(0, height - 70), (width, height)], fill=(30, 41, 59, 240))
 
-            # 角丸白カード (高い視認性を保ちつつアルファブレンド)
-            card = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(card)
-            
-            radius = 10
-            draw.rounded_rectangle(
-                [(0, 0), (card_w - 1, card_h - 1)],
-                radius=radius,
-                fill=(255, 255, 255, 240),
-                outline=(203, 213, 225, 240),
-                width=1
-            )
-            
-            card.paste(qr_img, (8, 8), qr_img)
-            card.save(QR_OVERLAY_PATH, "PNG")
-            return QR_OVERLAY_PATH
+                try:
+                    font_title = ImageFont.truetype("arial.ttf", 52)
+                    font_sub = ImageFont.truetype("arial.ttf", 30)
+                    font_url = ImageFont.truetype("arial.ttf", 34)
+                    font_info = ImageFont.truetype("arial.ttf", 24)
+                except Exception:
+                    font_title = font_sub = font_url = font_info = ImageFont.load_default()
+
+                draw.text((width // 2, 45), "VRCYouTube Live Streamer", fill=(56, 189, 248, 255), anchor="mm", font=font_title)
+                draw.text((width // 2, 140), "Scan QR code or visit URL below to request YouTube videos!", fill=(226, 232, 240, 255), anchor="mm", font=font_sub)
+
+                qr = qrcode.QRCode(
+                    version=1,
+                    error_correction=qrcode.constants.ERROR_CORRECT_M,
+                    box_size=12,
+                    border=2,
+                )
+                qr.add_data(url)
+                qr.make(fit=True)
+                qr_img = qr.make_image(fill_color="#0F172A", back_color="#FFFFFF").convert("RGBA")
+
+                qr_w, qr_h = qr_img.size
+                qr_x = (width - qr_w) // 2
+                qr_y = (height - qr_h) // 2 - 15
+
+                card_pad = 22
+                draw.rectangle(
+                    [(qr_x - card_pad, qr_y - card_pad), (qr_x + qr_w + card_pad, qr_y + qr_h + card_pad)],
+                    fill=(255, 255, 255, 255)
+                )
+                img.paste(qr_img, (qr_x, qr_y), qr_img)
+
+                url_box_y = height - 160
+                draw.text((width // 2, url_box_y), f"Web Request URL: {url}", fill=(248, 250, 252, 255), anchor="mm", font=font_url)
+                draw.text((width // 2, url_box_y + 45), "Scan this QR code with your phone or visit the URL directly.", fill=(148, 163, 184, 255), anchor="mm", font=font_info)
+                draw.text((width // 2, height - 35), "VRChat YouTube Streamer • Powered by yt-dlp & FFmpeg", fill=(100, 116, 139, 255), anchor="mm", font=font_info)
+
+                img.save(QR_OVERLAY_PATH, "PNG")
+                return QR_OVERLAY_PATH
+
+            else:
+                # --- 右下コンパクトモード (白角丸カード: QRコード + 完全URL併記) ---
+                qr = qrcode.QRCode(
+                    version=1,
+                    error_correction=qrcode.constants.ERROR_CORRECT_M,
+                    box_size=5,
+                    border=1,
+                )
+                qr.add_data(url)
+                qr.make(fit=True)
+                qr_img = qr.make_image(fill_color="#0F172A", back_color="#FFFFFF").convert("RGBA")
+
+                qr_w, qr_h = qr_img.size # 約 150x150
+                card_w = max(260, qr_w + 30)
+                card_h = qr_h + 85 # QR + ラベル + URLテキスト用の高さを確保
+
+                card = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(card)
+
+                # 角丸白カード (高い視認性を保ちつつアルファブレンド)
+                radius = 12
+                draw.rounded_rectangle(
+                    [(0, 0), (card_w - 1, card_h - 1)],
+                    radius=radius,
+                    fill=(255, 255, 255, 245),
+                    outline=(203, 213, 225, 245),
+                    width=2
+                )
+
+                # QRコードを上部中央に配置
+                qr_x = (card_w - qr_w) // 2
+                card.paste(qr_img, (qr_x, 12), qr_img)
+
+                # 下部にURLと案内を完全表記（手入力可能）
+                try:
+                    font_lbl = ImageFont.truetype("arial.ttf", 11)
+                    font_size = 12 if len(url) <= 32 else (11 if len(url) <= 36 else 10)
+                    font_url = ImageFont.truetype("arial.ttf", font_size)
+                except Exception:
+                    font_lbl = font_url = ImageFont.load_default()
+
+                # ラベル「Request via QR or URL:」
+                draw.text((card_w // 2, qr_h + 24), "Request via QR or URL:", fill=(100, 116, 139, 255), anchor="mm", font=font_lbl)
+
+                # 完全なURL（手入力できるよう省略なし）
+                draw.text((card_w // 2, qr_h + 46), url, fill=(15, 23, 42, 255), anchor="mm", font=font_url)
+
+                card.save(QR_OVERLAY_PATH, "PNG")
+                return QR_OVERLAY_PATH
         except Exception as e:
             log_print(f"[Core] Error generating QR overlay image: {e}")
             return None
 
     def get_image_for_playback(self, image_path):
-        """写真再生時、overlay_qr_image設定に応じてQRコードを右下に合成した画像パスを返す"""
+        """写真再生時、overlay_qr_image設定に応じてQRコード・URLを合成した画像パスを返す"""
         overlay_enabled = bool(self.config.get("overlay_qr_image", False))
         if not overlay_enabled:
             return image_path
@@ -870,11 +947,14 @@ class StreamerCore:
 
             bw, bh = base_img.size
             qw, qh = qr_img.size
+            mode = self.config.get("overlay_qr_mode", "bottom-right")
 
-            pos_x = bw - qw - 30
-            pos_y = bh - qh - 30
-
-            base_img.alpha_composite(qr_img, dest=(pos_x, pos_y))
+            if mode == "fullscreen":
+                base_img.alpha_composite(qr_img, dest=(0, 0))
+            else:
+                pos_x = bw - qw - 25
+                pos_y = bh - qh - 25
+                base_img.alpha_composite(qr_img, dest=(pos_x, pos_y))
 
             temp_path = os.path.join(IMAGE_CACHE_DIR, f"playback_overlay_{int(time.time())}.png")
             base_img.convert("RGB").save(temp_path, "PNG")
