@@ -358,24 +358,34 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 <div class="queue-title">🎛️ 再生コントロール (Playback Control)</div>
                 <div class="control-btn-group">
                     <button class="btn-sm" id="btn-skip" onclick="skipCurrentVideo()">⏭ スキップ (Skip)</button>
-                    <button class="btn-sm" id="btn-photo-pause" onclick="togglePhotoAdvance()">⏱ 自動送り: OFF</button>
                     <button class="btn-sm" id="btn-radio-toggle" onclick="toggleRadio()">📻 BGM/ラジオ: OFF</button>
+                    <button class="btn-sm" id="btn-photo-pause" onclick="togglePhotoAdvance()">⏱ 自動送り: OFF</button>
                     <button class="btn-sm" id="btn-shuffle-now" onclick="shuffleNow()">🔀 並び替え (Shuffle)</button>
                     <button class="btn-sm" id="btn-loop-toggle" onclick="toggleLoop()">🔁 ループ: OFF</button>
                     <button class="btn-sm" id="btn-shuffle-toggle" onclick="toggleShuffle()">🔀 シャッフル: OFF</button>
                 </div>
             </div>
-            <div style="margin-top: 8px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border-color); padding-top: 8px;">
-                <span>⏱ 写真表示時間 (Photo Duration):</span>
-                <select id="select-duration" class="select-sm" onchange="changeDuration(this.value)">
-                    <option value="5">5 秒 (5s)</option>
-                    <option value="10">10 秒 (10s)</option>
-                    <option value="15" selected>15 秒 (15s)</option>
-                    <option value="20">20 秒 (20s)</option>
-                    <option value="30">30 秒 (30s)</option>
-                    <option value="60">60 秒 (60s)</option>
-                    <option value="120">120 秒 (120s)</option>
-                </select>
+            <div style="margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border-color); padding-top: 10px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                    <span>📻 ラジオ背景 (Radio Background):</span>
+                    <select id="select-radio-bg" class="select-sm" onchange="changeRadioBg(this.value)">
+                        <option value="card">🎵 サムネイルカード (Card)</option>
+                        <option value="slideshow">🖼️ スライドショー (Slideshow)</option>
+                        <option value="standby">⏹ 待機画面 (Standby)</option>
+                    </select>
+                </div>
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                    <span>⏱ 写真表示時間 (Photo Duration):</span>
+                    <select id="select-duration" class="select-sm" onchange="changeDuration(this.value)">
+                        <option value="5">5 秒 (5s)</option>
+                        <option value="10">10 秒 (10s)</option>
+                        <option value="15" selected>15 秒 (15s)</option>
+                        <option value="20">20 秒 (20s)</option>
+                        <option value="30">30 秒 (30s)</option>
+                        <option value="60">60 秒 (60s)</option>
+                        <option value="120">120 秒 (120s)</option>
+                    </select>
+                </div>
             </div>
         </div>
 
@@ -430,12 +440,14 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
         const btnShuffleNow = document.getElementById('btn-shuffle-now');
         const btnLoop = document.getElementById('btn-loop-toggle');
         const btnShuffle = document.getElementById('btn-shuffle-toggle');
+        const selectRadioBg = document.getElementById('select-radio-bg');
         const selectDuration = document.getElementById('select-duration');
         const streamUrl = window.location.origin + '/stream.m3u8';
 
         let currentLoopState = false;
         let currentShuffleState = false;
         let currentRadioState = false;
+        let currentRadioBg = "card";
         let currentPhotoAdvance = false;
         let isCurrentItemImage = false;
         let userPermissions = {
@@ -627,6 +639,15 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             sendControl('set_radio_mode', { enabled: !currentRadioState });
         }
 
+        function changeRadioBg(val) {
+            if (!userPermissions.allow_web_playback_control) return;
+            sendControl('set_radio_bg_source', { source: val }).then(res => {
+                if (res && res.success) {
+                    showMsg("✓ ラジオ背景を切り替えました: " + val, false);
+                }
+            });
+        }
+
         function changeDuration(val) {
             if (!userPermissions.allow_web_playback_control) return;
             sendControl('set_image_duration', { duration: parseInt(val, 10) });
@@ -691,7 +712,8 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                         btnShuffleNow.disabled = !userPermissions.allow_web_playback_control;
                         btnLoop.disabled = !userPermissions.allow_web_playback_control;
                         btnShuffle.disabled = !userPermissions.allow_web_playback_control;
-                        selectDuration.disabled = !userPermissions.allow_web_playback_control;
+                        if (selectRadioBg) selectRadioBg.disabled = !userPermissions.allow_web_playback_control;
+                        if (selectDuration) selectDuration.disabled = !userPermissions.allow_web_playback_control;
                     }
 
                     // 写真関連状態の同期
@@ -700,7 +722,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                     btnPhotoPause.textContent = currentPhotoAdvance ? "⏱ 自動送り: ON" : "⏱ 自動送り: OFF";
                     btnPhotoPause.className = "btn-sm " + (currentPhotoAdvance ? "btn-active" : "");
 
-                    if (data.image_display_duration && selectDuration.value != data.image_display_duration) {
+                    if (data.image_display_duration && selectDuration && selectDuration.value != data.image_display_duration) {
                         selectDuration.value = String(data.image_display_duration);
                     }
 
@@ -708,6 +730,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                     currentLoopState = !!data.loop_queue;
                     currentShuffleState = !!data.shuffle;
                     currentRadioState = !!data.radio_mode;
+                    currentRadioBg = data.radio_bg_source || "card";
 
                     btnLoop.textContent = currentLoopState ? "🔁 ループ: ON" : "🔁 ループ: OFF";
                     btnLoop.className = "btn-sm " + (currentLoopState ? "btn-active" : "");
@@ -717,6 +740,10 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
 
                     btnRadio.textContent = currentRadioState ? "📻 BGM/ラジオ: ON" : "📻 BGM/ラジオ: OFF";
                     btnRadio.className = "btn-sm " + (currentRadioState ? "btn-active" : "");
+
+                    if (data.radio_bg_source && selectRadioBg && selectRadioBg.value != data.radio_bg_source) {
+                        selectRadioBg.value = data.radio_bg_source;
+                    }
 
                     // モードバッジ
                     let badges = [];
