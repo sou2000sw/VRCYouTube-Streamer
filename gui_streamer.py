@@ -430,19 +430,43 @@ class App(ctk.CTk):
 
         # 5. Bottom Control Frame
         self.control_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.control_frame.pack(side="bottom", fill="x", padx=20, pady=(5, 15))
+        self.control_frame.pack(side="bottom", fill="x", padx=20, pady=(4, 12))
 
-        self.prev_btn = ctk.CTkButton(self.control_frame, text="⏮ Prev", width=70, fg_color="#2E4053", hover_color="#1F2A36", command=self.play_prev)
-        self.prev_btn.pack(side="left", padx=(0, 6))
-
-        self.skip_btn = ctk.CTkButton(self.control_frame, text="⏭ Skip", width=70, fg_color="#E74C3C", hover_color="#C0392B", command=self.streamer_core.skip)
-        self.skip_btn.pack(side="left", padx=(0, 10))
+        self.skip_btn = ctk.CTkButton(self.control_frame, text="⏭ Skip", width=75, fg_color="#E74C3C", hover_color="#C0392B", command=self.streamer_core.skip)
+        self.skip_btn.pack(side="left", padx=(0, 8))
 
         self.clear_btn = ctk.CTkButton(self.control_frame, text="Clear Queue", fg_color="#7F8C8D", hover_color="#707B7C", command=self.clear_queue)
         self.clear_btn.pack(side="left")
 
         self.exit_btn = ctk.CTkButton(self.control_frame, text="Exit", fg_color="#34495E", hover_color="#2C3E50", command=self.on_closing)
         self.exit_btn.pack(side="right")
+
+        # 4.5. Photo Slideshow Control Bar (メイン画面で直接操作可能)
+        self.photo_bar = ctk.CTkFrame(self, fg_color="transparent")
+        self.photo_bar.pack(side="bottom", fill="x", padx=20, pady=(2, 2))
+
+        self.lbl_photo_bar = ctk.CTkLabel(self.photo_bar, text="🖼 Photo Slideshow:", font=ctk.CTkFont(size=12, weight="bold"), text_color="gray")
+        self.lbl_photo_bar.pack(side="left", padx=(0, 8))
+
+        self.photo_advance_switch = ctk.CTkSwitch(self.photo_bar, text="⏱ Auto Advance", font=ctk.CTkFont(size=11), command=self.toggle_photo_advance)
+        if self.streamer_core.config.get("image_auto_advance", True):
+            self.photo_advance_switch.select()
+        self.photo_advance_switch.pack(side="left", padx=(0, 12))
+
+        self.lbl_duration = ctk.CTkLabel(self.photo_bar, text="Duration:", font=ctk.CTkFont(size=11), text_color="gray")
+        self.lbl_duration.pack(side="left", padx=(0, 4))
+
+        self.duration_combo = ctk.CTkOptionMenu(
+            self.photo_bar,
+            values=["5s", "10s", "15s", "20s", "30s", "60s", "120s"],
+            width=75,
+            height=22,
+            font=ctk.CTkFont(size=11),
+            command=self.on_change_photo_duration
+        )
+        curr_dur = str(self.streamer_core.config.get("image_display_duration", 15)) + "s"
+        self.duration_combo.set(curr_dur if curr_dur in ["5s", "10s", "15s", "20s", "30s", "60s", "120s"] else "15s")
+        self.duration_combo.pack(side="left")
 
         # 4. Queue List Frame
         self.queue_frame = ctk.CTkFrame(self)
@@ -621,34 +645,43 @@ class App(ctk.CTk):
         else:
             messagebox.showwarning("Warning", "URL is not ready yet.")
 
+    def toggle_photo_advance(self):
+        val = bool(self.photo_advance_switch.get())
+        self.streamer_core.set_image_auto_advance(val)
+
+    def on_change_photo_duration(self, val_str):
+        try:
+            sec = int(val_str.replace("s", "").strip())
+            self.streamer_core.set_image_duration(sec)
+        except Exception:
+            pass
+
     def add_photo_file(self):
-        file_path = filedialog.askopenfilename(
-            title="Select Photo / Image",
+        file_paths = filedialog.askopenfilenames(
+            title="Select Photo(s) / Image(s)",
             filetypes=[
                 ("Image Files", "*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.gif"),
                 ("All Files", "*.*")
             ]
         )
-        if not file_path:
+        if not file_paths:
             return
 
-        self.add_photo_btn.configure(state="disabled", text="Adding...")
+        total = len(file_paths)
+        self.add_photo_btn.configure(state="disabled", text=f"Adding (0/{total})...")
 
         def bg_add():
-            item = self.streamer_core.add_image_file(file_path)
-            if item:
-                log_print(f"Added photo to queue: {item.get('title')}")
-                self.last_queue_titles = None
-            else:
-                log_print("Failed to add photo.")
+            added_count = 0
+            for i, fp in enumerate(file_paths):
+                self.after(0, lambda idx=i+1: self.add_photo_btn.configure(text=f"Adding ({idx}/{total})..."))
+                item = self.streamer_core.add_image_file(fp)
+                if item:
+                    added_count += 1
+            log_print(f"[GUI] Added {added_count}/{total} photo(s) to queue.")
+            self.last_queue_titles = None
             self.after(0, lambda: self.add_photo_btn.configure(state="normal", text="🖼 Add Photo"))
 
         threading.Thread(target=bg_add, daemon=True).start()
-
-    def play_prev(self):
-        ok = self.streamer_core.play_prev()
-        if ok:
-            self.last_queue_titles = None
 
     def add_to_queue(self):
         url = self.url_entry.get().strip()
@@ -694,10 +727,6 @@ class App(ctk.CTk):
                 self.after(500, self.update_ui_loop)
             return
 
-        # Prevボタンの活性状態同期
-        has_prev = len(self.streamer_core.history_stack) >= 2
-        self.prev_btn.configure(state="normal" if has_prev else "disabled")
-
         # Loop & Shuffle スイッチの状態同期
         core_loop = bool(self.streamer_core.config.get("loop_queue", False))
         if bool(self.loop_switch.get()) != core_loop:
@@ -712,6 +741,18 @@ class App(ctk.CTk):
                 self.shuffle_switch.select()
             else:
                 self.shuffle_switch.deselect()
+
+        # 写真自動送りスイッチ & 表示秒数コンボの状態同期
+        core_advance = bool(self.streamer_core.config.get("image_auto_advance", True))
+        if bool(self.photo_advance_switch.get()) != core_advance:
+            if core_advance:
+                self.photo_advance_switch.select()
+            else:
+                self.photo_advance_switch.deselect()
+
+        core_dur = str(self.streamer_core.config.get("image_display_duration", 15)) + "s"
+        if self.duration_combo.get() != core_dur and core_dur in ["5s", "10s", "15s", "20s", "30s", "60s", "120s"]:
+            self.duration_combo.set(core_dur)
 
         # 0. Stream Status
         status_detail = self.streamer_core.status_detail

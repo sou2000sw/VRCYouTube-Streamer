@@ -11,20 +11,24 @@ GUI画面からの直感的な操作に加え、**外部アプリ（VRCBeacon等
 1. **デュアル動作モード**:
    * **GUIモード**: CustomTkinter製のダークテーマUIで手動操作
    * **ヘッドレス / APIサーバーモード**: GUIを表示せず、軽量バックグラウンドサーバーとして動作
-2. **RESTful HTTP JSON API (CORS対応)**:
+2. **動画＆写真共有・スライドショー機能**:
+   * **YouTube動画＆プレイリスト再生**: `yt-dlp` + `ffmpeg` による高画質・安定ストリーミング
+   * **写真・画像の一括共有**: スマホやPCから複数枚の画像（JPEG, PNG, WebP等）をまとめてキューに追加可能
+   * **スライドショー操作**: 表示秒数切り替え（5s〜120s）や自動送りON/OFF（一時停止）をGUI・Web双方からリアルタイム操作可能
+3. **RESTful HTTP JSON API (CORS対応)**:
    * 外部アプリ（Vue 3, Electron, Node.js, Python等）からHTTPリクエスト経由で状態監視・キュー追加・再生制御・終了が可能
-3. **リッチなキュー操作**:
+4. **リッチなキュー操作**:
    * **ドラッグ＆ドロップ並び替え**（オートスクロール対応）＋ **「▲」「▼」ボタン**の両立
    * **即時シャッフル (Shuffle List)** & **シャッフル再生モード (Shuffle Play)**
-   * **キュー保持ループ再生モード (Loop Queue)**: 再生終了動画を自動でキュー末尾に戻しエンドレス再生
-4. **QRコード・URL上書き表示 (QR Overlay)**:
+   * **キュー保持ループ再生モード (Loop Queue)**: 再生終了動画・写真を自動でキュー末尾に戻しエンドレス再生
+5. **QRコード・URL上書き表示 (QR Overlay)**:
    * 配信映像上および待機画面に、Webリクエスト用のQRコードと手入力用URLをウォーターマークとして上書き表示可能。
    * **コンパクトモード（右下小さく）** と **フル画面モード（中央大画面）** を選択可能。
    * ※注意: 動画再生時のQRオーバーレイ有効化時は、FFmpegによるリアルタイム再エンコード処理が行われるためバッファ（読み込み待ち）が発生しやすくなります。
-5. **設定管理 (Settings UI & `config.json`)**:
-   * サーバーポート、HLSセグメント/バッファ秒数、動画切り替え待機秒数などをGUIおよびAPIから変更・保存可能
-6. **Web Player内蔵**:
-   * ブラウザから `http://localhost:<port>/` にアクセスするだけで、hls.js を利用したWeb動画プレイヤーで直接プレビュー再生可能
+6. **設定管理 (Settings UI & `config.json`)**:
+   * サーバーポート、HLSセグメント/バッファ秒数、動画切り替え待機秒数、Webリモコン権限などをGUIおよびAPIから変更・保存可能
+7. **Web Player内蔵 & Webリモコン**:
+   * ブラウザから `http://localhost:<port>/` にアクセスするだけで、hls.js を利用したWeb動画プレイヤーで直接プレビュー再生およびスマホからの遠隔動画・写真追加が可能
 
 ---
 
@@ -48,6 +52,8 @@ VRCYouTubeStreamer.exe --headless --port 8080
 | 引数 | 説明 | デフォルト値 |
 | :--- | :--- | :--- |
 | `--headless` / `-hl` | GUIを起動せずバックグラウンドAPIサーバーとして動作 | なし (GUI起動) |
+| `--no-tunnel` / `-nt` | Cloudflareトンネルを起動せずローカルテストモードで動作 | なし (トンネル起動) |
+| `--tunnel` | Cloudflareトンネルを明示的に有効化 | 有効 (デフォルト) |
 | `--port` / `-p` | APIサーバーおよびHLS配信サーバーのポート番号 | `8000` (または `config.json`) |
 | `--host` | サーバーのホストアドレス | `127.0.0.1` |
 
@@ -80,14 +86,25 @@ VRCYouTubeStreamer.exe --headless --port 8080
     }
   ],
   "loop_queue": true,
-  "shuffle": false
+  "shuffle": false,
+  "is_image": false,
+  "image_paused": false,
+  "image_display_duration": 15,
+  "image_auto_advance": true,
+  "overlay_qr_enabled": false,
+  "overlay_qr_mode": "bottom-right",
+  "permissions": {
+    "allow_web_queue_add": true,
+    "allow_web_queue_edit": true,
+    "allow_web_playback_control": true
+  }
 }
 ```
 *(※ `status`: `"offline"` / `"buffering"` / `"streaming"` / `"finishing"` / `"error"`)*
 
 ---
 
-### 2. キュー追加
+### 2. キュー追加 (URL)
 * **Method**: `POST`
 * **Path**: `/api/queue`
 * **Body**:
@@ -96,26 +113,25 @@ VRCYouTubeStreamer.exe --headless --port 8080
   "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 }
 ```
-* **Response**:
-```json
-{
-  "success": true,
-  "message": "Successfully added 1 item(s) to queue",
-  "video": {
-    "title": "Rick Astley - Never Gonna Give You Up",
-    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "duration": 213
-  }
-}
-```
 
 ---
 
-### 3. 再生・キュー制御
+### 3. 写真・画像アップロード
+* **Method**: `POST`
+* **Path**: `/api/upload`
+* **Content-Type**: `multipart/form-data` または `image/*`
+* **Body**: 画像バイナリ（最大20MB）
+
+---
+
+### 4. 再生・キュー制御
 * **Method**: `POST`
 * **Path**: `/api/control`
 * **Body アクション一覧**:
   * **スキップ**: `{"action": "skip"}`
+  * **写真自動送りトグル**: `{"action": "toggle_image_pause"}`
+  * **写真表示秒数変更**: `{"action": "set_image_duration", "duration": 15}`
+  * **写真自動送りON/OFF**: `{"action": "set_image_auto_advance", "enabled": true}`
   * **キュー全消去**: `{"action": "clear_queue"}`
   * **停止＆キュー消去**: `{"action": "stop"}`
   * **キュー即時シャッフル**: `{"action": "shuffle"}`
@@ -126,30 +142,22 @@ VRCYouTubeStreamer.exe --headless --port 8080
 
 ---
 
-### 4. サーバー終了
-* **Method**: `POST`
-* **Path**: `/api/shutdown`
-* **Response**:
-```json
-{
-  "success": true,
-  "message": "Server is shutting down..."
-}
-```
+### 5. 接続用 QR コード画像取得
+* **Method**: `GET`
+* **Path**: `/api/qrcode`
+* **Response**: PNG 画像ストリーム
 
 ---
 
-### 5. 設定の取得・更新
+### 6. サーバー終了
+* **Method**: `POST`
+* **Path**: `/api/shutdown`
+
+---
+
+### 7. 設定の取得・更新
 * **GET `/api/config`**: 現在の設定JSONを取得
 * **POST `/api/config`**: 設定JSONを更新して保存（`config.json` に永続化）
-```json
-{
-  "hls_segment_time": 3,
-  "video_transition_wait_seconds": 5,
-  "loop_queue": true,
-  "shuffle": false
-}
-```
 
 ---
 

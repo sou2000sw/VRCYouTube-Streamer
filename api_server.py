@@ -344,10 +344,10 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 スマートフォンやPCから写真をアップロードして配信スクリーンに表示できます
             </div>
             <div class="upload-drop-zone" id="upload-zone" onclick="document.getElementById('photo-input').click()">
-                <input type="file" id="photo-input" accept="image/*" style="display:none" onchange="handlePhotoUpload(this.files)">
+                <input type="file" id="photo-input" accept="image/*" multiple style="display:none" onchange="handlePhotoUpload(this.files)">
                 <div style="font-size: 26px; margin-bottom: 2px;">📷</div>
-                <div style="font-size: 13px; font-weight: 600; color: var(--primary);">タップして写真を選択 / ドロップ</div>
-                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">JPEG, PNG, WebP, GIF (最大20MB)</div>
+                <div style="font-size: 13px; font-weight: 600; color: var(--primary);">タップして写真を選択（複数選択可） / ドロップ</div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">JPEG, PNG, WebP, GIF (最大20MB/枚)</div>
             </div>
             <div id="photo-msg-box" class="msg-box"></div>
         </div>
@@ -357,7 +357,6 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             <div class="queue-header">
                 <div class="queue-title">🎛️ 再生コントロール (Playback Control)</div>
                 <div class="control-btn-group">
-                    <button class="btn-sm" id="btn-prev" onclick="prevItem()" disabled>⏮ 前へ (Prev)</button>
                     <button class="btn-sm" id="btn-skip" onclick="skipCurrentVideo()">⏭ スキップ (Skip)</button>
                     <button class="btn-sm btn-active" id="btn-photo-pause" onclick="togglePhotoPause()">⏱ 自動送り: ON</button>
                     <button class="btn-sm" id="btn-shuffle-now" onclick="shuffleNow()">🔀 並び替え (Shuffle)</button>
@@ -424,7 +423,6 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
         const queueList = document.getElementById('queue-list');
         const queueHeaderTitle = document.getElementById('queue-header-title');
         const modeBadges = document.getElementById('mode-badges');
-        const btnPrev = document.getElementById('btn-prev');
         const btnSkip = document.getElementById('btn-skip');
         const btnPhotoPause = document.getElementById('btn-photo-pause');
         const btnShuffleNow = document.getElementById('btn-shuffle-now');
@@ -469,7 +467,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             setTimeout(() => { photoMsgBox.style.display = "none"; }, 5000);
         }
 
-        // 3. 写真アップロード (Share Photo) & Drag and Drop
+        // 3. 写真アップロード (Share Photo) & Drag and Drop (複数対応)
         if (uploadZone) {
             ['dragenter', 'dragover'].forEach(eventName => {
                 uploadZone.addEventListener(eventName, (e) => {
@@ -494,41 +492,59 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             });
         }
 
-        function handlePhotoUpload(files) {
+        async function handlePhotoUpload(files) {
             if (!files || files.length === 0) return;
             if (!userPermissions.allow_web_queue_add) {
                 showPhotoMsg("⚠ ホストによって写真追加が無効化されています", true);
                 return;
             }
 
-            const file = files[0];
-            if (file.size > 20 * 1024 * 1024) {
-                showPhotoMsg("⚠ ファイルサイズが大きすぎます (最大20MB)", true);
-                return;
+            const fileList = Array.from(files);
+            const total = fileList.length;
+            let successCount = 0;
+            let failCount = 0;
+
+            for (let i = 0; i < total; i++) {
+                const file = fileList[i];
+                if (file.size > 20 * 1024 * 1024) {
+                    showPhotoMsg(`⚠ ファイル「${file.name}」が大きすぎます (最大20MB)`, true);
+                    failCount++;
+                    continue;
+                }
+
+                if (total > 1) {
+                    showPhotoMsg(`⏳ 写真をアップロード中... (${i + 1}/${total})`, false);
+                } else {
+                    showPhotoMsg("⏳ 写真をアップロード中...", false);
+                }
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                try {
+                    const res = await fetch('/api/upload', {
+                        method: 'POST',
+                        body: formData
+                    }).then(r => r.json());
+
+                    if (res.success) {
+                        successCount++;
+                    } else {
+                        failCount++;
+                    }
+                } catch (e) {
+                    failCount++;
+                }
             }
 
-            showPhotoMsg("⏳ 写真をアップロード中...", false);
+            document.getElementById('photo-input').value = "";
+            fetchStatus();
 
-            const formData = new FormData();
-            formData.append('file', file);
-
-            fetch('/api/upload', {
-                method: 'POST',
-                body: formData
-            })
-            .then(r => r.json())
-            .then(res => {
-                if (res.success) {
-                    showPhotoMsg("✓ 写真をキューに追加しました！", false);
-                    document.getElementById('photo-input').value = "";
-                    fetchStatus();
-                } else {
-                    showPhotoMsg("⚠ " + (res.message || "写真のアップロードに失敗しました"), true);
-                }
-            })
-            .catch(e => {
-                showPhotoMsg("⚠ 通信エラーが発生しました: " + e, true);
-            });
+            if (failCount === 0) {
+                showPhotoMsg(`✓ ${successCount} 枚の写真をキューに追加しました！`, false);
+            } else {
+                showPhotoMsg(`✓ ${successCount} 枚追加完了 (${failCount} 枚失敗)`, true);
+            }
         }
 
         // 4. 動画追加処理 (Add to Queue)
@@ -591,11 +607,6 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             .catch(e => {
                 showMsg("⚠ 通信エラー: " + e, true);
             });
-        }
-
-        function prevItem() {
-            if (!userPermissions.allow_web_playback_control) return;
-            sendControl('prev').then(() => showMsg("✓ 前の項目に戻りました", false));
         }
 
         function skipCurrentVideo() {
@@ -670,7 +681,6 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                     if (data.permissions) {
                         userPermissions = data.permissions;
                         addBtn.disabled = !userPermissions.allow_web_queue_add;
-                        btnPrev.disabled = !userPermissions.allow_web_playback_control || !data.has_prev;
                         btnSkip.disabled = !userPermissions.allow_web_playback_control;
                         btnPhotoPause.disabled = !userPermissions.allow_web_playback_control;
                         btnShuffleNow.disabled = !userPermissions.allow_web_playback_control;
