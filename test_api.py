@@ -42,6 +42,18 @@ def run_tests():
     assert status_code == 200
     assert shuf_res.get("shuffle") is True
 
+    print("\n=== 3.5. Testing POST /api/control (set_radio_mode: true) ===")
+    status_code, radio_res = make_request("POST", "/api/control", {"action": "set_radio_mode", "enabled": True})
+    print(f"Set Radio Mode ({status_code}):", json.dumps(radio_res, indent=2))
+    assert status_code == 200
+    assert radio_res.get("radio_mode") is True
+
+    print("\n=== 3.6. Testing POST /api/control (set_radio_bg_source: slideshow) ===")
+    status_code, bg_res = make_request("POST", "/api/control", {"action": "set_radio_bg_source", "source": "slideshow"})
+    print(f"Set Radio BG Source ({status_code}):", json.dumps(bg_res, indent=2))
+    assert status_code == 200
+    assert bg_res.get("radio_bg_source") == "slideshow"
+
     print("\n=== 4. Testing POST /api/control (shuffle now) ===")
     status_code, shuf_now = make_request("POST", "/api/control", {"action": "shuffle"})
     print(f"Shuffle Now ({status_code}):", json.dumps(shuf_now, indent=2))

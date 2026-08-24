@@ -116,6 +116,32 @@ class SettingsWindow(ctk.CTkToplevel):
             self.switch_photo_advance.select()
         self.switch_photo_advance.pack(anchor="w", padx=15, pady=(2, 6))
 
+        # 6.5. BGM / ラジオモード設定 (音声のみ + 静止画低帯域配信)
+        self.switch_radio = ctk.CTkSwitch(form_frame, text="📻 Radio / BGM Mode (YouTube音声のみ+静止画・超低帯域配信)")
+        if cfg.get("radio_mode", False):
+            self.switch_radio.select()
+        self.switch_radio.pack(anchor="w", padx=15, pady=(4, 4))
+
+        self.lbl_radio_bg = ctk.CTkLabel(form_frame, text="📻 Radio Background (ラジオモード時の背景):", anchor="w")
+        self.lbl_radio_bg.pack(fill="x", padx=15, pady=(2, 2))
+
+        curr_radio_bg = cfg.get("radio_bg_source", "standby")
+        radio_bg_val = "Slideshow (写真スライドショー)" if curr_radio_bg == "slideshow" else "Standby (待機画面・QR)"
+        self.seg_radio_bg = ctk.CTkSegmentedButton(form_frame, values=["Standby (待機画面・QR)", "Slideshow (写真スライドショー)"])
+        self.seg_radio_bg.set(radio_bg_val)
+        self.seg_radio_bg.pack(fill="x", padx=15, pady=(2, 4))
+
+        self.lbl_radio_info = ctk.CTkLabel(
+            form_frame,
+            text="💡 ラジオモード時は動画を落とさず帯域を約300kbps（通常比90%減）に極小化し、VRChatでのバッファ詰まりを防止します。",
+            font=ctk.CTkFont(size=11),
+            text_color="#34D399",
+            anchor="w",
+            wraplength=440,
+            justify="left"
+        )
+        self.lbl_radio_info.pack(fill="x", padx=15, pady=(0, 8))
+
         # 7. QRコード上書き表示 (ウォーターマーク) 設定
         is_qr_on = bool(cfg.get("overlay_qr_enabled", False) or cfg.get("overlay_qr_video", False) or cfg.get("overlay_qr_image", False))
         self.switch_qr_overlay = ctk.CTkSwitch(form_frame, text="🔲 QR Overlay (動画・写真にQR・URL上書き表示)")
@@ -225,6 +251,8 @@ class SettingsWindow(ctk.CTkToplevel):
   - キュー全消去:         { "action": "clear_queue" }
   - 停止＆キュー消去:     { "action": "stop" }
   - キュー即時シャッフル: { "action": "shuffle" }
+  - ラジオ/BGMモード切替: { "action": "set_radio_mode", "enabled": true }
+  - ラジオ背景ソース切替: { "action": "set_radio_bg_source", "source": "standby" }
   - ループ再生の切替:     { "action": "set_loop", "enabled": true }
   - シャッフル再生の切替: { "action": "set_shuffle", "enabled": true }
   - 指定動画の削除:       { "action": "delete_item", "index": 0 }
@@ -237,7 +265,7 @@ class SettingsWindow(ctk.CTkToplevel):
   現在の設定JSONを取得。
 
 ■ POST /api/config
-  設定JSONを更新・保存 (例: {"loop_queue": true, "shuffle": true, "image_display_duration": 15})
+  設定JSONを更新・保存 (例: {"loop_queue": true, "shuffle": true, "radio_mode": true, "image_display_duration": 15})
 """
         self.api_textbox = ctk.CTkTextbox(self.api_ref_frame, height=260, font=ctk.CTkFont(family="Consolas", size=11))
         self.api_textbox.insert("1.0", api_doc_text)
@@ -274,6 +302,8 @@ class SettingsWindow(ctk.CTkToplevel):
             loop_queue = bool(self.switch_loop.get())
             shuffle = bool(self.switch_shuffle.get())
             photo_advance = bool(self.switch_photo_advance.get())
+            radio_mode = bool(self.switch_radio.get())
+            radio_bg = "slideshow" if "Slideshow" in self.seg_radio_bg.get() else "standby"
 
             if port <= 0 or port > 65535:
                 raise ValueError("Port must be between 1 and 65535.")
@@ -290,6 +320,8 @@ class SettingsWindow(ctk.CTkToplevel):
                 "hls_segment_time": seg_time,
                 "image_display_duration": photo_dur,
                 "image_auto_advance": photo_advance,
+                "radio_mode": radio_mode,
+                "radio_bg_source": radio_bg,
                 "overlay_qr_enabled": qr_enabled,
                 "overlay_qr_video": qr_enabled,
                 "overlay_qr_image": qr_enabled,
@@ -382,6 +414,17 @@ class App(ctk.CTk):
 
         self.settings_btn = ctk.CTkButton(self.header_frame, text="⚙ Settings", width=90, fg_color="#34495E", hover_color="#2C3E50", command=self.open_settings)
         self.settings_btn.pack(side="right")
+
+        self.radio_switch = ctk.CTkSwitch(
+            self.header_frame,
+            text="📻 Radio/BGM",
+            width=110,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.toggle_radio_mode
+        )
+        if self.streamer_core.config.get("radio_mode", False):
+            self.radio_switch.select()
+        self.radio_switch.pack(side="right", padx=(0, 12))
 
         # 2. Status Frame (Stream Status, Now Playing & Tunnel URL)
         self.status_frame = ctk.CTkFrame(self)
@@ -609,6 +652,10 @@ class App(ctk.CTk):
         self.last_queue_titles = None
         self.update_ui_loop()
 
+    def toggle_radio_mode(self):
+        val = bool(self.radio_switch.get())
+        self.streamer_core.set_radio_mode(val)
+
     def toggle_loop(self):
         val = bool(self.loop_switch.get())
         self.streamer_core.set_loop(val)
@@ -727,7 +774,7 @@ class App(ctk.CTk):
                 self.after(500, self.update_ui_loop)
             return
 
-        # Loop & Shuffle スイッチの状態同期
+        # Loop & Shuffle & Radio スイッチの状態同期
         core_loop = bool(self.streamer_core.config.get("loop_queue", False))
         if bool(self.loop_switch.get()) != core_loop:
             if core_loop:
@@ -741,6 +788,13 @@ class App(ctk.CTk):
                 self.shuffle_switch.select()
             else:
                 self.shuffle_switch.deselect()
+
+        core_radio = bool(self.streamer_core.config.get("radio_mode", False))
+        if bool(self.radio_switch.get()) != core_radio:
+            if core_radio:
+                self.radio_switch.select()
+            else:
+                self.radio_switch.deselect()
 
         # 写真自動送りスイッチ & 表示秒数コンボの状態同期
         core_advance = bool(self.streamer_core.config.get("image_auto_advance", True))

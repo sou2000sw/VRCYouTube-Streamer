@@ -61,7 +61,9 @@ DEFAULT_CONFIG = {
     "overlay_qr_enabled": False,
     "overlay_qr_video": False,
     "overlay_qr_image": False,
-    "overlay_qr_mode": "bottom-right"
+    "overlay_qr_mode": "bottom-right",
+    "radio_mode": False,
+    "radio_bg_source": "standby"
 }
 
 def log_print(msg):
@@ -285,6 +287,8 @@ class StreamerCore:
             "overlay_qr_video": bool(self.config.get("overlay_qr_video", False)),
             "overlay_qr_image": bool(self.config.get("overlay_qr_image", False)),
             "overlay_qr_mode": str(self.config.get("overlay_qr_mode", "bottom-right")),
+            "radio_mode": bool(self.config.get("radio_mode", False)),
+            "radio_bg_source": str(self.config.get("radio_bg_source", "standby")),
             "has_prev": has_prev,
             "permissions": {
                 "allow_web_queue_add": bool(self.config.get("allow_web_queue_add", True)),
@@ -292,6 +296,19 @@ class StreamerCore:
                 "allow_web_playback_control": bool(self.config.get("allow_web_playback_control", True))
             }
         }
+
+    def set_radio_mode(self, enabled: bool):
+        self.config["radio_mode"] = bool(enabled)
+        self.save_config()
+        log_print(f"[Core] Radio mode set to: {self.config['radio_mode']}")
+        return self.config["radio_mode"]
+
+    def set_radio_bg_source(self, source: str):
+        if source in ("standby", "slideshow"):
+            self.config["radio_bg_source"] = source
+            self.save_config()
+            log_print(f"[Core] Radio background source set to: {source}")
+        return self.config.get("radio_bg_source", "standby")
 
     def set_loop(self, enabled: bool):
         self.config["loop_queue"] = bool(enabled)
@@ -499,6 +516,149 @@ class StreamerCore:
             
             headers = info.get("http_headers", {})
             return video_url, audio_url, info.get("title", "Unknown"), info.get("duration", 0), headers
+
+    def get_audio_only_stream_urls(self, youtube_url):
+        ydl_opts = {
+            "format": "bestaudio[acodec^=mp4a]/bestaudio/best",
+            "quiet": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["ios", "android", "tv"]
+                }
+            }
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
+            audio_url = info.get("url")
+            headers = info.get("http_headers", {})
+            return audio_url, info.get("title", "Unknown"), info.get("duration", 0), headers
+
+    def get_radio_background_path(self):
+        """BGM/ラジオモード用の背景画像パスを取得（待機画面または写真）"""
+        source = self.config.get("radio_bg_source", "standby")
+        if source == "slideshow":
+            # 1. 写真キューにある画像を探す
+            with self.queue_lock:
+                for item in self.play_queue:
+                    if item.get("type") == "image" and item.get("path") and os.path.exists(item["path"]):
+                        return item["path"]
+            # 2. キャッシュされた写真画像を探す
+            if os.path.exists(IMAGE_CACHE_DIR):
+                cached = [os.path.join(IMAGE_CACHE_DIR, f) for f in os.listdir(IMAGE_CACHE_DIR) if f.endswith((".png", ".jpg", ".jpeg"))]
+                if cached:
+                    return random.choice(cached)
+
+        # デフォルトは待機画面 (QR & URLカード付き)
+        self.generate_standby_image()
+        if os.path.exists(STANDBY_IMAGE_PATH):
+            return STANDBY_IMAGE_PATH
+        return None
+
+    def play_radio(self, video_info, seek_seconds=0):
+        """BGM/ラジオモード: YouTube音声ストリーム + 静止画/写真を合成し、極小帯域でHLS配信"""
+        url = video_info["url"]
+        try:
+            audio_url, title, duration, headers = self.get_audio_only_stream_urls(url)
+            if not audio_url:
+                raise ValueError("No audio stream URL returned by yt-dlp")
+            self.current_video = {
+                "title": f"📻 {title}",
+                "url": url,
+                "duration": duration,
+                "is_radio": True
+            }
+            self.current_video_start_time = time.time() - max(0, seek_seconds)
+            log_print(f"[Radio] Now Playing (BGM Audio): {title} (seek: {int(seek_seconds)}s)")
+        except Exception as e:
+            log_print(f"[Radio] Failed to get audio stream URL: {e}")
+            self.current_video = {"title": f"Failed: {video_info.get('title', 'Unknown')}", "url": url, "duration": 0, "is_radio": True}
+            self.status = "error"
+            self.status_detail = "Failed to load audio stream"
+            return None
+
+        if not self.ensure_hls_receiver():
+            self.current_video = {"title": "FFmpeg Error (Check PATH)", "url": url, "duration": 0, "is_radio": True}
+            self.status = "error"
+            self.status_detail = "FFmpeg Error"
+            return None
+
+        bg_path = self.get_radio_background_path()
+        if not bg_path or not os.path.exists(bg_path):
+            self.generate_standby_image()
+            bg_path = STANDBY_IMAGE_PATH
+
+        headers_str = ""
+        if headers:
+            headers_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+
+        input_opts = [
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "2",
+            "-reconnect_on_network_error", "1",
+            "-reconnect_on_http_error", "4xx,5xx",
+            "-rw_timeout", "10000000",
+        ]
+        if headers_str:
+            input_opts.extend(["-headers", headers_str])
+        if seek_seconds > 0:
+            input_opts.extend(["-ss", str(int(seek_seconds))])
+
+        cmd = [
+            get_ffmpeg_cmd(), "-re",
+            "-loop", "1", "-i", os.path.abspath(bg_path),
+        ]
+        cmd.extend(input_opts)
+        cmd.extend(["-i", audio_url])
+        cmd.extend([
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-profile:v", "baseline",
+            "-level", "3.1",
+            "-bf", "0",
+            "-g", "15",
+            "-keyint_min", "15",
+            "-sc_threshold", "0",
+            "-pix_fmt", "yuv420p",
+            "-r", "2",
+            "-b:v", "200k",
+            "-maxrate", "250k",
+            "-bufsize", "200k",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-ar", "44100",
+            "-af", "aresample=async=1",
+            "-fflags", "+nobuffer+flush_packets",
+            "-flush_packets", "1",
+            "-muxdelay", "0",
+            "-muxpreload", "0",
+            "-f", "mpegts", "pipe:1"
+        ])
+
+        try:
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, bufsize=0,
+                creationflags=CREATE_NO_WINDOW
+            )
+        except Exception as e:
+            log_print(f"[Radio] Error starting Radio sender: {e}")
+            self.status = "error"
+            self.status_detail = f"Radio sender error: {e}"
+            return None
+
+        with self.process_lock:
+            self.send_proc = proc
+
+        stop_event = threading.Event()
+        threading.Thread(target=self.relay_stream_data,
+                         args=(proc, self.current_stdin, stop_event), daemon=True).start()
+        threading.Thread(target=self.watch_send_proc,
+                         args=(proc, stop_event), daemon=True).start()
+        return stop_event
 
     def play_video(self, video_info, seek_seconds=0):
         url = video_info["url"]
@@ -1311,11 +1471,16 @@ class StreamerCore:
                     time.sleep(0.3)
                     continue
 
-                # 動画再生フロー
+                # 動画 / BGM・ラジオ再生フロー
+                is_radio = bool(self.config.get("radio_mode", False))
                 self.status = "buffering"
-                self.status_detail = f"Loading: {next_item.get('title')}..."
+                self.status_detail = f"Loading {'[Radio]' if is_radio else ''}: {next_item.get('title')}..."
 
-                stop_event = self.play_video(next_item)
+                if is_radio:
+                    stop_event = self.play_radio(next_item)
+                else:
+                    stop_event = self.play_video(next_item)
+
                 if stop_event is None:
                     log_print("[Monitor] Failed to play. Skipping to next.")
                     self.status = "error"
@@ -1324,7 +1489,7 @@ class StreamerCore:
                     continue
 
                 self.status = "streaming"
-                self.status_detail = "Active (Streaming)"
+                self.status_detail = "Active (Radio BGM)" if is_radio else "Active (Streaming)"
 
                 # 終了 or スキップを待つ (ホットリロード対応)
                 while self.is_running and not self.skip_event.is_set():
@@ -1332,14 +1497,18 @@ class StreamerCore:
                     if self.reload_stream_event.is_set():
                         self.reload_stream_event.clear()
                         seek = max(0, time.time() - (self.current_video_start_time or time.time()))
-                        log_print(f"[Monitor] Hot-reloading active video stream with updated QR settings at seek={int(seek)}s...")
+                        is_radio_now = bool(self.config.get("radio_mode", False))
+                        log_print(f"[Monitor] Hot-reloading active stream (radio={is_radio_now}) with updated settings at seek={int(seek)}s...")
                         stop_event.set()
                         with self.process_lock:
                             if self.send_proc:
                                 kill_proc(self.send_proc)
                             self.send_proc = None
                         time.sleep(0.1)
-                        stop_event = self.play_video(next_item, seek_seconds=seek)
+                        if is_radio_now:
+                            stop_event = self.play_radio(next_item, seek_seconds=seek)
+                        else:
+                            stop_event = self.play_video(next_item, seek_seconds=seek)
                         if stop_event is None:
                             break
 

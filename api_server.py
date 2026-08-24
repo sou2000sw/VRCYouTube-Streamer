@@ -359,6 +359,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 <div class="control-btn-group">
                     <button class="btn-sm" id="btn-skip" onclick="skipCurrentVideo()">⏭ スキップ (Skip)</button>
                     <button class="btn-sm btn-active" id="btn-photo-pause" onclick="togglePhotoPause()">⏱ 自動送り: ON</button>
+                    <button class="btn-sm" id="btn-radio-toggle" onclick="toggleRadio()">📻 BGM/ラジオ: OFF</button>
                     <button class="btn-sm" id="btn-shuffle-now" onclick="shuffleNow()">🔀 並び替え (Shuffle)</button>
                     <button class="btn-sm" id="btn-loop-toggle" onclick="toggleLoop()">🔁 ループ: OFF</button>
                     <button class="btn-sm" id="btn-shuffle-toggle" onclick="toggleShuffle()">🔀 シャッフル: OFF</button>
@@ -425,6 +426,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
         const modeBadges = document.getElementById('mode-badges');
         const btnSkip = document.getElementById('btn-skip');
         const btnPhotoPause = document.getElementById('btn-photo-pause');
+        const btnRadio = document.getElementById('btn-radio-toggle');
         const btnShuffleNow = document.getElementById('btn-shuffle-now');
         const btnLoop = document.getElementById('btn-loop-toggle');
         const btnShuffle = document.getElementById('btn-shuffle-toggle');
@@ -433,6 +435,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
 
         let currentLoopState = false;
         let currentShuffleState = false;
+        let currentRadioState = false;
         let currentPhotoPaused = false;
         let isCurrentItemImage = false;
         let userPermissions = {
@@ -623,6 +626,11 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             });
         }
 
+        function toggleRadio() {
+            if (!userPermissions.allow_web_playback_control) return;
+            sendControl('set_radio_mode', { enabled: !currentRadioState });
+        }
+
         function changeDuration(val) {
             if (!userPermissions.allow_web_playback_control) return;
             sendControl('set_image_duration', { duration: parseInt(val, 10) });
@@ -683,6 +691,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                         addBtn.disabled = !userPermissions.allow_web_queue_add;
                         btnSkip.disabled = !userPermissions.allow_web_playback_control;
                         btnPhotoPause.disabled = !userPermissions.allow_web_playback_control;
+                        btnRadio.disabled = !userPermissions.allow_web_playback_control;
                         btnShuffleNow.disabled = !userPermissions.allow_web_playback_control;
                         btnLoop.disabled = !userPermissions.allow_web_playback_control;
                         btnShuffle.disabled = !userPermissions.allow_web_playback_control;
@@ -702,6 +711,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                     // モード状態の同期
                     currentLoopState = !!data.loop_queue;
                     currentShuffleState = !!data.shuffle;
+                    currentRadioState = !!data.radio_mode;
 
                     btnLoop.textContent = currentLoopState ? "🔁 ループ: ON" : "🔁 ループ: OFF";
                     btnLoop.className = "btn-sm " + (currentLoopState ? "btn-active" : "");
@@ -709,10 +719,14 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                     btnShuffle.textContent = currentShuffleState ? "🔀 シャッフル: ON" : "🔀 シャッフル: OFF";
                     btnShuffle.className = "btn-sm " + (currentShuffleState ? "btn-active" : "");
 
+                    btnRadio.textContent = currentRadioState ? "📻 BGM/ラジオ: ON" : "📻 BGM/ラジオ: OFF";
+                    btnRadio.className = "btn-sm " + (currentRadioState ? "btn-active" : "");
+
                     // モードバッジ
                     let badges = [];
                     if (data.loop_queue) badges.push("🔁 Loop ON");
                     if (data.shuffle) badges.push("🔀 Shuffle ON");
+                    if (data.radio_mode) badges.push("📻 Radio/BGM");
                     if (isCurrentItemImage) badges.push("🖼 Photo");
                     modeBadges.textContent = badges.join(" • ");
 
@@ -1266,7 +1280,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                     return
 
             # 再生制御操作の権限チェック
-            if action in ("skip", "prev", "set_loop", "set_shuffle", "shuffle", "toggle_image_pause", "set_image_pause", "set_image_duration", "set_image_auto_advance") and not is_local:
+            if action in ("skip", "prev", "set_loop", "set_shuffle", "shuffle", "toggle_image_pause", "set_image_pause", "set_image_duration", "set_image_auto_advance", "set_radio_mode", "set_radio_bg_source") and not is_local:
                 if not self.streamer_core.config.get("allow_web_playback_control", True):
                     self.send_json_response(403, {
                         "success": False,
@@ -1283,6 +1297,14 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json_response(200, {"success": True, "message": "Action 'prev' processed."})
                 else:
                     self.send_json_response(400, {"success": False, "message": "No previous item in history."})
+            elif action == "set_radio_mode":
+                enabled = bool(body_json.get("enabled", True))
+                res = self.streamer_core.set_radio_mode(enabled)
+                self.send_json_response(200, {"success": True, "radio_mode": res, "message": f"Radio mode set to {res}."})
+            elif action == "set_radio_bg_source":
+                source = str(body_json.get("source", "standby")).strip().lower()
+                res = self.streamer_core.set_radio_bg_source(source)
+                self.send_json_response(200, {"success": True, "radio_bg_source": res, "message": f"Radio background source set to {res}."})
             elif action == "toggle_image_pause":
                 paused = self.streamer_core.toggle_image_pause()
                 self.send_json_response(200, {"success": True, "image_paused": paused, "message": f"Photo pause toggled to {paused}."})

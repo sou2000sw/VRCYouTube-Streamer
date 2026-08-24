@@ -55,7 +55,7 @@ class PlaylistHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
             margin: 0;
             padding: 20px;
             box-sizing: border-box;
-        }
+        }}
         .container {{
             max-width: 600px;
             width: 100%;

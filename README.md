@@ -13,14 +13,15 @@ GUI画面からの直感的な操作に加え、**外部アプリ（VRCBeacon等
    * **ヘッドレス / APIサーバーモード**: GUIを表示せず、軽量バックグラウンドサーバーとして動作
 2. **動画＆写真共有・スライドショー機能**:
    * **YouTube動画＆プレイリスト再生**: `yt-dlp` + `ffmpeg` による高画質・安定ストリーミング
-   * **写真・画像の一括共有**: スマホやPCから複数枚の画像（JPEG, PNG, WebP等）をまとめてキューに追加可能
-   * **スライドショー操作**: 表示秒数切り替え（5s〜120s）や自動送りON/OFF（一時停止）をGUI・Web双方からリアルタイム操作可能
+   * **📻 BGM / ラジオモード (帯域・バッファ極小化)**: YouTube動画から高音質音声ストリームのみを抽出し、待機画面（QRカード）または写真スライドショーと合成して超低帯域（約250〜350kbps、通常動画比90%以上削減）でHLS配信。VRChatでのバッファ詰まりや多人数インスタンスでの遅延を極小化。
+   * **写真・画像の一括共有 (Multi-photo upload)**: スマホやPCから複数枚の画像（JPEG, PNG, WebP等）をまとめて選択・キューへ一括追加可能
+   * **スライドショー操作 (GUI / Web)**: 表示秒数切り替え（5s〜120s）や自動送りON/OFF（一時停止/再開）をGUI下部バーおよびWebリモコンからリアルタイム操作可能
 3. **RESTful HTTP JSON API (CORS対応)**:
    * 外部アプリ（Vue 3, Electron, Node.js, Python等）からHTTPリクエスト経由で状態監視・キュー追加・再生制御・終了が可能
 4. **リッチなキュー操作**:
    * **ドラッグ＆ドロップ並び替え**（オートスクロール対応）＋ **「▲」「▼」ボタン**の両立
    * **即時シャッフル (Shuffle List)** & **シャッフル再生モード (Shuffle Play)**
-   * **キュー保持ループ再生モード (Loop Queue)**: 再生終了動画・写真を自動でキュー末尾に戻しエンドレス再生
+   * **キュー保持ループ再生モード (Loop Queue)**: 再生終了動画・写真を自動でキュー末尾に戻しエンドレス再生（※単方向キュー設計のため不要なPrevボタンは廃止）
 5. **QRコード・URL上書き表示 (QR Overlay)**:
    * 配信映像上および待機画面に、Webリクエスト用のQRコードと手入力用URLをウォーターマークとして上書き表示可能。
    * **コンパクトモード（右下小さく）** と **フル画面モード（中央大画面）** を選択可能。
@@ -116,11 +117,24 @@ VRCYouTubeStreamer.exe --headless --port 8080
 
 ---
 
-### 3. 写真・画像アップロード
+### 3. 写真・画像アップロード (単一・複数対応)
 * **Method**: `POST`
 * **Path**: `/api/upload`
 * **Content-Type**: `multipart/form-data` または `image/*`
-* **Body**: 画像バイナリ（最大20MB）
+* **Body**: 画像バイナリ（単一ファイル、または `files[]` による複数ファイル一括送信、最大20MB/ファイル）
+* **Response**:
+```json
+{
+  "success": true,
+  "count": 3,
+  "items": [
+    {"title": "photo_1.jpg", "url": "local-image://..."},
+    {"title": "photo_2.png", "url": "local-image://..."},
+    {"title": "photo_3.webp", "url": "local-image://..."}
+  ],
+  "queue_length": 5
+}
+```
 
 ---
 
@@ -128,17 +142,19 @@ VRCYouTubeStreamer.exe --headless --port 8080
 * **Method**: `POST`
 * **Path**: `/api/control`
 * **Body アクション一覧**:
-  * **スキップ**: `{"action": "skip"}`
-  * **写真自動送りトグル**: `{"action": "toggle_image_pause"}`
-  * **写真表示秒数変更**: `{"action": "set_image_duration", "duration": 15}`
+  * **スキップ (次へ)**: `{"action": "skip"}`
+  * **📻 BGM/ラジオモードON/OFF**: `{"action": "set_radio_mode", "enabled": true}`
+  * **📻 ラジオ背景ソース切替**: `{"action": "set_radio_bg_source", "source": "standby"}` *(standby / slideshow)*
+  * **写真スライドショー一時停止 / 再開トグル**: `{"action": "toggle_image_pause"}`
+  * **写真表示秒数変更**: `{"action": "set_image_duration", "duration": 15}` *(5〜120秒)*
   * **写真自動送りON/OFF**: `{"action": "set_image_auto_advance", "enabled": true}`
   * **キュー全消去**: `{"action": "clear_queue"}`
   * **停止＆キュー消去**: `{"action": "stop"}`
   * **キュー即時シャッフル**: `{"action": "shuffle"}`
   * **ループ再生のON/OFF**: `{"action": "set_loop", "enabled": true}`
   * **シャッフル再生のON/OFF**: `{"action": "set_shuffle", "enabled": true}`
-  * **指定インデックスの動画削除**: `{"action": "delete_item", "index": 0}`
-  * **動画の並べ替え**: `{"action": "move_item", "from_index": 0, "to_index": 2}`
+  * **指定インデックスの動画/写真削除**: `{"action": "delete_item", "index": 0}`
+  * **動画/写真の並べ替え**: `{"action": "move_item", "from_index": 0, "to_index": 2}`
 
 ---
 
@@ -180,3 +196,4 @@ VRCYouTubeStreamer.exe --headless --port 8080
 * `gui_streamer.py`: CLI引数解析 & CustomTkinter GUI（ドラッグ＆ドロップ、設定ダイアログ）
 * `build_exe.py`: PyInstallerによる単一バイナリ（`dist/VRCYouTubeStreamer.exe`）ビルドスクリプト
 * `config.json`: 設定の永続化ファイル
+* `FUTURE_PLANS.md`: 将来の機能拡張案・バックログ（ラジオカード画面の自動生成モックアップ等）
