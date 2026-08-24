@@ -112,7 +112,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.switch_shuffle.pack(anchor="w", padx=15, pady=(2, 6))
 
         self.switch_photo_advance = ctk.CTkSwitch(form_frame, text="⏱ Auto Advance Photos (写真の自動送り)")
-        if cfg.get("image_auto_advance", True):
+        if cfg.get("image_auto_advance", False):
             self.switch_photo_advance.select()
         self.switch_photo_advance.pack(anchor="w", padx=15, pady=(2, 6))
 
@@ -492,7 +492,7 @@ class App(ctk.CTk):
         self.lbl_photo_bar.pack(side="left", padx=(0, 8))
 
         self.photo_advance_switch = ctk.CTkSwitch(self.photo_bar, text="⏱ Auto Advance", font=ctk.CTkFont(size=11), command=self.toggle_photo_advance)
-        if self.streamer_core.config.get("image_auto_advance", True):
+        if self.streamer_core.config.get("image_auto_advance", False):
             self.photo_advance_switch.select()
         self.photo_advance_switch.pack(side="left", padx=(0, 12))
 
@@ -797,7 +797,7 @@ class App(ctk.CTk):
                 self.radio_switch.deselect()
 
         # 写真自動送りスイッチ & 表示秒数コンボの状態同期
-        core_advance = bool(self.streamer_core.config.get("image_auto_advance", True))
+        core_advance = bool(self.streamer_core.config.get("image_auto_advance", False))
         if bool(self.photo_advance_switch.get()) != core_advance:
             if core_advance:
                 self.photo_advance_switch.select()

@@ -57,7 +57,7 @@ DEFAULT_CONFIG = {
     "allow_web_queue_edit": True,
     "allow_web_playback_control": True,
     "image_display_duration": 15,
-    "image_auto_advance": True,
+    "image_auto_advance": False,
     "overlay_qr_enabled": False,
     "overlay_qr_video": False,
     "overlay_qr_image": False,
@@ -188,7 +188,7 @@ class StreamerCore:
         self.tunnel_url = "" # "https://xxx.trycloudflare.com/stream.m3u8"
         self.tunnel_raw_url = "" # "https://xxx.trycloudflare.com"
         self.is_running = True
-        self.image_paused = not bool(self.config.get("image_auto_advance", True)) # 写真スライドショー一時停止フラグ
+        self.image_paused = not bool(self.config.get("image_auto_advance", False)) # 写真スライドショー一時停止フラグ
 
         self.skip_event = threading.Event()
         self.video_done_event = threading.Event()
@@ -282,7 +282,7 @@ class StreamerCore:
             "is_image": is_image,
             "image_paused": self.image_paused,
             "image_display_duration": int(self.config.get("image_display_duration", 15)),
-            "image_auto_advance": bool(self.config.get("image_auto_advance", True)),
+            "image_auto_advance": bool(self.config.get("image_auto_advance", False)),
             "overlay_qr_enabled": bool(self.config.get("overlay_qr_enabled", False) or self.config.get("overlay_qr_video", False) or self.config.get("overlay_qr_image", False)),
             "overlay_qr_video": bool(self.config.get("overlay_qr_video", False)),
             "overlay_qr_image": bool(self.config.get("overlay_qr_image", False)),
@@ -329,7 +329,7 @@ class StreamerCore:
         return True
 
     def toggle_image_pause(self):
-        curr_advance = bool(self.config.get("image_auto_advance", True)) and not self.image_paused
+        curr_advance = bool(self.config.get("image_auto_advance", False)) and not self.image_paused
         new_advance = not curr_advance
         self.set_image_auto_advance(new_advance)
         return self.image_paused
@@ -1437,7 +1437,7 @@ class StreamerCore:
                             if stop_event is None:
                                 break
 
-                        auto_advance = bool(self.config.get("image_auto_advance", True))
+                        auto_advance = bool(self.config.get("image_auto_advance", False))
                         if not self.image_paused and auto_advance:
                             elapsed += 0.2
                             duration = float(self.config.get("image_display_duration", 15))

@@ -358,7 +358,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 <div class="queue-title">🎛️ 再生コントロール (Playback Control)</div>
                 <div class="control-btn-group">
                     <button class="btn-sm" id="btn-skip" onclick="skipCurrentVideo()">⏭ スキップ (Skip)</button>
-                    <button class="btn-sm btn-active" id="btn-photo-pause" onclick="togglePhotoAdvance()">⏱ 自動送り: ON</button>
+                    <button class="btn-sm" id="btn-photo-pause" onclick="togglePhotoAdvance()">⏱ 自動送り: OFF</button>
                     <button class="btn-sm" id="btn-radio-toggle" onclick="toggleRadio()">📻 BGM/ラジオ: OFF</button>
                     <button class="btn-sm" id="btn-shuffle-now" onclick="shuffleNow()">🔀 並び替え (Shuffle)</button>
                     <button class="btn-sm" id="btn-loop-toggle" onclick="toggleLoop()">🔁 ループ: OFF</button>
@@ -436,7 +436,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
         let currentLoopState = false;
         let currentShuffleState = false;
         let currentRadioState = false;
-        let currentPhotoAdvance = true;
+        let currentPhotoAdvance = false;
         let isCurrentItemImage = false;
         let userPermissions = {
             allow_web_queue_add: true,

@@ -91,7 +91,7 @@ VRCYouTubeStreamer.exe --headless --port 8080
   "is_image": false,
   "image_paused": false,
   "image_display_duration": 15,
-  "image_auto_advance": true,
+  "image_auto_advance": false,
   "overlay_qr_enabled": false,
   "overlay_qr_mode": "bottom-right",
   "permissions": {
