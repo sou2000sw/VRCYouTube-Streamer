@@ -125,9 +125,18 @@ class SettingsWindow(ctk.CTkToplevel):
         self.lbl_radio_bg = ctk.CTkLabel(form_frame, text="📻 Radio Background (ラジオモード時の背景):", anchor="w")
         self.lbl_radio_bg.pack(fill="x", padx=15, pady=(2, 2))
 
-        curr_radio_bg = cfg.get("radio_bg_source", "standby")
-        radio_bg_val = "Slideshow (写真スライドショー)" if curr_radio_bg == "slideshow" else "Standby (待機画面・QR)"
-        self.seg_radio_bg = ctk.CTkSegmentedButton(form_frame, values=["Standby (待機画面・QR)", "Slideshow (写真スライドショー)"])
+        curr_radio_bg = cfg.get("radio_bg_source", "card")
+        if curr_radio_bg == "slideshow":
+            radio_bg_val = "Slideshow (写真スライドショー)"
+        elif curr_radio_bg == "standby":
+            radio_bg_val = "Standby (待機画面・QR)"
+        else:
+            radio_bg_val = "Card (サムネイル＆楽曲情報)"
+
+        self.seg_radio_bg = ctk.CTkSegmentedButton(
+            form_frame,
+            values=["Card (サムネイル＆楽曲情報)", "Standby (待機画面・QR)", "Slideshow (写真スライドショー)"]
+        )
         self.seg_radio_bg.set(radio_bg_val)
         self.seg_radio_bg.pack(fill="x", padx=15, pady=(2, 4))
 
@@ -252,7 +261,7 @@ class SettingsWindow(ctk.CTkToplevel):
   - 停止＆キュー消去:     { "action": "stop" }
   - キュー即時シャッフル: { "action": "shuffle" }
   - ラジオ/BGMモード切替: { "action": "set_radio_mode", "enabled": true }
-  - ラジオ背景ソース切替: { "action": "set_radio_bg_source", "source": "standby" }
+  - ラジオ背景ソース切替: { "action": "set_radio_bg_source", "source": "card" }  // card / standby / slideshow
   - ループ再生の切替:     { "action": "set_loop", "enabled": true }
   - シャッフル再生の切替: { "action": "set_shuffle", "enabled": true }
   - 指定動画の削除:       { "action": "delete_item", "index": 0 }
@@ -265,7 +274,7 @@ class SettingsWindow(ctk.CTkToplevel):
   現在の設定JSONを取得。
 
 ■ POST /api/config
-  設定JSONを更新・保存 (例: {"loop_queue": true, "shuffle": true, "radio_mode": true, "image_display_duration": 15})
+  設定JSONを更新・保存 (例: {"loop_queue": true, "shuffle": true, "radio_mode": true, "radio_bg_source": "card", "image_display_duration": 15})
 """
         self.api_textbox = ctk.CTkTextbox(self.api_ref_frame, height=260, font=ctk.CTkFont(family="Consolas", size=11))
         self.api_textbox.insert("1.0", api_doc_text)
@@ -303,7 +312,14 @@ class SettingsWindow(ctk.CTkToplevel):
             shuffle = bool(self.switch_shuffle.get())
             photo_advance = bool(self.switch_photo_advance.get())
             radio_mode = bool(self.switch_radio.get())
-            radio_bg = "slideshow" if "Slideshow" in self.seg_radio_bg.get() else "standby"
+            
+            selected_bg = self.seg_radio_bg.get()
+            if "Slideshow" in selected_bg:
+                radio_bg = "slideshow"
+            elif "Standby" in selected_bg:
+                radio_bg = "standby"
+            else:
+                radio_bg = "card"
 
             if port <= 0 or port > 65535:
                 raise ValueError("Port must be between 1 and 65535.")

@@ -13,7 +13,9 @@ GUI画面からの直感的な操作に加え、**外部アプリ（VRCBeacon等
    * **ヘッドレス / APIサーバーモード**: GUIを表示せず、軽量バックグラウンドサーバーとして動作
 2. **動画＆写真共有・スライドショー機能**:
    * **YouTube動画＆プレイリスト再生**: `yt-dlp` + `ffmpeg` による高画質・安定ストリーミング
-   * **📻 BGM / ラジオモード (帯域・バッファ極小化)**: YouTube動画から高音質音声ストリームのみを抽出し、待機画面（QRカード）または写真スライドショーと合成して超低帯域（約250〜350kbps、通常動画比90%以上削減）でHLS配信。VRChatでのバッファ詰まりや多人数インスタンスでの遅延を極小化。
+   * **📻 BGM / ラジオモード (帯域・バッファ極小化 & サムネイルカード自動生成)**:
+     - YouTube動画から高音質音声ストリーム（`bestaudio`）のみを抽出し、自動生成された「1920x1080 サムネイル＆楽曲情報カード画面」（または待機画面/写真スライドショー）と合成して超低帯域（約250〜350kbps、通常動画比90%以上削減）でHLS配信。
+     - VRChatでのバッファ詰まりや多人数インスタンスでの遅延を極小化。波形イコライザーやQRコード、シークバー等の不要な要素を省いたシンプルで洗練されたアルバムアート画面を自動生成。
    * **写真・画像の一括共有 (Multi-photo upload)**: スマホやPCから複数枚の画像（JPEG, PNG, WebP等）をまとめて選択・キューへ一括追加可能
    * **スライドショー操作 (GUI / Web)**: 表示秒数切り替え（5s〜120s）や自動送りON/OFF（一時停止/再開）をGUI下部バーおよびWebリモコンからリアルタイム操作可能
 3. **RESTful HTTP JSON API (CORS対応)**:
@@ -144,7 +146,7 @@ VRCYouTubeStreamer.exe --headless --port 8080
 * **Body アクション一覧**:
   * **スキップ (次へ)**: `{"action": "skip"}`
   * **📻 BGM/ラジオモードON/OFF**: `{"action": "set_radio_mode", "enabled": true}`
-  * **📻 ラジオ背景ソース切替**: `{"action": "set_radio_bg_source", "source": "standby"}` *(standby / slideshow)*
+  * **📻 ラジオ背景ソース切替**: `{"action": "set_radio_bg_source", "source": "card"}` *(card / standby / slideshow)*
   * **写真スライドショー一時停止 / 再開トグル**: `{"action": "toggle_image_pause"}`
   * **写真表示秒数変更**: `{"action": "set_image_duration", "duration": 15}` *(5〜120秒)*
   * **写真自動送りON/OFF**: `{"action": "set_image_auto_advance", "enabled": true}`

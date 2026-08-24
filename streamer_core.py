@@ -12,7 +12,7 @@ import urllib.request
 import urllib.parse
 import yt_dlp
 import qrcode
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
@@ -27,6 +27,7 @@ else:
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 HLS_DIR = os.path.join(APP_DIR, "hls_output")
 IMAGE_CACHE_DIR = os.path.join(HLS_DIR, "images")
+RADIO_CACHE_DIR = os.path.join(IMAGE_CACHE_DIR, "radio_cache")
 STANDBY_IMAGE_PATH = os.path.join(HLS_DIR, "standby.png")
 QR_OVERLAY_PATH = os.path.join(HLS_DIR, "qr_overlay.png")
 CLOUDFLARED_EXE = os.path.join(BASE_PATH, "cloudflared.exe")
@@ -63,7 +64,7 @@ DEFAULT_CONFIG = {
     "overlay_qr_image": False,
     "overlay_qr_mode": "bottom-right",
     "radio_mode": False,
-    "radio_bg_source": "standby"
+    "radio_bg_source": "card"
 }
 
 def log_print(msg):
@@ -304,11 +305,11 @@ class StreamerCore:
         return self.config["radio_mode"]
 
     def set_radio_bg_source(self, source: str):
-        if source in ("standby", "slideshow"):
+        if source in ("card", "standby", "slideshow"):
             self.config["radio_bg_source"] = source
             self.save_config()
             log_print(f"[Core] Radio background source set to: {source}")
-        return self.config.get("radio_bg_source", "standby")
+        return self.config.get("radio_bg_source", "card")
 
     def set_loop(self, enabled: bool):
         self.config["loop_queue"] = bool(enabled)
@@ -535,11 +536,216 @@ class StreamerCore:
             info = ydl.extract_info(youtube_url, download=False)
             audio_url = info.get("url")
             headers = info.get("http_headers", {})
-            return audio_url, info.get("title", "Unknown"), info.get("duration", 0), headers
+            title = info.get("title", "Unknown")
+            duration = info.get("duration", 0)
+            meta = {
+                "id": info.get("id", ""),
+                "title": title,
+                "duration": duration,
+                "thumbnail": info.get("thumbnail", ""),
+                "artist": info.get("artist") or info.get("creator") or info.get("uploader") or info.get("channel") or "",
+                "channel": info.get("channel") or info.get("uploader") or ""
+            }
+            return audio_url, title, duration, headers, meta
 
-    def get_radio_background_path(self):
-        """BGM/ラジオモード用の背景画像パスを取得（待機画面または写真）"""
-        source = self.config.get("radio_bg_source", "standby")
+    def generate_radio_card_image(self, video_info, metadata=None):
+        """YouTubeサムネイルとタイトル・アーティスト情報を合成した 1920x1080 カード画像を生成"""
+        os.makedirs(RADIO_CACHE_DIR, exist_ok=True)
+        url = (video_info or {}).get("url", "")
+        title = (metadata or {}).get("title") or (video_info or {}).get("title", "Unknown")
+        artist = (metadata or {}).get("artist") or (metadata or {}).get("uploader") or (metadata or {}).get("channel") or ""
+        video_id = (metadata or {}).get("id")
+
+        if not video_id and "v=" in url:
+            try:
+                video_id = url.split("v=")[1].split("&")[0]
+            except Exception:
+                pass
+        if not video_id and "youtu.be/" in url:
+            try:
+                video_id = url.split("youtu.be/")[1].split("?")[0]
+            except Exception:
+                pass
+        if not video_id:
+            import hashlib
+            video_id = hashlib.md5(url.encode('utf-8', errors='ignore')).hexdigest()[:12]
+
+        cache_path = os.path.join(RADIO_CACHE_DIR, f"radio_card_{video_id}.png")
+        if os.path.exists(cache_path):
+            return cache_path
+
+        # サムネイル画像の取得
+        thumb_img = None
+        thumb_url = (metadata or {}).get("thumbnail")
+        thumb_candidates = []
+        if thumb_url:
+            thumb_candidates.append(thumb_url)
+        if video_id and len(video_id) == 11:
+            thumb_candidates.append(f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg")
+            thumb_candidates.append(f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg")
+
+        for turl in thumb_candidates:
+            try:
+                req = urllib.request.Request(turl, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = resp.read()
+                    img = Image.open(io.BytesIO(data))
+                    # YouTubeのmaxresdefaultが404でなく120x90の灰画像の場合のチェック
+                    if img.size[0] > 150:
+                        thumb_img = img.convert("RGB")
+                        break
+            except Exception:
+                continue
+
+        width, height = 1920, 1080
+        card_img = Image.new("RGB", (width, height), color="#0F172A")
+
+        # 1. 背景レイヤー (サムネイル拡大ぼかし + 落ち着いたダークオーバーレイ)
+        if thumb_img:
+            tw, th = thumb_img.size
+            scale = max(width / tw, height / th)
+            bw = int(tw * scale)
+            bh = int(th * scale)
+            bg_resized = thumb_img.resize((bw, bh), Image.Resampling.BILINEAR)
+            bx = (bw - width) // 2
+            by = (bh - height) // 2
+            bg_cropped = bg_resized.crop((bx, by, bx + width, by + height))
+            
+            # ガウスぼかし
+            bg_blurred = bg_cropped.filter(ImageFilter.GaussianBlur(radius=40))
+            
+            # ダークスレートの半透明オーバーレイ
+            overlay = Image.new("RGBA", (width, height), (15, 23, 42, 215))
+            bg_blurred = bg_blurred.convert("RGBA")
+            bg_final = Image.alpha_composite(bg_blurred, overlay).convert("RGB")
+            card_img.paste(bg_final, (0, 0))
+        else:
+            draw_bg = ImageDraw.Draw(card_img)
+            draw_bg.rectangle([(0, 0), (width, height)], fill="#0F172A")
+
+        draw = ImageDraw.Draw(card_img)
+
+        # 2. 左側: アルバムアート (サムネイル) 描画
+        art_w, art_h = 760, 428 # 16:9
+        art_x = 120
+        art_y = (height - art_h) // 2
+
+        if thumb_img:
+            tw, th = thumb_img.size
+            scale = max(art_w / tw, art_h / th)
+            aw = int(tw * scale)
+            ah = int(th * scale)
+            art_resized = thumb_img.resize((aw, ah), Image.Resampling.LANCZOS)
+            ax = (aw - art_w) // 2
+            ay = (ah - art_h) // 2
+            art_cropped = art_resized.crop((ax, ay, ax + art_w, ay + art_h)).convert("RGBA")
+
+            # 角丸マスク
+            mask = Image.new("L", (art_w, art_h), 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.rounded_rectangle([(0, 0), (art_w, art_h)], radius=18, fill=255)
+
+            card_art = Image.new("RGBA", (art_w, art_h), (0, 0, 0, 0))
+            card_art.paste(art_cropped, (0, 0), mask)
+            
+            art_border_draw = ImageDraw.Draw(card_art)
+            art_border_draw.rounded_rectangle([(0, 0), (art_w - 1, art_h - 1)], radius=18, outline=(255, 255, 255, 60), width=2)
+
+            card_img.paste(card_art, (art_x, art_y), card_art)
+        else:
+            draw.rounded_rectangle(
+                [(art_x, art_y), (art_x + art_w, art_y + art_h)],
+                radius=18,
+                fill="#1E293B",
+                outline="#334155",
+                width=2
+            )
+            try:
+                font_icon = ImageFont.truetype("arial.ttf", 60)
+            except Exception:
+                font_icon = ImageFont.load_default()
+            draw.text((art_x + art_w // 2, art_y + art_h // 2), "🎵", fill="#94A3B8", anchor="mm", font=font_icon)
+
+        # 3. 中央〜右側: 楽曲情報 (タイトル・アーティスト) 描画
+        info_x = art_x + art_w + 90
+        max_text_w = width - info_x - 100
+
+        def _get_font(size, bold=False):
+            candidates = [
+                "C:/Windows/Fonts/meiryob.ttc" if bold else "C:/Windows/Fonts/meiryo.ttc",
+                "C:/Windows/Fonts/YuGothB.ttc" if bold else "C:/Windows/Fonts/YuGothM.ttc",
+                "C:/Windows/Fonts/msgothic.ttc",
+                "meiryob.ttc" if bold else "meiryo.ttc",
+                "arialbd.ttf" if bold else "arial.ttf",
+                "arial.ttf"
+            ]
+            for p in candidates:
+                try:
+                    return ImageFont.truetype(p, size)
+                except Exception:
+                    continue
+            return ImageFont.load_default()
+
+        font_title = _get_font(50, bold=True)
+        font_artist = _get_font(32, bold=False)
+
+        clean_title = title.replace("📻 ", "").strip()
+        lines = []
+        curr_line = ""
+        for char in clean_title:
+            test_line = curr_line + char
+            try:
+                bbox = font_title.getbbox(test_line)
+                w = bbox[2] - bbox[0]
+            except Exception:
+                w = len(test_line) * 28
+            if w > max_text_w:
+                if curr_line:
+                    lines.append(curr_line)
+                    curr_line = char
+                else:
+                    lines.append(test_line)
+                    curr_line = ""
+                if len(lines) >= 3:
+                    break
+            else:
+                curr_line = test_line
+        if curr_line and len(lines) < 3:
+            lines.append(curr_line)
+        if not lines:
+            lines = [clean_title]
+
+        line_h = 64
+        title_total_h = len(lines) * line_h
+        artist_h = 44 if artist else 0
+        content_total_h = title_total_h + (35 if artist else 0) + artist_h
+
+        start_y = (height - content_total_h) // 2
+
+        for i, l in enumerate(lines):
+            if i == 2 and len(clean_title) > len("".join(lines)):
+                l = l[:-2] + "..." if len(l) > 2 else l + "..."
+            draw.text((info_x, start_y + i * line_h), l, fill="#FFFFFF", anchor="la", font=font_title)
+
+        if artist:
+            artist_y = start_y + title_total_h + 30
+            draw.text((info_x, artist_y), artist, fill="#38BDF8", anchor="la", font=font_artist)
+
+        try:
+            card_img.save(cache_path, "PNG")
+            return cache_path
+        except Exception as e:
+            log_print(f"[Radio] Failed to save radio card: {e}")
+            return None
+
+    def get_radio_background_path(self, video_info=None, metadata=None):
+        """BGM/ラジオモード用の背景画像パスを取得（カード画面、待機画面、または写真）"""
+        source = self.config.get("radio_bg_source", "card")
+        if source == "card" and video_info:
+            card_path = self.generate_radio_card_image(video_info, metadata)
+            if card_path and os.path.exists(card_path):
+                return card_path
+
         if source == "slideshow":
             # 1. 写真キューにある画像を探す
             with self.queue_lock:
@@ -552,7 +758,7 @@ class StreamerCore:
                 if cached:
                     return random.choice(cached)
 
-        # デフォルトは待機画面 (QR & URLカード付き)
+        # デフォルト・フォールバックは待機画面 (QR & URLカード付き)
         self.generate_standby_image()
         if os.path.exists(STANDBY_IMAGE_PATH):
             return STANDBY_IMAGE_PATH
@@ -562,7 +768,12 @@ class StreamerCore:
         """BGM/ラジオモード: YouTube音声ストリーム + 静止画/写真を合成し、極小帯域でHLS配信"""
         url = video_info["url"]
         try:
-            audio_url, title, duration, headers = self.get_audio_only_stream_urls(url)
+            res = self.get_audio_only_stream_urls(url)
+            if len(res) >= 5:
+                audio_url, title, duration, headers, metadata = res[:5]
+            else:
+                audio_url, title, duration, headers = res[:4]
+                metadata = {"title": title, "duration": duration}
             if not audio_url:
                 raise ValueError("No audio stream URL returned by yt-dlp")
             self.current_video = {
@@ -586,7 +797,7 @@ class StreamerCore:
             self.status_detail = "FFmpeg Error"
             return None
 
-        bg_path = self.get_radio_background_path()
+        bg_path = self.get_radio_background_path(video_info, metadata)
         if not bg_path or not os.path.exists(bg_path):
             self.generate_standby_image()
             bg_path = STANDBY_IMAGE_PATH

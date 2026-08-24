@@ -1298,7 +1298,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 res = self.streamer_core.set_radio_mode(enabled)
                 self.send_json_response(200, {"success": True, "radio_mode": res, "message": f"Radio mode set to {res}."})
             elif action == "set_radio_bg_source":
-                source = str(body_json.get("source", "standby")).strip().lower()
+                source = str(body_json.get("source", "card")).strip().lower()
                 res = self.streamer_core.set_radio_bg_source(source)
                 self.send_json_response(200, {"success": True, "radio_bg_source": res, "message": f"Radio background source set to {res}."})
             elif action == "toggle_image_pause":
