@@ -358,7 +358,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
                 <div class="queue-title">🎛️ 再生コントロール (Playback Control)</div>
                 <div class="control-btn-group">
                     <button class="btn-sm" id="btn-skip" onclick="skipCurrentVideo()">⏭ スキップ (Skip)</button>
-                    <button class="btn-sm btn-active" id="btn-photo-pause" onclick="togglePhotoPause()">⏱ 自動送り: ON</button>
+                    <button class="btn-sm btn-active" id="btn-photo-pause" onclick="togglePhotoAdvance()">⏱ 自動送り: ON</button>
                     <button class="btn-sm" id="btn-radio-toggle" onclick="toggleRadio()">📻 BGM/ラジオ: OFF</button>
                     <button class="btn-sm" id="btn-shuffle-now" onclick="shuffleNow()">🔀 並び替え (Shuffle)</button>
                     <button class="btn-sm" id="btn-loop-toggle" onclick="toggleLoop()">🔁 ループ: OFF</button>
@@ -436,7 +436,7 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
         let currentLoopState = false;
         let currentShuffleState = false;
         let currentRadioState = false;
-        let currentPhotoPaused = false;
+        let currentPhotoAdvance = true;
         let isCurrentItemImage = false;
         let userPermissions = {
             allow_web_queue_add: true,
@@ -617,13 +617,9 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
             sendControl('skip').then(() => showMsg("✓ スキップをリクエストしました", false));
         }
 
-        function togglePhotoPause() {
+        function togglePhotoAdvance() {
             if (!userPermissions.allow_web_playback_control) return;
-            sendControl('toggle_image_pause').then(() => {
-                currentPhotoPaused = !currentPhotoPaused;
-                btnPhotoPause.textContent = currentPhotoPaused ? "⏱ 自動送り: OFF" : "⏱ 自動送り: ON";
-                btnPhotoPause.className = "btn-sm " + (currentPhotoPaused ? "" : "btn-active");
-            });
+            sendControl('set_image_auto_advance', { enabled: !currentPhotoAdvance });
         }
 
         function toggleRadio() {
@@ -700,9 +696,9 @@ HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
 
                     // 写真関連状態の同期
                     isCurrentItemImage = !!data.is_image;
-                    currentPhotoPaused = !!data.image_paused;
-                    btnPhotoPause.textContent = currentPhotoPaused ? "⏱ 自動送り: OFF" : "⏱ 自動送り: ON";
-                    btnPhotoPause.className = "btn-sm " + (currentPhotoPaused ? "" : "btn-active");
+                    currentPhotoAdvance = data.image_auto_advance !== undefined ? !!data.image_auto_advance : !data.image_paused;
+                    btnPhotoPause.textContent = currentPhotoAdvance ? "⏱ 自動送り: ON" : "⏱ 自動送り: OFF";
+                    btnPhotoPause.className = "btn-sm " + (currentPhotoAdvance ? "btn-active" : "");
 
                     if (data.image_display_duration && selectDuration.value != data.image_display_duration) {
                         selectDuration.value = String(data.image_display_duration);
@@ -1307,11 +1303,11 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(200, {"success": True, "radio_bg_source": res, "message": f"Radio background source set to {res}."})
             elif action == "toggle_image_pause":
                 paused = self.streamer_core.toggle_image_pause()
-                self.send_json_response(200, {"success": True, "image_paused": paused, "message": f"Photo pause toggled to {paused}."})
+                self.send_json_response(200, {"success": True, "image_paused": paused, "image_auto_advance": not paused, "message": f"Photo pause toggled to {paused}."})
             elif action == "set_image_pause":
                 paused = bool(body_json.get("paused", True))
                 self.streamer_core.set_image_pause(paused)
-                self.send_json_response(200, {"success": True, "image_paused": paused, "message": f"Photo pause set to {paused}."})
+                self.send_json_response(200, {"success": True, "image_paused": paused, "image_auto_advance": not paused, "message": f"Photo pause set to {paused}."})
             elif action == "set_image_duration":
                 duration = body_json.get("duration", 15)
                 sec = self.streamer_core.set_image_duration(duration)
@@ -1319,7 +1315,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             elif action == "set_image_auto_advance":
                 enabled = bool(body_json.get("enabled", True))
                 self.streamer_core.set_image_auto_advance(enabled)
-                self.send_json_response(200, {"success": True, "image_auto_advance": enabled, "message": f"Photo auto advance set to {enabled}."})
+                self.send_json_response(200, {"success": True, "image_auto_advance": enabled, "image_paused": not enabled, "message": f"Photo auto advance set to {enabled}."})
             elif action == "clear_queue":
                 self.streamer_core.clear_queue()
                 self.send_json_response(200, {"success": True, "message": "Action 'clear_queue' processed."})

@@ -188,7 +188,7 @@ class StreamerCore:
         self.tunnel_url = "" # "https://xxx.trycloudflare.com/stream.m3u8"
         self.tunnel_raw_url = "" # "https://xxx.trycloudflare.com"
         self.is_running = True
-        self.image_paused = False # 写真スライドショー一時停止フラグ
+        self.image_paused = not bool(self.config.get("image_auto_advance", True)) # 写真スライドショー一時停止フラグ
 
         self.skip_event = threading.Event()
         self.video_done_event = threading.Event()
@@ -329,13 +329,16 @@ class StreamerCore:
         return True
 
     def toggle_image_pause(self):
-        self.image_paused = not self.image_paused
-        log_print(f"[Core] Photo pause toggled: {self.image_paused}")
+        curr_advance = bool(self.config.get("image_auto_advance", True)) and not self.image_paused
+        new_advance = not curr_advance
+        self.set_image_auto_advance(new_advance)
         return self.image_paused
 
     def set_image_pause(self, paused: bool):
         self.image_paused = bool(paused)
-        log_print(f"[Core] Photo pause set to: {self.image_paused}")
+        self.config["image_auto_advance"] = not self.image_paused
+        self.save_config()
+        log_print(f"[Core] Photo pause set to: {self.image_paused} (auto_advance: {self.config['image_auto_advance']})")
         return self.image_paused
 
     def set_image_duration(self, seconds: int):
@@ -350,6 +353,7 @@ class StreamerCore:
 
     def set_image_auto_advance(self, enabled: bool):
         self.config["image_auto_advance"] = bool(enabled)
+        self.image_paused = not bool(enabled)
         self.save_config()
         log_print(f"[Core] Photo auto advance set to: {self.config['image_auto_advance']}")
         return self.config["image_auto_advance"]
