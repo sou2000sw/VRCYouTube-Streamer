@@ -346,19 +346,46 @@ def verify_release(target_dir, port=8991, timeout=45):
         print(f"[OK] Release package verified.", flush=True)
         return True
     finally:
+        # まず /api/shutdown で正規終了させる。proc.terminate() だけでは
+        # 子プロセスの ffmpeg が生き残り、hls_output/ を掴んだままになる。
         try:
-            proc.terminate()
-            proc.wait(timeout=10)
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/shutdown",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=5).read()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=15)
         except Exception:
             try:
-                proc.kill()
+                proc.terminate()
+                proc.wait(timeout=10)
             except Exception:
-                pass
-        # 検証のために起動したことで生成された実行時ファイルを配布フォルダから除去する
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+        # 検証のために起動したことで生成された実行時ファイルを配布フォルダから除去する。
+        # ffmpeg のファイルハンドル解放にわずかに遅れることがあるため数回リトライする。
         for artifact in ("hls_output",):
             stale = os.path.join(target_dir, artifact)
-            if os.path.isdir(stale):
+            for attempt in range(5):
+                if not os.path.isdir(stale):
+                    break
                 shutil.rmtree(stale, ignore_errors=True)
+                if os.path.isdir(stale):
+                    time.sleep(1)
+            if os.path.isdir(stale):
+                print(f"[WARN] Could not remove runtime artifacts: {stale}", flush=True)
+
+        # 検証起動によって config.json に実行時の値が書き戻されていないか確認し、
+        # 差異があればテンプレートから生成し直す。
+        write_dist_config(os.path.join(target_dir, "config.json"))
 
 
 def build(version=APP_VERSION):

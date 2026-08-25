@@ -225,11 +225,17 @@ class StreamerCore:
     def __init__(self, override_port=None, override_host=None, override_enable_tunnel=None):
         self.config = DEFAULT_CONFIG.copy()
         self.load_config()
-        if override_port is not None:
-            self.config["port"] = override_port
-        if override_host is not None:
-            self.config["host"] = override_host
+        # コマンドライン引数による上書きは「その起動限りの指定」であり、config.json には焼き付けない。
+        # 以前は self.config に直接載せていたため、UI から何か設定を変えて save_config() が走るたびに
+        # --port / --host / --no-tunnel の値が config.json に永続化されていた。
+        # これが「開発者がローカルテストした設定がそのまま配布物の既定値になる」原因だった。
+        self._cli_override_baseline = {}
+        for key, value in (("port", override_port), ("host", override_host)):
+            if value is not None:
+                self._cli_override_baseline[key] = self.config.get(key)
+                self.config[key] = value
         if override_enable_tunnel is not None:
+            self._cli_override_baseline["enable_tunnel"] = self.config.get("enable_tunnel")
             self.config["enable_tunnel"] = bool(override_enable_tunnel)
 
         self.enable_tunnel = bool(self.config.get("enable_tunnel", True))
@@ -310,13 +316,24 @@ class StreamerCore:
                 log_print(f"[Core] Error reading config: {e}")
 
     def save_config(self, new_config=None):
+        baseline = getattr(self, "_cli_override_baseline", {})
         if new_config:
             self.config.update(new_config)
             if "enable_tunnel" in new_config:
                 self.enable_tunnel = bool(new_config["enable_tunnel"])
+            # 利用者が明示的に変更した項目は、CLI上書きの対象から外して永続化する
+            for key in [k for k in baseline if k in new_config]:
+                del baseline[key]
         try:
+            persisted = dict(self.config)
+            # CLI 由来の一時的な上書きは、保存前に元の値へ戻す
+            for key, original in baseline.items():
+                if original is None:
+                    persisted.pop(key, None)
+                else:
+                    persisted[key] = original
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, indent=2, ensure_ascii=False)
+                json.dump(persisted, f, indent=2, ensure_ascii=False)
             log_print(f"[Core] Saved config to {CONFIG_FILE}")
 
             # 最新設定でQRオーバーレイ・待機画像を即座に再生成
