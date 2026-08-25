@@ -270,8 +270,8 @@
                             </div>
                             <!-- Mode Toggle Pill -->
                             <div class="flex items-center bg-zinc-900 p-0.5 rounded border border-border text-[11px]">
-                                <button id="modeVideoBtn" onclick="setAddMode('video')" class="px-2 py-0.5 rounded bg-zinc-800 text-primary font-medium transition">通常動画</button>
-                                <button id="modeRadioBtn" onclick="setAddMode('radio')" class="px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1">
+                                <button id="modeVideoBtn" onclick="selectAddMode('video')" class="px-2 py-0.5 rounded bg-zinc-800 text-primary font-medium transition">通常動画</button>
+                                <button id="modeRadioBtn" onclick="selectAddMode('radio')" class="px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1">
                                     <i class="ri-radio-line text-xs"></i>
                                     <span>📻 BGMラジオ</span>
                                 </button>
@@ -593,6 +593,7 @@
         })();
 
         let currentAddMode = 'video';
+        let addModeUserChangedAt = 0; // 利用者が追加モードを操作した時刻（ポーリングでの巻き戻し防止）
         let isOnline = false;
         let isPolling = false;
         let draggedItemIndex = null;
@@ -722,6 +723,25 @@
         }
 
         // Add Mode Toggle (Normal Video vs BGM Radio)
+        // 利用者のクリックはこちら。見た目を変えるだけでなく、その場でサーバーへ反映する。
+        // 反映しないままだと、2秒ごとの /api/status ポーリングが下の setAddMode() を通じて
+        // 選択をサーバーの値へ巻き戻してしまい、「通常動画を選んだのにラジオで再生される」
+        // という元の不具合が形を変えて再発する。
+        async function selectAddMode(mode) {
+            addModeUserChangedAt = Date.now();
+            setAddMode(mode);
+            try {
+                await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'set_radio_mode', enabled: mode === 'radio' })
+                });
+            } catch (e) {
+                showToast('再生モードの切り替えに失敗しました', 'danger');
+            }
+        }
+
+        // 見た目の更新のみ（サーバー状態の反映にも使う）
         function setAddMode(mode) {
             currentAddMode = mode;
             const vBtn = document.getElementById('modeVideoBtn');
@@ -876,8 +896,16 @@
             updateToggleBtn('btnShufflePlay', data.shuffle);
 
             // Controls sync
-            if (data.radio_background && selectRadioBg) {
-                selectRadioBg.value = data.radio_background;
+            // /api/status が返すキーは radio_bg_source。以前は存在しない data.radio_background を
+            // 参照していたため、ラジオ背景セレクトがサーバーの実状態を一切反映していなかった。
+            if (data.radio_bg_source && selectRadioBg) {
+                selectRadioBg.value = data.radio_bg_source;
+            }
+            // 追加モード（通常動画 / BGMラジオ）もサーバーの radio_mode に追従させる
+            // 利用者が操作した直後は、切り替えPOSTの往復が終わるまで上書きしない
+            if (typeof data.radio_mode === 'boolean' && Date.now() - addModeUserChangedAt > 3000) {
+                const serverMode = data.radio_mode ? 'radio' : 'video';
+                if (serverMode !== currentAddMode) setAddMode(serverMode);
             }
             if (data.image_display_duration && selectDuration) {
                 selectDuration.value = String(data.image_display_duration);
@@ -1054,14 +1082,15 @@
             btn.innerHTML = `<i class="ri-loader-4-line animate-spin text-sm"></i>`;
 
             try {
-                // If in radio mode, set radio_mode first
-                if (currentAddMode === 'radio') {
-                    await fetch(`${apiBase}/api/control`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'set_radio_mode', enabled: true })
-                    });
-                }
+                // 追加モードは毎回サーバーへ反映する。
+                // 以前は radio のときだけ enabled:true を送り、video のときは何も送っていなかったため、
+                // 一度でもラジオを使うと radio_mode が true のまま固定され「通常動画」を選んでも
+                // 音声のみのラジオ再生になっていた（config の radio_mode 既定が true なので初回から発生）。
+                await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'set_radio_mode', enabled: currentAddMode === 'radio' })
+                });
 
                 const res = await fetch(`${apiBase}/api/queue`, {
                     method: 'POST',
@@ -1169,7 +1198,9 @@
                 const res = await fetch(`${apiBase}/api/control`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'set_radio_bg', background: val })
+                    // サーバー側のアクション名は set_radio_bg_source、パラメータ名は source。
+                    // set_radio_bg / background を送っていたため Unknown action で無視されていた。
+                    body: JSON.stringify({ action: 'set_radio_bg_source', source: val })
                 });
                 if (res.ok) {
                     showToast(`ラジオ背景を ${val} に変更しました`, 'success');

@@ -4,6 +4,7 @@ import time
 import re
 import io
 import json
+import math
 import random
 import socket
 import threading
@@ -36,12 +37,20 @@ CLOUDFLARED_EXE = os.path.join(BASE_PATH, "cloudflared.exe")
 LOCAL_FFMPEG = os.path.join(APP_DIR, "ffmpeg.exe")
 
 def cleanup_hls_dir_completely():
-    """HLS出力ディレクトリ内の一時ファイル・フォルダを完全に削除"""
+    """HLS出力ディレクトリ内の一時ファイル・フォルダを削除する（atexit ハンドラ）。
+
+    images/ は利用者がアップロードした写真とラジオカードのキャッシュであり、
+    配信の一時ファイルではないため残す。ここで消していたため、プロセス終了のたびに
+    写真が全て失われ、次回起動時にラジオ背景のスライドショーが空になっていた。
+    """
     if not os.path.exists(HLS_DIR):
         return
+    preserved = {"images"}
     for attempt in range(3):
         try:
             for item in os.listdir(HLS_DIR):
+                if item in preserved:
+                    continue
                 item_path = os.path.join(HLS_DIR, item)
                 try:
                     if os.path.isdir(item_path):
@@ -50,7 +59,7 @@ def cleanup_hls_dir_completely():
                         os.remove(item_path)
                 except Exception:
                     pass
-            if not os.listdir(HLS_DIR):
+            if not (set(os.listdir(HLS_DIR)) - preserved):
                 break
             time.sleep(0.1)
         except Exception:
@@ -241,7 +250,7 @@ class StreamerCore:
         self.enable_tunnel = bool(self.config.get("enable_tunnel", True))
 
         os.makedirs(HLS_DIR, exist_ok=True)
-        self.clean_hls_dir(all_files=True)
+        self.clean_hls_dir(all_files=True, preserve_images=True)
 
         # プロセスと同期
         self.hls_proc = None
@@ -269,19 +278,30 @@ class StreamerCore:
         self.tunnel_raw_url = "" # "https://xxx.trycloudflare.com"
         self.is_running = True
         self.image_paused = not bool(self.config.get("image_auto_advance", False)) # 写真スライドショー一時停止フラグ
+        self.slideshow_cursor = 0 # ラジオ背景スライドショーの再生位置（曲をまたいで巡回させる）
 
         self.skip_event = threading.Event()
         self.video_done_event = threading.Event()
         self.reload_stream_event = threading.Event()
         self.current_video_start_time = None
 
-    def clean_hls_dir(self, all_files=False):
-        """HLS出力ディレクトリのクリーンアップ。all_files=Trueの場合はサブディレクトリ・画像を含む全ファイルを削除"""
+    def clean_hls_dir(self, all_files=False, preserve_images=False):
+        """HLS出力ディレクトリのクリーンアップ。
+
+        all_files=True でサブディレクトリを含めて全削除する。
+        preserve_images=True のときは images/（利用者がアップロードした写真と
+        ラジオカードのキャッシュ）だけを残す。起動・終了のたびにここを消していたため、
+        アップロード済みの写真が毎回失われ、ラジオ背景のスライドショーが
+        「設定しても何も表示されない」状態になっていた。
+        """
         if not os.path.exists(HLS_DIR):
             return
+        preserved = {"images"} if preserve_images else set()
         for attempt in range(3):
             try:
                 for item in os.listdir(HLS_DIR):
+                    if item in preserved:
+                        continue
                     item_path = os.path.join(HLS_DIR, item)
                     if all_files:
                         try:
@@ -297,7 +317,7 @@ class StreamerCore:
                                 os.remove(item_path)
                             except Exception:
                                 pass
-                if all_files and not os.listdir(HLS_DIR):
+                if all_files and not (set(os.listdir(HLS_DIR)) - preserved):
                     break
                 time.sleep(0.1)
             except Exception as e:
@@ -1065,6 +1085,24 @@ class StreamerCore:
             images = self.get_slideshow_images()
             if images:
                 duration_val = float(self.config.get("image_display_duration", 15))
+
+                # スライドショーは曲をまたいで続きから再生する。
+                # concat + -stream_loop -1 は常にマニフェストの先頭から再生されるため、
+                # 「写真枚数 x 表示秒数」が曲の長さを超えると後半の写真が一度も表示されないまま
+                # 次の曲でまた1枚目に戻ってしまい、特定の写真が永久にスキップされていた。
+                # 曲ごとに開始位置をずらし、消化した枚数だけカーソルを進めることで全写真を巡回させる。
+                start = self.slideshow_cursor % len(images)
+                images = images[start:] + images[:start]
+                try:
+                    track_seconds = float(duration or 0)
+                except (TypeError, ValueError):
+                    track_seconds = 0.0
+                if track_seconds > 0 and duration_val > 0:
+                    consumed = max(1, int(math.ceil(track_seconds / duration_val)))
+                else:
+                    consumed = 1
+                self.slideshow_cursor = (start + consumed) % len(images)
+
                 manifest_lines = ["ffconcat version 1.0\n"]
                 for img in images:
                     pb_path = self.get_image_for_playback(img)
@@ -1080,7 +1118,7 @@ class StreamerCore:
                 slideshow_manifest_path = os.path.join(IMAGE_CACHE_DIR, "slideshow_manifest.txt")
                 with open(slideshow_manifest_path, "w", encoding="utf-8") as f:
                     f.writelines(manifest_lines)
-                log_print(f"[Radio] Prepared slideshow manifest with {len(images)} photos (duration: {duration_val}s/photo).")
+                log_print(f"[Radio] Prepared slideshow manifest with {len(images)} photos (duration: {duration_val}s/photo, start #{start + 1}, next #{self.slideshow_cursor + 1}).")
 
         if slideshow_manifest_path and os.path.exists(slideshow_manifest_path):
             video_input_opts = [
@@ -1968,6 +2006,7 @@ class StreamerCore:
 
                     # 写真スライドショーのタイマー監視（一時停止対応 & ホットリロード対応）
                     elapsed = 0.0
+                    duration_for_log = float(self.config.get("image_display_duration", 15))
                     while self.is_running and not self.skip_event.is_set():
                         # 設定変更による即時ホットリロード要求
                         if self.reload_stream_event.is_set():
@@ -1995,6 +2034,14 @@ class StreamerCore:
                             proc = self.send_proc
                             h_proc = self.hls_proc
                         if proc and proc.poll() is not None:
+                            # stderr は DEVNULL のため、ここで落ちると写真が無言でスキップされる。
+                            # 表示時間を待たずに終了した場合は原因追跡できるよう警告を残す。
+                            if elapsed < duration_for_log:
+                                log_print(
+                                    f"[Monitor] WARNING: Photo sender exited after {elapsed:.1f}s "
+                                    f"(expected {duration_for_log}s, exit={proc.returncode}). "
+                                    f"Photo may have been skipped: {next_item.get('title')}"
+                                )
                             break
                         if h_proc and h_proc.poll() is not None:
                             log_print("[Monitor] Receiver FFmpeg crashed or exited during photo.")
@@ -2212,6 +2259,6 @@ class StreamerCore:
         
         # プロセス終了・ファイルロック解除を少し待ってから HLS ディレクトリ内を完全消去
         time.sleep(0.3)
-        self.clean_hls_dir(all_files=True)
+        self.clean_hls_dir(all_files=True, preserve_images=True)
         log_print("[Core] HLS output directory completely cleaned.")
         log_print("[Core] Shutdown complete.")
