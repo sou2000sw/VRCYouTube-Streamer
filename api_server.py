@@ -8,541 +8,101 @@ import threading
 import time
 import ipaddress
 from urllib.parse import urlparse
-from streamer_core import HLS_DIR, StreamerCore, log_print
+from streamer_core import BASE_PATH, HLS_DIR, StreamerCore, log_print
+
+def _ui_html_candidates():
+    """
+    ui/index.html の探索候補を優先順で返す。
+
+    1. EXE と同じフォルダ  … 利用者が UI を差し替えたい場合の上書き先
+    2. スクリプトと同じ場所 … 開発時（リポジトリ直下の ui/）
+    3. カレントディレクトリ
+    4. BASE_PATH           … PyInstaller onefile に同梱された既定 UI (sys._MEIPASS)
+    """
+    roots = []
+    if getattr(sys, "frozen", False):
+        roots.append(os.path.dirname(os.path.abspath(sys.executable)))
+    roots.append(os.path.dirname(os.path.abspath(__file__)))
+    roots.append(os.getcwd())
+    roots.append(BASE_PATH)
+
+    candidates = []
+    seen = set()
+    for root in roots:
+        if not root or root in seen:
+            continue
+        seen.add(root)
+        candidates.append(os.path.join(root, "ui", "index.html"))
+        candidates.append(os.path.join(root, "plugin", "ui", "index.html"))
+    return candidates
+
 
 def get_ui_html():
-    """ui/index.html または plugin/ui/index.html が存在する場合は優先して読み込み、無ければ内蔵テンプレートを返す"""
-    candidates = [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui", "index.html"),
-        os.path.join(os.getcwd(), "ui", "index.html"),
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugin", "ui", "index.html"),
-        os.path.join(os.getcwd(), "plugin", "ui", "index.html"),
-    ]
-    for c in candidates:
-        if os.path.exists(c):
+    """
+    Web リモコン UI (ui/index.html) を読み込む。
+
+    v2.6.0 以降、UI の正本は ui/index.html ただ一つ。api_server.py 側に UI を複製すると
+    必ずどちらかが腐るため（実際 v2.6.0 の内蔵テンプレートは <body> ごと欠落して配信されていた）、
+    内蔵の複製は持たない。正本が見つからない場合は「壊れた UI」ではなく、
+    原因と復旧手順を示す診断ページを返す（fail-closed）。
+    """
+    for path in _ui_html_candidates():
+        if os.path.exists(path):
             try:
-                with open(c, "r", encoding="utf-8") as f:
+                with open(path, "r", encoding="utf-8") as f:
                     return f.read()
-            except Exception:
-                pass
-    return HTML_PLAYER_TEMPLATE
+            except Exception as e:
+                log_print(f"[APIServer] Failed to read UI asset {path}: {e}")
+    log_print("[APIServer] UI asset 'ui/index.html' not found. Serving diagnostic page.")
+    return UI_MISSING_TEMPLATE
 
 
-HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
-<html lang="ja" class="dark">
+UI_MISSING_TEMPLATE = """<!DOCTYPE html>
+<html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRCYouTube Streamer & Web Remote</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Remix Icon CDN -->
-    <link href="https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css" rel="stylesheet">
-    <!-- Hls.js for Live Stream Inline Preview -->
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        background: '#121214',
-                        card: '#18181b',
-                        'card-muted': '#202024',
-                        border: '#27272a',
-                        'border-hover': '#3f3f46',
-                        muted: '#71717a',
-                        'muted-foreground': '#a1a1aa',
-                        primary: '#38bdf8',
-                        'primary-hover': '#0284c7',
-                        accent: '#f43f5e',
-                        success: '#22c55e',
-                        warning: '#f59e0b',
-                        danger: '#ef4444',
-                    },
-                    fontFamily: {
-                        sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
-                    }
-                }
-            }
-        }
-    </script>
-    <style>
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #121214;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #27272a;
-            border-radius: 3px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #3f3f46;
-        }
-        .drag-handle {
-            cursor: grab;
-        }
-        .drag-handle:active {
-            cursor: grabbing;
-        }
-        .dragging {
-            opacity: 0.35;
-            transform: scale(0.99);
-        }
-        .drag-over {
-            border-top: 2px solid #38bdf8 !important;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VRCYouTube Streamer - UI アセット未検出</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; padding:2rem 1.25rem; background:#121214; color:#e4e4e7;
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;
+         line-height:1.7; }
+  main { max-width:44rem; margin:0 auto; }
+  h1 { font-size:1.25rem; margin:0 0 .25rem; color:#f43f5e; }
+  p  { color:#a1a1aa; font-size:.9rem; }
+  ol { color:#a1a1aa; font-size:.9rem; padding-left:1.2rem; }
+  code { background:#202024; border:1px solid #27272a; border-radius:.25rem;
+         padding:.1rem .35rem; font-size:.85em; color:#38bdf8; }
+  .card { background:#18181b; border:1px solid #27272a; border-radius:.6rem;
+          padding:1rem 1.25rem; margin-top:1.25rem; }
+  .url { display:block; margin-top:.4rem; word-break:break-all; color:#38bdf8;
+         font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.85rem; }
+</style>
 </head>
-        let currentLoopState = false;
-        let currentShuffleState = false;
-        let currentRadioState = false;
-        let currentRadioBg = "card";
-        let currentPhotoAdvance = false;
-        let isCurrentItemImage = false;
-        let userPermissions = {
-            allow_web_queue_add: true,
-            allow_web_queue_edit: true,
-            allow_web_playback_control: true
-        };
+<body>
+<main>
+  <h1>Web リモコン UI を読み込めませんでした</h1>
+  <p>UI の正本である <code>ui/index.html</code> が見つかりません。
+     配信機能（HLS）自体は正常に稼働しています。</p>
 
-        // 1. URLクリックでコピー
-        hlsUrlSpan.addEventListener('click', () => {
-            const urlText = hlsUrlSpan.textContent.trim();
-            if (urlText && !urlText.startsWith("(")) {
-                navigator.clipboard.writeText(urlText).then(() => {
-                    copyMsg.style.display = "block";
-                    setTimeout(() => { copyMsg.style.display = "none"; }, 2500);
-                });
-            }
-        });
+  <div class="card">
+    <strong>VRChat / プレイヤー用 ストリーム URL</strong>
+    <span class="url">__TUNNEL_STREAM_URL__</span>
+  </div>
 
-        // 2. メッセージ通知
-        function showMsg(text, isError) {
-            msgBox.textContent = text;
-            msgBox.className = "msg-box " + (isError ? "msg-error" : "msg-success");
-            msgBox.style.display = "block";
-            setTimeout(() => { msgBox.style.display = "none"; }, 5000);
-        }
-
-        function showPhotoMsg(text, isError) {
-            photoMsgBox.textContent = text;
-            photoMsgBox.className = "msg-box " + (isError ? "msg-error" : "msg-success");
-            photoMsgBox.style.display = "block";
-            setTimeout(() => { photoMsgBox.style.display = "none"; }, 5000);
-        }
-
-        // 3. 写真アップロード (Share Photo) & Drag and Drop (複数対応)
-        if (uploadZone) {
-            ['dragenter', 'dragover'].forEach(eventName => {
-                uploadZone.addEventListener(eventName, (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    uploadZone.classList.add('dragover');
-                }, false);
-            });
-            ['dragleave', 'drop'].forEach(eventName => {
-                uploadZone.addEventListener(eventName, (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    uploadZone.classList.remove('dragover');
-                }, false);
-            });
-            uploadZone.addEventListener('drop', (e) => {
-                const dt = e.dataTransfer;
-                const files = dt.files;
-                if (files && files.length > 0) {
-                    handlePhotoUpload(files);
-                }
-            });
-        }
-
-        async function handlePhotoUpload(files) {
-            if (!files || files.length === 0) return;
-            if (!userPermissions.allow_web_queue_add) {
-                showPhotoMsg("⚠ ホストによって写真追加が無効化されています", true);
-                return;
-            }
-
-            const fileList = Array.from(files);
-            const total = fileList.length;
-            let successCount = 0;
-            let failCount = 0;
-
-            for (let i = 0; i < total; i++) {
-                const file = fileList[i];
-                if (file.size > 20 * 1024 * 1024) {
-                    showPhotoMsg(`⚠ ファイル「${file.name}」が大きすぎます (最大20MB)`, true);
-                    failCount++;
-                    continue;
-                }
-
-                if (total > 1) {
-                    showPhotoMsg(`⏳ 写真をアップロード中... (${i + 1}/${total})`, false);
-                } else {
-                    showPhotoMsg("⏳ 写真をアップロード中...", false);
-                }
-
-                const formData = new FormData();
-                formData.append('file', file);
-
-                try {
-                    const res = await fetch('/api/upload', {
-                        method: 'POST',
-                        body: formData
-                    }).then(r => r.json());
-
-                    if (res.success) {
-                        successCount++;
-                    } else {
-                        failCount++;
-                    }
-                } catch (e) {
-                    failCount++;
-                }
-            }
-
-            document.getElementById('photo-input').value = "";
-            fetchStatus();
-
-            if (failCount === 0) {
-                showPhotoMsg(`✓ ${successCount} 枚の写真をキューに追加しました！`, false);
-            } else {
-                showPhotoMsg(`✓ ${successCount} 枚追加完了 (${failCount} 枚失敗)`, true);
-            }
-        }
-
-        // 4. 動画追加処理 (Add to Queue)
-        function handleAddQueue() {
-            if (!userPermissions.allow_web_queue_add) {
-                showMsg("⚠ ホストによって動画追加が無効化されています", true);
-                return;
-            }
-            const url = urlInput.value.trim();
-            if (!url) return;
-
-            addBtn.disabled = true;
-            addBtn.textContent = "追加中...";
-
-            fetch('/api/queue', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: url })
-            })
-            .then(r => r.json())
-            .then(res => {
-                if (res.success) {
-                    showMsg("✓ " + (res.message || "キューに追加しました！"), false);
-                    urlInput.value = "";
-                    fetchStatus();
-                } else {
-                    showMsg("⚠ " + (res.message || "追加に失敗しました"), true);
-                }
-            })
-            .catch(e => {
-                showMsg("⚠ 通信エラーが発生しました: " + e, true);
-            })
-            .finally(() => {
-                addBtn.disabled = false;
-                addBtn.textContent = "キューに追加";
-            });
-        }
-
-        addBtn.addEventListener('click', handleAddQueue);
-        urlInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') handleAddQueue();
-        });
-
-        // 5. 再生コントロール操作
-        function sendControl(action, payload = {}) {
-            return fetch('/api/control', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: action, ...payload })
-            })
-            .then(r => r.json())
-            .then(res => {
-                if (res.success) {
-                    fetchStatus();
-                    return res;
-                } else {
-                    showMsg("⚠ " + (res.message || "操作が拒否されました"), true);
-                }
-            })
-            .catch(e => {
-                showMsg("⚠ 通信エラー: " + e, true);
-            });
-        }
-
-        function skipCurrentVideo() {
-            if (!userPermissions.allow_web_playback_control) return;
-            sendControl('skip').then(() => showMsg("✓ スキップをリクエストしました", false));
-        }
-
-        function togglePhotoAdvance() {
-            if (!userPermissions.allow_web_playback_control) return;
-            sendControl('set_image_auto_advance', { enabled: !currentPhotoAdvance });
-        }
-
-        function toggleRadio() {
-            if (!userPermissions.allow_web_playback_control) return;
-            sendControl('set_radio_mode', { enabled: !currentRadioState });
-        }
-
-        function changeRadioBg(val) {
-            if (!userPermissions.allow_web_playback_control) return;
-            sendControl('set_radio_bg_source', { source: val }).then(res => {
-                if (res && res.success) {
-                    showMsg("✓ ラジオ背景を切り替えました: " + val, false);
-                }
-            });
-        }
-
-        function changeDuration(val) {
-            if (!userPermissions.allow_web_playback_control) return;
-            sendControl('set_image_duration', { duration: parseInt(val, 10) });
-        }
-
-        function shuffleNow() {
-            if (!userPermissions.allow_web_playback_control) return;
-            sendControl('shuffle').then(() => showMsg("✓ キューをシャッフルしました", false));
-        }
-
-        function toggleLoop() {
-            if (!userPermissions.allow_web_playback_control) return;
-            sendControl('set_loop', { enabled: !currentLoopState });
-        }
-
-        function toggleShuffle() {
-            if (!userPermissions.allow_web_playback_control) return;
-            sendControl('set_shuffle', { enabled: !currentShuffleState });
-        }
-
-        function moveQueueItem(idx, direction) {
-            if (!userPermissions.allow_web_queue_edit) return;
-            const targetIdx = idx + direction;
-            sendControl('move_item', { from_index: idx, to_index: targetIdx });
-        }
-
-        function deleteQueueItem(idx) {
-            if (!userPermissions.allow_web_queue_edit) return;
-            sendControl('delete_item', { index: idx }).then(res => {
-                if (res && res.success) {
-                    showMsg("✓ アイテムを削除しました", false);
-                }
-            });
-        }
-
-        // 6. 定期ステータス・キュー取得
-        function formatDuration(sec) {
-            if (!sec || sec <= 0) return "";
-            const m = Math.floor(sec / 60);
-            const s = sec % 60;
-            return m + ":" + (s < 10 ? "0" : "") + s;
-        }
-
-        function fetchStatus() {
-            fetch('/api/status')
-                .then(r => r.json())
-                .then(data => {
-                    // ストリームURL更新
-                    if (data.stream_url) {
-                        hlsUrlSpan.textContent = data.stream_url;
-                    } else if (data.tunnel_url) {
-                        hlsUrlSpan.textContent = data.tunnel_url + '/stream.m3u8';
-                    }
-
-                    // 権限設定の同期
-                    if (data.permissions) {
-                        userPermissions = data.permissions;
-                        addBtn.disabled = !userPermissions.allow_web_queue_add;
-                        btnSkip.disabled = !userPermissions.allow_web_playback_control;
-                        btnPhotoPause.disabled = !userPermissions.allow_web_playback_control;
-                        btnRadio.disabled = !userPermissions.allow_web_playback_control;
-                        btnShuffleNow.disabled = !userPermissions.allow_web_playback_control;
-                        btnLoop.disabled = !userPermissions.allow_web_playback_control;
-                        btnShuffle.disabled = !userPermissions.allow_web_playback_control;
-                        if (selectRadioBg) selectRadioBg.disabled = !userPermissions.allow_web_playback_control;
-                        if (selectDuration) selectDuration.disabled = !userPermissions.allow_web_playback_control;
-                    }
-
-                    // 写真関連状態の同期
-                    isCurrentItemImage = !!data.is_image;
-                    currentPhotoAdvance = data.image_auto_advance !== undefined ? !!data.image_auto_advance : !data.image_paused;
-                    btnPhotoPause.textContent = currentPhotoAdvance ? "⏱ 自動送り: ON" : "⏱ 自動送り: OFF";
-                    btnPhotoPause.className = "btn-sm " + (currentPhotoAdvance ? "btn-active" : "");
-
-                    if (data.image_display_duration && selectDuration && selectDuration.value != data.image_display_duration) {
-                        selectDuration.value = String(data.image_display_duration);
-                    }
-
-                    // モード状態の同期
-                    currentLoopState = !!data.loop_queue;
-                    currentShuffleState = !!data.shuffle;
-                    currentRadioState = !!data.radio_mode;
-                    currentRadioBg = data.radio_bg_source || "card";
-
-                    btnLoop.textContent = currentLoopState ? "🔁 ループ: ON" : "🔁 ループ: OFF";
-                    btnLoop.className = "btn-sm " + (currentLoopState ? "btn-active" : "");
-
-                    btnShuffle.textContent = currentShuffleState ? "🔀 シャッフル: ON" : "🔀 シャッフル: OFF";
-                    btnShuffle.className = "btn-sm " + (currentShuffleState ? "btn-active" : "");
-
-                    btnRadio.textContent = currentRadioState ? "📻 BGM/ラジオ: ON" : "📻 BGM/ラジオ: OFF";
-                    btnRadio.className = "btn-sm " + (currentRadioState ? "btn-active" : "");
-
-                    if (data.radio_bg_source && selectRadioBg && selectRadioBg.value != data.radio_bg_source) {
-                        selectRadioBg.value = data.radio_bg_source;
-                    }
-
-                    // モードバッジ
-                    let badges = [];
-                    if (data.loop_queue) badges.push("🔁 Loop ON");
-                    if (data.shuffle) badges.push("🔀 Shuffle ON");
-                    if (data.radio_mode) badges.push("📻 Radio/BGM");
-                    if (isCurrentItemImage) badges.push("🖼 Photo");
-                    modeBadges.textContent = badges.join(" • ");
-
-                    // キュー一覧描画
-                    const items = data.queue || [];
-                    const curr = data.current_video;
-                    const totalCount = items.length + (curr ? 1 : 0);
-                    queueHeaderTitle.textContent = "🎵 プレイリスト / キュー (" + totalCount + " items)";
-
-                    let html = "";
-                    if (curr) {
-                        const currIcon = (curr.type === 'image' || (curr.title && curr.title.startsWith("🖼"))) ? "🖼" : "🎬";
-                        html += '<li class="queue-item active">'
-                              + '<span class="queue-idx">▶</span>'
-                              + '<span style="margin-right:2px;">' + currIcon + '</span>'
-                              + '<span class="queue-name" style="font-weight:600; color: #38bdf8;">' + escapeHtml(curr.title || "Unknown") + '</span>'
-                              + '<span class="queue-duration">' + (curr.type === 'image' ? (curr.duration + 's') : formatDuration(curr.duration)) + '</span>'
-                              + '</li>';
-                    }
-                    if (items.length === 0 && !curr) {
-                        html = '<li style="color: var(--text-muted); font-size: 12px; padding: 8px;">(キューは空です。URLまたは写真を追加してください)</li>';
-                    } else {
-                        items.forEach((item, idx) => {
-                            let actionBtns = "";
-                            if (userPermissions.allow_web_queue_edit) {
-                                const upDisabled = (idx === 0) ? 'disabled style="opacity:0.3"' : '';
-                                const downDisabled = (idx === items.length - 1) ? 'disabled style="opacity:0.3"' : '';
-                                actionBtns = '<div class="item-actions">'
-                                           + `<button class="item-action-btn" title="上へ移動" onclick="moveQueueItem(${idx}, -1)" ${upDisabled}>▲</button>`
-                                           + `<button class="item-action-btn" title="下へ移動" onclick="moveQueueItem(${idx}, 1)" ${downDisabled}>▼</button>`
-                                           + `<button class="item-action-btn del" title="削除" onclick="deleteQueueItem(${idx})">✕</button>`
-                                           + '</div>';
-                            }
-
-                            const itemIcon = (item.type === 'image' || (item.title && item.title.startsWith("🖼"))) ? "🖼" : "🎬";
-                            const durStr = (item.type === 'image' || (item.title && item.title.startsWith("🖼"))) ? (item.duration + 's') : formatDuration(item.duration);
-
-                            html += '<li class="queue-item">'
-                                  + '<span class="queue-idx">#' + (idx + 1) + '</span>'
-                                  + '<span style="margin-right:2px;">' + itemIcon + '</span>'
-                                  + '<span class="queue-name">' + escapeHtml(item.title || "Unknown") + '</span>'
-                                  + '<span class="queue-duration">' + durStr + '</span>'
-                                  + actionBtns
-                                  + '</li>';
-                        });
-                    }
-                    queueList.innerHTML = html;
-                })
-                .catch(() => {});
-        }
-
-        function escapeHtml(str) {
-            return str.replace(/[&<>'"]/g, 
-                tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
-            );
-        }
-
-        fetchStatus();
-        setInterval(fetchStatus, 3500);
-
-        // 5. HLS Web Player コントロール
-        video.addEventListener('playing', () => {
-            statusDiv.textContent = "配信中 / Stream Active (Playing)";
-            statusDiv.style.backgroundColor = "#047857";
-        });
-        video.addEventListener('pause', () => {
-            statusDiv.textContent = "一時停止中 / Paused";
-            statusDiv.style.backgroundColor = "#475569";
-        });
-        video.addEventListener('waiting', () => {
-            statusDiv.textContent = "バッファリング中 / Buffering...";
-            statusDiv.style.backgroundColor = "#b45309";
-        });
-        statusDiv.addEventListener('click', () => {
-            if (video.paused) {
-                video.play().catch(e => console.log("Play failed:", e));
-            }
-        });
-
-        function checkStream() {
-            fetch(streamUrl, { method: 'HEAD' })
-                .then(response => {
-                    if (response.ok) {
-                        statusDiv.textContent = "配信中 / Stream Active (Loading...)";
-                        statusDiv.style.backgroundColor = "#065f46";
-                        initPlayer();
-                    } else {
-                        statusDiv.textContent = "待機中 / Standby (キュー待機画面配信中)";
-                        statusDiv.style.backgroundColor = "#1e293b";
-                        initPlayer();
-                    }
-                })
-                .catch(() => {
-                    statusDiv.textContent = "接続待機中 / Waiting for server...";
-                    statusDiv.style.backgroundColor = "#475569";
-                    destroyPlayer();
-                    setTimeout(checkStream, 3000);
-                });
-        }
-
-        let hls = null;
-        function initPlayer() {
-            if (hls || video.src) return;
-            if (Hls.isSupported()) {
-                hls = new Hls({
-                    maxBufferLength: 30,
-                    liveSyncDurationCount: __LIVE_SYNC_DURATION_COUNT__,
-                    manifestLoadingMaxRetry: 10,
-                    manifestLoadingRetryDelay: 1000
-                });
-                hls.loadSource(streamUrl);
-                hls.attachMedia(video);
-                hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                    video.play().catch(e => {
-                        statusDiv.textContent = "配信中 (クリックしてプレビュー再生)";
-                    });
-                });
-                hls.on(Hls.Events.ERROR, function(event, data) {
-                    if (data.fatal) {
-                        destroyPlayer();
-                        setTimeout(checkStream, 2000);
-                    }
-                });
-            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                video.src = streamUrl;
-            }
-        }
-
-        function destroyPlayer() {
-            if (hls) {
-                hls.destroy();
-                hls = null;
-            }
-            video.src = "";
-            video.load();
-        }
-
-        checkStream();
-    </script>
+  <div class="card">
+    <strong>復旧手順</strong>
+    <ol>
+      <li><code>ui/index.html</code> を <code>VRCYouTubeStreamer.exe</code> と同じフォルダの
+          <code>ui/</code> に配置する（フォルダごと）。</li>
+      <li>ソースからビルドした場合は
+          <code>python build_exe.py</code> で再ビルドする（UI は EXE に同梱されます）。</li>
+      <li>それでも直らない場合は起動ログの
+          <code>[APIServer] UI asset ... not found</code> 行を確認してください。</li>
+    </ol>
+  </div>
+</main>
 </body>
 </html>
 """
@@ -642,7 +202,15 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
 
     def is_local_request(self):
         """
-        ホストPC本人またはローカルテスト時の同一LANからの操作か判定。
+        ホストPC本人（＝停止・全消去などの破壊的操作を許してよい相手）か判定。
+
+        既定はループバックのみ。トンネル無効時に同一LAN全体をホスト扱いしていた挙動は、
+        同じWi-Fi上の任意の端末が /api/shutdown や clear_queue を叩けてしまうため撤廃した。
+        従来どおりLAN内をホスト扱いしたい場合は config.json の
+        "trust_lan_clients": true で明示的にオプトインする。
+        なお LAN 端末は引き続き「ゲスト」として接続でき、
+        allow_web_queue_add / allow_web_queue_edit / allow_web_playback_control の
+        範囲でスマホからの追加・操作が可能（＝QR共有のワークフローは維持される）。
         """
         if "cf-connecting-ip" in self.headers or "x-forwarded-for" in self.headers:
             return False
@@ -659,10 +227,13 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         except Exception:
             pass
 
-        # トンネル無効（ローカルテストモード）時は同一LANからの全操作を許可
-        is_tunnel_disabled = bool(self.streamer_core and not self.streamer_core.enable_tunnel)
+        # 同一LANをホスト扱いするかどうかは明示的なオプトイン設定のみで決まる
+        trust_lan = bool(
+            self.streamer_core
+            and self.streamer_core.config.get("trust_lan_clients", False)
+        )
 
-        if not is_loopback and not (is_tunnel_disabled and is_private_lan):
+        if not is_loopback and not (trust_lan and is_private_lan):
             return False
 
         if not self._origin_is_self():
@@ -705,13 +276,11 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(response_bytes)))
-        self.send_cors_headers()
         self.end_headers()
         self.wfile.write(response_bytes)
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_cors_headers()
         self.end_headers()
 
     def do_GET(self):
@@ -764,7 +333,6 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")
                 self.send_header("Content-Length", str(len(png_data)))
-                self.send_cors_headers()
                 self.end_headers()
                 self.wfile.write(png_data)
                 return
@@ -795,7 +363,6 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(content)))
-            self.send_cors_headers()
             self.end_headers()
             self.wfile.write(content)
             return
