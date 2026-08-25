@@ -720,8 +720,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
     def _origin_is_self(self):
         """
         CSRF対策: Originヘッダが自分自身のオリジンか判定。
-        ブラウザはPOSTに必ずOriginを付けるため、「Origin無し」= 非ブラウザ由来
-        （VRCBeacon等のネイティブ/サーバサイドクライアント）とみなして許可する。
+        # Origin なし（curl / Python requests / Node.js 等のネイティブ/サーバサイドクライアント）とみなして許可する。
         """
         origin = self.headers.get("Origin")
         if origin is None:
