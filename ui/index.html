@@ -607,8 +607,8 @@
 
         let currentAddMode = 'video';
         let addModeUserChangedAt = 0; // 利用者が追加モードを操作した時刻（ポーリングでの巻き戻し防止）
-        let hlsFatalRetries = 0;          // HLSプレビューの致命的エラー連続回数
-        const HLS_MAX_FATAL_RETRIES = 5;  // 上限に達したら再試行を止める（一時ポート枯渇の防止）
+        let hlsFatalRetries = 0;          // HLSプレビューの致命的エラー連続回数（再試行間隔の算出に使う）
+        let hlsRetryTimer = null;         // 再接続の待機タイマー（作り直し時に必ず解除する）
         let isOnline = false;
         let isPolling = false;
         let draggedItemIndex = null;
@@ -676,6 +676,13 @@
             const streamM3u8Url = `${apiBase}/stream.m3u8`;
 
             if (Hls.isSupported()) {
+                // 破棄したインスタンス宛ての再接続タイマーが後から発火すると、
+                // 新しいインスタンスに対して stopLoad()/loadSource() を撃ち込んでしまい、
+                // プレビューを開き直した直後に復帰が数十秒遅れる原因になる。
+                if (hlsRetryTimer) {
+                    clearTimeout(hlsRetryTimer);
+                    hlsRetryTimer = null;
+                }
                 if (hlsInstance) {
                     hlsInstance.destroy();
                 }
@@ -683,8 +690,22 @@
                     liveSyncDurationCount: 3,
                     liveMaxLatencyDurationCount: 6,
                     enableWorker: true,
-                    lowLatencyMode: true
+                    lowLatencyMode: true,
+                    // hls.js 内部の再試行に上限を設ける。
+                    // 既定はほぼ無制限で、配信開始前の 404 が続くとマニフェスト/セグメント取得が
+                    // 積み上がって一時ポートを食い潰す（Windows で net::ERR_ADDRESS_IN_USE）。
+                    // 上限に達したら fatal エラーとして下のハンドラで間隔を空けてやり直す。
+                    manifestLoadingMaxRetry: 2,
+                    manifestLoadingRetryDelay: 1000,
+                    levelLoadingMaxRetry: 2,
+                    levelLoadingRetryDelay: 1000,
+                    fragLoadingMaxRetry: 3,
+                    fragLoadingRetryDelay: 1000
                 });
+
+                // 破棄済みインスタンス由来のイベント／タイマーが現行インスタンスを
+                // 触らないように、ハンドラ内で同一性を確認する。
+                const ownInstance = hlsInstance;
 
                 hlsInstance.loadSource(streamM3u8Url);
                 hlsInstance.attachMedia(video);
@@ -692,7 +713,9 @@
                 hlsFatalRetries = 0;
 
                 hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+                    if (hlsInstance !== ownInstance) return;
                     hlsFatalRetries = 0;
+                    if (statusText) statusText.innerText = 'ライブ再生中';
                     if (overlay) overlay.classList.add('opacity-0');
                     video.play().catch(() => {
                         // Autoplay blocked: mute and retry
@@ -702,6 +725,7 @@
                 });
 
                 hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+                    if (hlsInstance !== ownInstance) return;
                     if (!data.fatal) return;
                     if (overlay) overlay.classList.remove('opacity-0');
 
@@ -711,28 +735,33 @@
                     // Windows で net::ERR_ADDRESS_IN_USE が多発する。
                     // hls.js 推奨の復旧手順（startLoad / recoverMediaError）に、
                     // 回数上限とバックオフを付けて置き換える。
-                    if (hlsFatalRetries >= HLS_MAX_FATAL_RETRIES) {
-                        if (statusText) statusText.innerText = 'ストリームに接続できません（「再読込」で再試行してください）';
-                        try { hlsInstance.destroy(); } catch (e) {}
-                        hlsInstance = null;
-                        return;
-                    }
-
+                    // 配信は「起動直後の十数秒」や曲の切り替わりで一時的に 404 になるため、
+                    // 諦めずに再試行し続ける必要がある。上限を設けて destroy() すると、
+                    // その後サーバーが配信を始めてもプレビューが二度と復帰しない。
                     hlsFatalRetries++;
                     if (statusText) {
-                        statusText.innerText = `ストリーム待機中 / 再接続中... (${hlsFatalRetries}/${HLS_MAX_FATAL_RETRIES})`;
+                        statusText.innerText = `ストリーム待機中 / 再接続中... (${hlsFatalRetries})`;
                     }
-                    const backoffMs = Math.min(3000 * hlsFatalRetries, 15000);
-                    setTimeout(() => {
-                        if (!hlsInstance || !isOnline) return;
+                    const backoffMs = Math.min(2000 * hlsFatalRetries, 10000);
+                    if (hlsRetryTimer) clearTimeout(hlsRetryTimer);
+                    hlsRetryTimer = setTimeout(() => {
+                        hlsRetryTimer = null;
+                        if (hlsInstance !== ownInstance || !isOnline) return;
                         try {
                             if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                                 hlsInstance.recoverMediaError();
                             } else {
+                                // マニフェストを一度も取得できていない状態では startLoad() は
+                                // 何も再取得せず、そのまま停止してしまう（配信開始前の 404 で必ず起きる）。
+                                // 前の読み込みを止めてから loadSource() でやり直す。
+                                // stopLoad() を挟むのは、旧実装のようにローダーが積み上がって
+                                // 一時ポートを食い潰すのを防ぐため。
+                                hlsInstance.stopLoad();
+                                hlsInstance.loadSource(streamM3u8Url);
                                 hlsInstance.startLoad();
                             }
                         } catch (e) {
-                            // 復旧不能なら次のエラーで上限に達し停止する
+                            // 次の fatal エラーで、より長い間隔をおいて再試行される
                         }
                     }, backoffMs);
                 });
@@ -753,16 +782,36 @@
         function toggleLivePreview() {
             const card = document.getElementById('previewCard');
             const label = document.getElementById('previewBtnLabel');
+            const video = document.getElementById('liveVideo');
             previewEnabled = !previewEnabled;
             if (previewEnabled) {
                 card.classList.remove('hidden');
                 if (label) label.innerText = 'プレビュー';
-                initHlsPlayer();
+                if (hlsInstance) {
+                    // 作り直さずに再開する。startLoad(-1) はライブの先頭位置から読み直すため、
+                    // 閉じている間にライブウィンドウから消えたセグメントを追いかけて
+                    // 同じ URL に 404 を連打する状態にならない。
+                    try {
+                        hlsInstance.startLoad(-1);
+                        if (video) video.play().catch(() => {
+                            video.muted = true;
+                            video.play().catch(() => {});
+                        });
+                    } catch (e) {
+                        initHlsPlayer();
+                    }
+                } else {
+                    initHlsPlayer();
+                }
             } else {
                 card.classList.add('hidden');
                 if (label) label.innerText = 'プレビュー表示';
-                const video = document.getElementById('liveVideo');
                 if (video) video.pause();
+                // 閉じている間もセグメントを取得し続けると帯域を無駄にし、
+                // 再生位置も古くなるため読み込み自体を止める。
+                if (hlsInstance) {
+                    try { hlsInstance.stopLoad(); } catch (e) {}
+                }
             }
         }
 
