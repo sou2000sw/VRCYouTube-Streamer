@@ -609,6 +609,7 @@
         let addModeUserChangedAt = 0; // 利用者が追加モードを操作した時刻（ポーリングでの巻き戻し防止）
         let hlsFatalRetries = 0;          // HLSプレビューの致命的エラー連続回数（再試行間隔の算出に使う）
         let hlsRetryTimer = null;         // 再接続の待機タイマー（作り直し時に必ず解除する）
+        let previewResumeWatchdog = null; // 開き直しても再生が戻らないときに作り直す監視タイマー
         let isOnline = false;
         let isPolling = false;
         let draggedItemIndex = null;
@@ -667,6 +668,23 @@
         }
 
         // HLS Player Live Preview
+
+        // 再生が実際に戻ったときの共通処理。
+        // 復帰の判定を MANIFEST_PARSED だけに頼ると、プレビューを開き直したときは
+        // startLoad(-1) で再開するためマニフェストが再解析されず、映像が戻っていても
+        // 「再接続中... (N)」の表示と再試行カウンタが残り続ける（実測: 104秒経っても (16) のまま）。
+        function markPreviewHealthy() {
+            if (hlsRetryTimer) {
+                clearTimeout(hlsRetryTimer);
+                hlsRetryTimer = null;
+            }
+            hlsFatalRetries = 0;
+            const statusText = document.getElementById('videoStatusText');
+            const overlay = document.getElementById('videoOverlayMsg');
+            if (statusText) statusText.innerText = 'ライブ再生中';
+            if (overlay) overlay.classList.add('opacity-0');
+        }
+
         function initHlsPlayer() {
             const video = document.getElementById('liveVideo');
             const overlay = document.getElementById('videoOverlayMsg');
@@ -682,6 +700,10 @@
                 if (hlsRetryTimer) {
                     clearTimeout(hlsRetryTimer);
                     hlsRetryTimer = null;
+                }
+                if (previewResumeWatchdog) {
+                    clearTimeout(previewResumeWatchdog);
+                    previewResumeWatchdog = null;
                 }
                 if (hlsInstance) {
                     hlsInstance.destroy();
@@ -714,9 +736,7 @@
 
                 hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
                     if (hlsInstance !== ownInstance) return;
-                    hlsFatalRetries = 0;
-                    if (statusText) statusText.innerText = 'ライブ再生中';
-                    if (overlay) overlay.classList.add('opacity-0');
+                    markPreviewHealthy();
                     video.play().catch(() => {
                         // Autoplay blocked: mute and retry
                         video.muted = true;
@@ -724,9 +744,31 @@
                     });
                 });
 
+                // 実際にセグメントが積まれた時点を「復帰」と見なす。
+                // startLoad(-1) での再開や recoverMediaError() の成功は
+                // MANIFEST_PARSED を伴わないため、この経路が無いと表示が戻らない。
+                hlsInstance.on(Hls.Events.FRAG_BUFFERED, () => {
+                    if (hlsInstance !== ownInstance) return;
+                    if (previewResumeWatchdog) {
+                        clearTimeout(previewResumeWatchdog);
+                        previewResumeWatchdog = null;
+                    }
+                    // 開き直した直後は再試行カウンタが 0 のまま「ストリームを読み込み中...」を
+                    // 表示しているので、カウンタだけを見て早期 return してはいけない。
+                    // オーバーレイが隠れているかどうかで既に復帰済みかを判断する。
+                    const overlayEl = document.getElementById('videoOverlayMsg');
+                    if (hlsFatalRetries === 0 && overlayEl && overlayEl.classList.contains('opacity-0')) return;
+                    markPreviewHealthy();
+                });
+
                 hlsInstance.on(Hls.Events.ERROR, (event, data) => {
                     if (hlsInstance !== ownInstance) return;
                     if (!data.fatal) return;
+                    // プレビューを閉じている間は再接続しない。
+                    // stopLoad() の後も残った読み込みが fatal エラーを出すため、ここで止めないと
+                    // 閉じている間にカウンタだけが積み上がり（実測: 開き直した時点で既に 7 回）、
+                    // 開いた直後に最大 10 秒のバックオフを引いて復帰が遅れる。
+                    if (!previewEnabled) return;
                     if (overlay) overlay.classList.remove('opacity-0');
 
                     // 以前は 3 秒ごとに loadSource() を無条件で呼び直していた。
@@ -746,7 +788,7 @@
                     if (hlsRetryTimer) clearTimeout(hlsRetryTimer);
                     hlsRetryTimer = setTimeout(() => {
                         hlsRetryTimer = null;
-                        if (hlsInstance !== ownInstance || !isOnline) return;
+                        if (hlsInstance !== ownInstance || !isOnline || !previewEnabled) return;
                         try {
                             if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                                 hlsInstance.recoverMediaError();
@@ -788,6 +830,18 @@
                 card.classList.remove('hidden');
                 if (label) label.innerText = 'プレビュー';
                 if (hlsInstance) {
+                    // 閉じている間に積み上がった待機を捨て、表示も初期状態へ戻す。
+                    // これをしないと、開いた直後に古いバックオフ（最大10秒）が発火して
+                    // 現行インスタンスへ loadSource() を撃ち込み、復帰がさらに遅れる。
+                    if (hlsRetryTimer) {
+                        clearTimeout(hlsRetryTimer);
+                        hlsRetryTimer = null;
+                    }
+                    hlsFatalRetries = 0;
+                    const statusText = document.getElementById('videoStatusText');
+                    const overlay = document.getElementById('videoOverlayMsg');
+                    if (statusText) statusText.innerText = 'ストリームを読み込み中...';
+                    if (overlay) overlay.classList.remove('opacity-0');
                     // 作り直さずに再開する。startLoad(-1) はライブの先頭位置から読み直すため、
                     // 閉じている間にライブウィンドウから消えたセグメントを追いかけて
                     // 同じ URL に 404 を連打する状態にならない。
@@ -800,6 +854,18 @@
                     } catch (e) {
                         initHlsPlayer();
                     }
+                    // 再開できないまま固まることがあるため、一定時間で作り直しへ切り替える。
+                    // 実測では開き直しから復帰まで約40秒かかっていた。復帰を待つ上限を設けて、
+                    // 戻らなければインスタンスごと作り直す。
+                    if (previewResumeWatchdog) clearTimeout(previewResumeWatchdog);
+                    previewResumeWatchdog = setTimeout(() => {
+                        previewResumeWatchdog = null;
+                        if (!previewEnabled) return;
+                        const v = document.getElementById('liveVideo');
+                        if (!v || v.readyState < 3 || v.paused) {
+                            initHlsPlayer();
+                        }
+                    }, 6000);
                 } else {
                     initHlsPlayer();
                 }
@@ -809,6 +875,14 @@
                 if (video) video.pause();
                 // 閉じている間もセグメントを取得し続けると帯域を無駄にし、
                 // 再生位置も古くなるため読み込み自体を止める。
+                if (hlsRetryTimer) {
+                    clearTimeout(hlsRetryTimer);
+                    hlsRetryTimer = null;
+                }
+                if (previewResumeWatchdog) {
+                    clearTimeout(previewResumeWatchdog);
+                    previewResumeWatchdog = null;
+                }
                 if (hlsInstance) {
                     try { hlsInstance.stopLoad(); } catch (e) {}
                 }
