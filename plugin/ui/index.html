@@ -3,11 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRCYouTube Streamer</title>
+    <title>VRCYouTube Streamer & Web Remote</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Remix Icon CDN (VRCBeacon standard) -->
+    <!-- Remix Icon CDN -->
     <link href="https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css" rel="stylesheet">
+    <!-- Hls.js for Live Stream Inline Preview -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -36,7 +38,7 @@
         }
     </script>
     <style>
-        /* Custom scrollbar matching VRCBeacon */
+        /* Custom scrollbar */
         ::-webkit-scrollbar {
             width: 6px;
             height: 6px;
@@ -69,80 +71,80 @@
 <body class="bg-background text-zinc-100 min-h-screen flex flex-col font-sans select-none antialiased text-sm">
 
     <!-- Top Navigation / Status Header -->
-    <header class="h-12 bg-card border-b border-border px-4 flex items-center justify-between shrink-0">
-        <div class="flex items-center gap-3">
-            <div class="flex items-center gap-2">
+    <header class="h-12 bg-card border-b border-border px-3 sm:px-4 flex items-center justify-between shrink-0 z-20">
+        <div class="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
                 <i class="ri-youtube-fill text-red-500 text-xl"></i>
-                <span class="font-bold text-sm tracking-wide text-zinc-100">VRCYouTube</span>
-                <span class="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700">v2.5.0</span>
+                <span class="font-bold text-sm tracking-wide text-zinc-100 hidden xs:inline">VRCYouTube</span>
+                <span class="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700 font-mono">v2.5.0</span>
             </div>
             <!-- Server Status Indicator -->
-            <div id="serverStatusBadge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-800/80 text-zinc-400 border border-zinc-700/60">
-                <span class="w-2 h-2 rounded-full bg-zinc-500 animate-pulse" id="statusDot"></span>
-                <span id="statusText">接続確認中...</span>
+            <div id="serverStatusBadge" class="flex items-center gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full text-[11px] sm:text-xs font-medium bg-zinc-800/80 text-zinc-400 border border-zinc-700/60 truncate">
+                <span class="w-2 h-2 rounded-full bg-zinc-500 animate-pulse shrink-0" id="statusDot"></span>
+                <span id="statusText" class="truncate">接続確認中...</span>
             </div>
         </div>
 
         <!-- Header Actions -->
-        <div class="flex items-center gap-2">
-            <!-- Launch Button (When Offline) -->
-            <button id="btnHeaderLaunch" onclick="handleLaunchServer()" class="hidden flex items-center gap-1.5 px-3 py-1 bg-primary text-zinc-950 hover:bg-primary-hover font-semibold rounded text-xs transition shadow-sm">
+        <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <!-- Launch Button (When Offline & Local) -->
+            <button id="btnHeaderLaunch" onclick="handleLaunchServer()" class="hidden flex items-center gap-1.5 px-2.5 sm:px-3 py-1 bg-primary text-zinc-950 hover:bg-primary-hover font-semibold rounded text-xs transition shadow-sm">
                 <i class="ri-play-circle-fill text-sm"></i>
-                <span>サーバー起動</span>
+                <span>起動</span>
             </button>
 
-            <!-- Stop Button (When Online) -->
-            <button id="btnHeaderStop" onclick="handleStopServer()" class="hidden flex items-center gap-1.5 px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition">
+            <!-- Stop Button (When Online & Local) -->
+            <button id="btnHeaderStop" onclick="handleStopServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition">
                 <i class="ri-stop-circle-line text-sm"></i>
-                <span>停止</span>
+                <span class="hidden sm:inline">停止</span>
             </button>
 
-            <!-- Restart Button -->
-            <button id="btnHeaderRestart" onclick="handleRestartServer()" class="hidden flex items-center gap-1.5 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition">
+            <!-- Restart Button (When Online & Local) -->
+            <button id="btnHeaderRestart" onclick="handleRestartServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition">
                 <i class="ri-refresh-line text-sm"></i>
-                <span>再起動</span>
+                <span class="hidden sm:inline">再起動</span>
             </button>
 
-            <!-- Open Web Player -->
-            <button id="btnOpenWeb" onclick="openWebPlayer()" class="flex items-center gap-1.5 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition">
-                <i class="ri-external-link-line text-sm"></i>
-                <span>Web Player</span>
+            <!-- Toggle Live Preview -->
+            <button id="btnTogglePreview" onclick="toggleLivePreview()" class="flex items-center gap-1 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="インラインプレイヤーの表示/非表示">
+                <i class="ri-tv-2-line text-sm text-primary"></i>
+                <span class="hidden sm:inline" id="previewBtnLabel">プレビュー</span>
             </button>
         </div>
     </header>
 
-    <!-- Main Content Container -->
-    <div class="flex-1 flex overflow-hidden">
+    <!-- Main Content Container (Responsive Sidebar / Nav) -->
+    <div class="flex-1 flex flex-col md:flex-row overflow-hidden">
 
-        <!-- Sidebar Navigation (Beacon style) -->
-        <nav class="w-48 bg-card border-r border-border p-2 flex flex-col gap-1 shrink-0">
-            <button onclick="switchTab('player')" id="nav-player" class="nav-tab active flex items-center gap-2.5 px-3 py-2 rounded text-zinc-200 bg-zinc-800 text-xs font-medium transition">
+        <!-- Sidebar Navigation (Responsive: Top bar on mobile, Left sidebar on desktop) -->
+        <nav class="w-full md:w-48 bg-card border-b md:border-b-0 md:border-r border-border p-1.5 md:p-2 flex flex-row md:flex-col gap-1 shrink-0 overflow-x-auto md:overflow-x-visible z-10">
+            <button onclick="switchTab('player')" id="nav-player" class="nav-tab active flex items-center justify-center md:justify-start gap-2 px-2.5 sm:px-3 py-2 rounded text-zinc-200 bg-zinc-800 text-xs font-medium transition shrink-0 flex-1 md:flex-none">
                 <i class="ri-play-list-line text-base text-primary"></i>
-                <span>プレイヤー & キュー</span>
+                <span class="whitespace-nowrap">プレイヤー & キュー</span>
             </button>
-            <button onclick="switchTab('settings')" id="nav-settings" class="nav-tab flex items-center gap-2.5 px-3 py-2 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 text-xs font-medium transition">
+            <button onclick="switchTab('settings')" id="nav-settings" class="nav-tab flex items-center justify-center md:justify-start gap-2 px-2.5 sm:px-3 py-2 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 text-xs font-medium transition shrink-0 flex-1 md:flex-none">
                 <i class="ri-settings-4-line text-base"></i>
-                <span>配信・QR設定</span>
+                <span class="whitespace-nowrap">配信・QR設定</span>
             </button>
-            <button onclick="switchTab('info')" id="nav-info" class="nav-tab flex items-center gap-2.5 px-3 py-2 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 text-xs font-medium transition">
-                <i class="ri-information-line text-base"></i>
-                <span>接続URL & ガイド</span>
+            <button onclick="switchTab('info')" id="nav-info" class="nav-tab flex items-center justify-center md:justify-start gap-2 px-2.5 sm:px-3 py-2 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 text-xs font-medium transition shrink-0 flex-1 md:flex-none">
+                <i class="ri-qr-code-line text-base text-emerald-400"></i>
+                <span class="whitespace-nowrap">接続 & スマホ共有</span>
             </button>
 
-            <div class="mt-auto border-t border-border pt-2 text-[11px] text-zinc-500 flex flex-col gap-1">
+            <div class="hidden md:flex mt-auto border-t border-border pt-2 text-[11px] text-zinc-500 flex-col gap-1">
                 <div class="flex justify-between">
-                    <span>ポート:</span>
-                    <span id="labelPort" class="text-zinc-400 font-mono">8000</span>
+                    <span>接続種別:</span>
+                    <span id="labelAccessType" class="text-zinc-400 font-mono">Local</span>
                 </div>
                 <div class="flex justify-between">
                     <span>トンネル:</span>
-                    <span id="labelTunnelState" class="text-zinc-400 truncate max-w-[100px]">-</span>
+                    <span id="labelTunnelState" class="text-zinc-400 truncate max-w-[90px]">-</span>
                 </div>
             </div>
         </nav>
 
         <!-- Main Workspace -->
-        <main class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        <main class="flex-1 overflow-y-auto p-3 sm:p-4 flex flex-col gap-4">
 
             <!-- OFFLINE HERO BANNER (Shown when backend is stopped) -->
             <div id="offlineBanner" class="hidden bg-card border border-amber-500/30 rounded-lg p-6 flex flex-col items-center justify-center text-center gap-3 my-auto">
@@ -155,7 +157,7 @@
                         動画の再生やHLSストリーミングを開始するには、バックエンドの VRCYouTube サーバーを起動してください。
                     </p>
                 </div>
-                <div class="flex items-center gap-3 mt-2">
+                <div class="flex items-center gap-3 mt-2" id="offlineActionButtons">
                     <button onclick="handleLaunchServer()" class="flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary-hover text-zinc-950 font-bold rounded text-xs transition shadow-md">
                         <i class="ri-play-fill text-base"></i>
                         <span>VRCYouTube を起動する</span>
@@ -165,23 +167,48 @@
                         <span>状態を再確認</span>
                     </button>
                 </div>
-                <div class="mt-2 text-[11px] text-zinc-500">
-                    または手動起動: <code class="bg-zinc-900 px-1.5 py-0.5 rounded text-zinc-400">VRCYouTubeStreamer.exe --headless</code>
+                <div class="mt-2 text-[11px] text-zinc-500" id="offlineManualHint">
+                    手動起動: <code class="bg-zinc-900 px-1.5 py-0.5 rounded text-zinc-400">VRCYouTubeStreamer.exe</code>
                 </div>
             </div>
 
             <!-- TAB 1: PLAYER & QUEUE -->
             <div id="tab-player" class="tab-pane flex flex-col gap-4">
 
-                <!-- Live Stream & Now Playing Banner -->
-                <div class="bg-card border border-border rounded-lg p-4 flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
-                    <div class="flex items-center gap-3.5 min-w-0">
-                        <div id="currentThumbWrapper" class="w-24 h-14 bg-zinc-900 rounded border border-border flex items-center justify-center overflow-hidden shrink-0 relative">
+                <!-- 1. Live Stream Inline HLS Preview Player Card (Collapsible) -->
+                <div id="previewCard" class="bg-card border border-border rounded-lg p-3 sm:p-4 flex flex-col gap-2.5 transition">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                            <span class="font-semibold text-xs text-zinc-200">ライブストリーム プレビュー (HLS Video & Audio)</span>
+                        </div>
+                        <div class="flex items-center gap-1.5 text-xs">
+                            <button onclick="reloadPlayer()" class="p-1 px-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 text-[11px] transition flex items-center gap-1">
+                                <i class="ri-refresh-line"></i>
+                                <span>再読込</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Video Element Container -->
+                    <div class="relative w-full bg-black rounded-lg overflow-hidden aspect-video max-h-[380px] flex items-center justify-center border border-zinc-800 group">
+                        <video id="liveVideo" class="w-full h-full object-contain" playsinline controls></video>
+                        <div id="videoOverlayMsg" class="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-2 text-zinc-400 text-xs p-4 text-center pointer-events-none transition-opacity duration-300">
+                            <i class="ri-film-line text-3xl text-zinc-600"></i>
+                            <span id="videoStatusText">ストリームを読み込み中...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. Now Playing & Control Banner -->
+                <div class="bg-card border border-border rounded-lg p-3 sm:p-4 flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
+                    <div class="flex items-center gap-3.5 min-w-0 w-full lg:w-auto">
+                        <div id="currentThumbWrapper" class="w-20 sm:w-24 h-12 sm:h-14 bg-zinc-900 rounded border border-border flex items-center justify-center overflow-hidden shrink-0 relative">
                             <img id="currentThumb" src="" alt="Thumbnail" class="w-full h-full object-cover hidden">
                             <i id="currentThumbPlaceholder" class="ri-film-line text-2xl text-zinc-600"></i>
                             <span id="currentTypeBadge" class="hidden absolute bottom-1 right-1 text-[9px] font-bold px-1 rounded bg-black/80 text-primary uppercase">VIDEO</span>
                         </div>
-                        <div class="flex flex-col gap-1 min-w-0">
+                        <div class="flex flex-col gap-1 min-w-0 flex-1">
                             <div class="flex items-center gap-2">
                                 <span id="streamStateBadge" class="text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 uppercase">STANDBY</span>
                                 <span id="currentDuration" class="text-xs text-muted-foreground font-mono">00:00 / 00:00</span>
@@ -196,7 +223,7 @@
                     </div>
 
                     <!-- Global Stream Controls -->
-                    <div class="flex items-center gap-2 self-end md:self-center shrink-0">
+                    <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap w-full lg:w-auto justify-end shrink-0">
                         <button id="btnLoopQueue" onclick="toggleLoopQueue()" class="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 text-zinc-400 border border-zinc-700 hover:border-zinc-500 rounded text-xs transition" title="キュー保持ループ再生">
                             <i class="ri-repeat-line text-sm"></i>
                             <span>ループ</span>
@@ -212,24 +239,30 @@
                     </div>
                 </div>
 
-                <!-- VRChat Playback Link Quick-Bar -->
-                <div class="bg-card-muted border border-border rounded-lg px-3 py-2 flex items-center justify-between gap-3">
-                    <div class="flex items-center gap-2 min-w-0">
-                        <i class="ri-link text-primary text-base"></i>
-                        <span class="text-xs text-zinc-400 shrink-0">VRChat プレイヤー用URL:</span>
-                        <input id="quickStreamUrl" readonly class="bg-zinc-900 border border-zinc-700/80 rounded px-2 py-0.5 text-xs text-zinc-200 font-mono w-72 md:w-96 truncate focus:outline-none focus:border-primary" value="取得中...">
+                <!-- 3. VRChat Playback Link Quick-Bar -->
+                <div class="bg-card-muted border border-border rounded-lg px-3 py-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0 flex-1">
+                        <i class="ri-link text-primary text-base shrink-0"></i>
+                        <span class="text-xs text-zinc-400 shrink-0">VRChat プレイヤーURL:</span>
+                        <input id="quickStreamUrl" readonly class="bg-zinc-900 border border-zinc-700/80 rounded px-2 py-0.5 text-xs text-zinc-200 font-mono w-full truncate focus:outline-none focus:border-primary" value="取得中...">
                     </div>
-                    <button onclick="copyStreamUrl()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded text-xs transition shrink-0">
-                        <i class="ri-file-copy-line"></i>
-                        <span>コピー</span>
-                    </button>
+                    <div class="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                        <button onclick="copyStreamUrl()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded text-xs transition">
+                            <i class="ri-file-copy-line"></i>
+                            <span>コピー</span>
+                        </button>
+                        <button onclick="switchTab('info')" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-emerald-400 border border-zinc-700 rounded text-xs transition" title="スマホ共有用QRコードを表示">
+                            <i class="ri-qr-code-line"></i>
+                            <span>QR共有</span>
+                        </button>
+                    </div>
                 </div>
 
-                <!-- Input Forms Grid (Add YouTube & Photos) -->
+                <!-- 4. Input Forms Grid (Add YouTube & Photos) -->
                 <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
 
                     <!-- YouTube / URL Input Card -->
-                    <div class="lg:col-span-7 bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
+                    <div class="lg:col-span-7 bg-card border border-border rounded-lg p-3 sm:p-4 flex flex-col gap-3">
                         <div class="flex items-center justify-between">
                             <div class="flex items-center gap-2">
                                 <i class="ri-video-add-line text-primary text-base"></i>
@@ -264,7 +297,7 @@
                     </div>
 
                     <!-- Photo Upload Card -->
-                    <div class="lg:col-span-5 bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
+                    <div class="lg:col-span-5 bg-card border border-border rounded-lg p-3 sm:p-4 flex flex-col gap-3">
                         <div class="flex items-center justify-between">
                             <div class="flex items-center gap-2">
                                 <i class="ri-image-add-line text-emerald-400 text-base"></i>
@@ -276,14 +309,45 @@
                         <div id="dropZone" onclick="document.getElementById('fileInput').click()" 
                             class="border border-dashed border-zinc-700 hover:border-emerald-500/80 bg-zinc-900/60 hover:bg-zinc-900 rounded p-3 text-center cursor-pointer transition flex flex-col items-center gap-1">
                             <i class="ri-upload-cloud-line text-xl text-zinc-400"></i>
-                            <span class="text-xs text-zinc-300 font-medium">クリックまたは画像をドラッグ＆ドロップ</span>
-                            <span class="text-[10px] text-zinc-500">JPEG, PNG, WebP, GIF</span>
+                            <span class="text-xs text-zinc-300 font-medium">タップして写真を選択 / ドロップ</span>
+                            <span class="text-[10px] text-zinc-500">JPEG, PNG, WebP, GIF (最大20MB)</span>
                             <input type="file" id="fileInput" multiple accept="image/*" class="hidden" onchange="handleImageFiles(this.files)">
                         </div>
                     </div>
                 </div>
 
-                <!-- Queue List Card -->
+                <!-- 5. Playback Options Bar (Radio Background & Slide Duration) -->
+                <div class="bg-card border border-border rounded-lg p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <span class="text-zinc-400 flex items-center gap-1">
+                            <i class="ri-radio-2-line text-amber-400"></i>
+                            <span>ラジオ背景:</span>
+                        </span>
+                        <select id="selectRadioBg" onchange="changeRadioBg(this.value)" class="bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1 text-xs text-zinc-200 focus:outline-none focus:border-primary">
+                            <option value="card">🎵 サムネイルカード (Card)</option>
+                            <option value="slideshow">🖼️ スライドショー (Slideshow)</option>
+                            <option value="standby">⏹ 待機画面 (Standby)</option>
+                        </select>
+                    </div>
+
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <span class="text-zinc-400 flex items-center gap-1">
+                            <i class="ri-timer-line text-emerald-400"></i>
+                            <span>写真表示時間:</span>
+                        </span>
+                        <select id="selectDuration" onchange="changeDuration(this.value)" class="bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1 text-xs text-zinc-200 focus:outline-none focus:border-primary">
+                            <option value="5">5 秒</option>
+                            <option value="10">10 秒</option>
+                            <option value="15" selected>15 秒</option>
+                            <option value="20">20 秒</option>
+                            <option value="30">30 秒</option>
+                            <option value="60">60 秒</option>
+                            <option value="120">120 秒</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- 6. Queue List Card -->
                 <div class="bg-card border border-border rounded-lg flex flex-col overflow-hidden">
                     <div class="p-3 border-b border-border flex items-center justify-between bg-card-muted">
                         <div class="flex items-center gap-2">
@@ -292,11 +356,11 @@
                             <span id="queueCountBadge" class="text-[10px] bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded border border-zinc-700 font-mono">0 件</span>
                         </div>
                         <div class="flex items-center gap-2">
-                            <button onclick="shuffleQueueList()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="キューの順序を即時シャッフル">
+                            <button id="btnShuffleQueue" onclick="shuffleQueueList()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="キューの順序を即時シャッフル">
                                 <i class="ri-shuffle-line"></i>
-                                <span>並び替えシャッフル</span>
+                                <span>並び替え</span>
                             </button>
-                            <button onclick="clearQueueList()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition" title="キューを全消去">
+                            <button id="btnClearQueue" onclick="clearQueueList()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition" title="キューを全消去">
                                 <i class="ri-delete-bin-line"></i>
                                 <span>クリア</span>
                             </button>
@@ -379,33 +443,45 @@
                         <div class="flex flex-col gap-2">
                             <label class="text-xs text-zinc-400">API Base URL</label>
                             <input type="text" id="settingApiBase" value="http://127.0.0.1:8000" onchange="saveApiBase()" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary font-mono">
+                            <p class="text-[11px] text-zinc-500">※Beaconプラグイン環境やリモートアクセス環境に合わせて設定できます。</p>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- TAB 3: INFO & GUIDE -->
+            <!-- TAB 3: INFO & QR SHARE -->
             <div id="tab-info" class="tab-pane hidden flex flex-col gap-4">
-                <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
-                    <div class="flex items-center gap-2 pb-2 border-b border-border">
-                        <i class="ri-link text-primary text-base"></i>
-                        <h3 class="font-semibold text-xs text-zinc-200">ストリーム接続情報</h3>
+                <div class="bg-card border border-border rounded-lg p-4 flex flex-col md:flex-row gap-6 items-center md:items-start">
+                    <!-- QR Code Card -->
+                    <div class="flex flex-col items-center gap-2 bg-white p-3 rounded-lg border border-zinc-700 shadow shrink-0">
+                        <img id="shareQrImg" src="/api/qrcode" alt="Web Remote QR Code" class="w-40 h-40 object-contain rounded" onerror="this.src='https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(window.location.href)">
+                        <span class="text-[11px] font-semibold text-zinc-800">スマホでスキャン</span>
                     </div>
 
-                    <div class="flex flex-col gap-2 text-xs">
-                        <div class="flex flex-col gap-1">
-                            <span class="text-zinc-400 font-medium">Cloudflare トンネルURL (Web Player / リモコン用):</span>
+                    <!-- Connection URLs & Share Info -->
+                    <div class="flex-1 flex flex-col gap-3 w-full text-xs">
+                        <div class="flex items-center gap-2 pb-1 border-b border-border">
+                            <i class="ri-smartphone-line text-emerald-400 text-base"></i>
+                            <h3 class="font-semibold text-xs text-zinc-200">スマホWebリモコン & ストリーム共有</h3>
+                        </div>
+
+                        <p class="text-zinc-400 leading-relaxed">
+                            左のQRコードをスマートフォンで読み取ると、フレンドやスマホからこの操作画面を開いて動画追加や写真共有ができます。
+                        </p>
+
+                        <div class="flex flex-col gap-1 mt-1">
+                            <span class="text-zinc-400 font-medium">Cloudflare トンネルURL (Webリモコン用):</span>
                             <div class="flex gap-2">
-                                <input id="infoTunnelUrl" readonly class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 font-mono text-zinc-200" value="-">
-                                <button onclick="copyElementText('infoTunnelUrl')" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-200">コピー</button>
+                                <input id="infoTunnelUrl" readonly class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 font-mono text-zinc-200 truncate" value="-">
+                                <button onclick="copyElementText('infoTunnelUrl')" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-200 shrink-0">コピー</button>
                             </div>
                         </div>
 
-                        <div class="flex flex-col gap-1 mt-2">
+                        <div class="flex flex-col gap-1 mt-1">
                             <span class="text-zinc-400 font-medium">VRChat プレイヤー入力用 URL (iwaSync3 / YPlay / ProTV):</span>
                             <div class="flex gap-2">
-                                <input id="infoStreamUrl" readonly class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 font-mono text-primary font-bold" value="-">
-                                <button onclick="copyElementText('infoStreamUrl')" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-200">コピー</button>
+                                <input id="infoStreamUrl" readonly class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 font-mono text-primary font-bold truncate" value="-">
+                                <button onclick="copyElementText('infoStreamUrl')" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-200 shrink-0">コピー</button>
                             </div>
                         </div>
                     </div>
@@ -433,10 +509,15 @@
     </div>
 
     <script>
-        // State
-        let apiBase = localStorage.getItem('vrcyoutube_api_base') || 'http://127.0.0.1:8000';
+        // Determine Default API Base
+        let apiBase = (function() {
+            if (typeof location !== 'undefined' && (location.protocol === 'http:' || location.protocol === 'https:')) {
+                return location.origin;
+            }
+            return localStorage.getItem('vrcyoutube_api_base') || 'http://127.0.0.1:8000';
+        })();
 
-        // Beacon の中にいるときだけ、apiBase 宛ての fetch を主プロセス経由へ回す。
+        // Beacon Bridge: Beaconの中にいるときだけ、apiBase 宛ての fetch を主プロセス経由へ回す。
         // 直で叩くと Origin が付き、ホスト本人の操作ではなく Web からの遠隔操作として
         // 扱われる（設定の取得・停止・全消去が 403、ホストが Web 操作を切ると再生操作も死ぬ）。
         (function () {
@@ -448,11 +529,7 @@
                 const m = event.data;
                 if (!m || typeof m !== 'object') return;
                 if (m.__beaconPlugin === 'hello') {
-                    // beacon-plugin: は Electron のの中にしか存在しないスキーム。この頁がそこから
-                    // 配られている事実そのものが「Beacon の中にいる」証拠になる。ブラウザで開かれた
-                    // 頁が悪意ある親に埋め込まれた場合は http/https なので、ここで落ちる。
-                    // event.origin を見てはいけない —— あれは送り手（Beacon のレンダラー = file://）の
-                    // オリジンで、beacon-plugin:// とは一致しない。
+                    // beacon-plugin: は Electron のの中にしか存在しないスキーム。
                     if (location.protocol !== 'beacon-plugin:') return;
                     if (event.source !== window.parent || window.parent === window) return;
                     beacon = { origin: event.origin, id: m.id };
@@ -496,15 +573,12 @@
                             reject(new Error(m.reason || 'plugin bridge refused'));
                             return;
                         }
-                        // 既存の呼び出しは res.ok / res.status / res.json() を見ているので、
-                        // Response で包んで返す —— 呼び出し側を 1 行も変えないため。
+                        // 既存の呼び出しは res.ok / res.status / res.json() を見ているので Response で包んで返す
                         resolve(new Response(m.body, {
                             status: m.status,
                             headers: m.contentType ? { 'content-type': m.contentType } : {}
                         }));
                     });
-                    // ここへ来る時点で location.protocol と window.parent は確認済みなので、
-                    // '*' へ落としても届く先は Beacon のレンダラーだけ。
                     const replyTarget = beacon.origin && beacon.origin !== 'null' ? beacon.origin : '*';
                     parent.postMessage({
                         __beaconPlugin: 'request',
@@ -523,23 +597,27 @@
         let isPolling = false;
         let draggedItemIndex = null;
         let currentStatusData = null;
+        let hlsInstance = null;
+        let previewEnabled = true;
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
-            document.getElementById('settingApiBase').value = apiBase;
+            const apiBaseInput = document.getElementById('settingApiBase');
+            if (apiBaseInput) apiBaseInput.value = apiBase;
             updatePortLabel();
             checkServerHealth(true);
             setInterval(() => checkServerHealth(false), 2000);
             setupDragAndDrop();
+            initHlsPlayer();
         });
 
         function updatePortLabel() {
             try {
                 const url = new URL(apiBase);
-                document.getElementById('labelPort').innerText = url.port || '80';
-            } catch {
-                document.getElementById('labelPort').innerText = '8000';
-            }
+                const isLocal = (url.hostname === '127.0.0.1' || url.hostname === 'localhost');
+                const labelAccess = document.getElementById('labelAccessType');
+                if (labelAccess) labelAccess.innerText = isLocal ? 'Local' : 'Remote';
+            } catch {}
         }
 
         function saveApiBase() {
@@ -552,6 +630,7 @@
             updatePortLabel();
             showToast('API接続先を保存しました', 'success');
             checkServerHealth(true);
+            reloadPlayer();
         }
 
         // Tab Navigation
@@ -568,6 +647,77 @@
             if (targetNav) {
                 targetNav.classList.add('active', 'bg-zinc-800', 'text-zinc-200');
                 targetNav.classList.remove('text-zinc-400');
+            }
+        }
+
+        // HLS Player Live Preview
+        function initHlsPlayer() {
+            const video = document.getElementById('liveVideo');
+            const overlay = document.getElementById('videoOverlayMsg');
+            const statusText = document.getElementById('videoStatusText');
+            if (!video) return;
+
+            const streamM3u8Url = `${apiBase}/stream.m3u8`;
+
+            if (Hls.isSupported()) {
+                if (hlsInstance) {
+                    hlsInstance.destroy();
+                }
+                hlsInstance = new Hls({
+                    liveSyncDurationCount: 3,
+                    liveMaxLatencyDurationCount: 6,
+                    enableWorker: true,
+                    lowLatencyMode: true
+                });
+
+                hlsInstance.loadSource(streamM3u8Url);
+                hlsInstance.attachMedia(video);
+
+                hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+                    if (overlay) overlay.classList.add('opacity-0');
+                    video.play().catch(() => {
+                        // Autoplay blocked: mute and retry
+                        video.muted = true;
+                        video.play().catch(() => {});
+                    });
+                });
+
+                hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+                    if (data.fatal) {
+                        if (overlay) overlay.classList.remove('opacity-0');
+                        if (statusText) statusText.innerText = 'ストリーム待機中 / 接続中...';
+                        setTimeout(() => {
+                            if (hlsInstance && isOnline) hlsInstance.loadSource(streamM3u8Url);
+                        }, 3000);
+                    }
+                });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = streamM3u8Url;
+                video.addEventListener('loadedmetadata', () => {
+                    if (overlay) overlay.classList.add('opacity-0');
+                    video.play().catch(() => {});
+                });
+            }
+        }
+
+        function reloadPlayer() {
+            initHlsPlayer();
+            showToast('プレビュープレイヤーを再接続しました', 'info');
+        }
+
+        function toggleLivePreview() {
+            const card = document.getElementById('previewCard');
+            const label = document.getElementById('previewBtnLabel');
+            previewEnabled = !previewEnabled;
+            if (previewEnabled) {
+                card.classList.remove('hidden');
+                if (label) label.innerText = 'プレビュー';
+                initHlsPlayer();
+            } else {
+                card.classList.add('hidden');
+                if (label) label.innerText = 'プレビュー表示';
+                const video = document.getElementById('liveVideo');
+                if (video) video.pause();
             }
         }
 
@@ -614,23 +764,64 @@
             isOnline = true;
             document.getElementById('statusDot').className = 'w-2 h-2 rounded-full bg-emerald-500';
             document.getElementById('statusText').innerText = '稼働中 (Active)';
-            document.getElementById('statusText').className = 'text-emerald-400 font-medium';
+            document.getElementById('statusText').className = 'text-emerald-400 font-medium truncate';
 
-            document.getElementById('btnHeaderLaunch').classList.add('hidden');
-            document.getElementById('btnHeaderStop').classList.remove('hidden');
-            document.getElementById('btnHeaderRestart').classList.remove('hidden');
+            const isLocal = (data.permissions && data.permissions.is_local) !== false;
+            const permPlayback = !data.permissions || data.permissions.allow_web_playback_control !== false;
+            const permAdd = !data.permissions || data.permissions.allow_web_queue_add !== false;
+            const permEdit = !data.permissions || data.permissions.allow_web_queue_edit !== false;
+            const permConfig = !data.permissions || data.permissions.allow_web_config !== false;
+
+            // Header Action buttons visibility (Only local or host privileged can stop/launch/restart)
+            if (isLocal) {
+                document.getElementById('btnHeaderLaunch').classList.add('hidden');
+                document.getElementById('btnHeaderStop').classList.remove('hidden');
+                document.getElementById('btnHeaderRestart').classList.remove('hidden');
+            } else {
+                document.getElementById('btnHeaderLaunch').classList.add('hidden');
+                document.getElementById('btnHeaderStop').classList.add('hidden');
+                document.getElementById('btnHeaderRestart').classList.add('hidden');
+            }
             document.getElementById('offlineBanner').classList.add('hidden');
+
+            // Apply Granular Web Permissions
+            const btnSkip = document.getElementById('btnSkip');
+            const btnLoopQueue = document.getElementById('btnLoopQueue');
+            const btnShufflePlay = document.getElementById('btnShufflePlay');
+            const btnShuffleQueue = document.getElementById('btnShuffleQueue');
+            const btnClearQueue = document.getElementById('btnClearQueue');
+            const btnAddUrl = document.getElementById('btnAddUrl');
+            const selectRadioBg = document.getElementById('selectRadioBg');
+            const selectDuration = document.getElementById('selectDuration');
+
+            if (btnSkip) btnSkip.disabled = !permPlayback;
+            if (btnLoopQueue) btnLoopQueue.disabled = !permPlayback;
+            if (btnShufflePlay) btnShufflePlay.disabled = !permPlayback;
+            if (selectRadioBg) selectRadioBg.disabled = !permPlayback;
+            if (selectDuration) selectDuration.disabled = !permPlayback;
+
+            if (btnAddUrl) btnAddUrl.disabled = !permAdd;
+            if (btnShuffleQueue) btnShuffleQueue.disabled = !permEdit;
+            if (btnClearQueue) btnClearQueue.disabled = !isLocal; // Full clear is always local-only
 
             // Update Stream URLs
             const streamUrl = data.stream_url || (data.tunnel_url ? `${data.tunnel_url}/stream.m3u8` : `${apiBase}/stream.m3u8`);
             const tunnelUrl = data.tunnel_url || apiBase;
 
-            document.getElementById('quickStreamUrl').value = streamUrl;
-            document.getElementById('infoStreamUrl').value = streamUrl;
-            document.getElementById('infoTunnelUrl').value = tunnelUrl;
-            document.getElementById('labelTunnelState').innerText = data.tunnel_url ? 'Active' : 'Local Only';
+            const quickUrl = document.getElementById('quickStreamUrl');
+            const infoStream = document.getElementById('infoStreamUrl');
+            const infoTunnel = document.getElementById('infoTunnelUrl');
+            const shareQr = document.getElementById('shareQrImg');
 
-            // Now Playing
+            if (quickUrl) quickUrl.value = streamUrl;
+            if (infoStream) infoStream.value = streamUrl;
+            if (infoTunnel) infoTunnel.value = tunnelUrl;
+            if (shareQr) shareQr.src = `${apiBase}/api/qrcode?t=${Date.now()}`;
+
+            const labelTunnel = document.getElementById('labelTunnelState');
+            if (labelTunnel) labelTunnel.innerText = data.tunnel_url ? 'Active' : 'Local Only';
+
+            // Now Playing Information
             const cur = data.current_video;
             const currentThumb = document.getElementById('currentThumb');
             const currentThumbPlaceholder = document.getElementById('currentThumbPlaceholder');
@@ -684,21 +875,33 @@
             updateToggleBtn('btnLoopQueue', data.loop_queue);
             updateToggleBtn('btnShufflePlay', data.shuffle);
 
-            // Queue List
-            renderQueue(data.queue || []);
+            // Controls sync
+            if (data.radio_background && selectRadioBg) {
+                selectRadioBg.value = data.radio_background;
+            }
+            if (data.image_display_duration && selectDuration) {
+                selectDuration.value = String(data.image_display_duration);
+            }
 
-            // Settings sync
+            // Queue List
+            renderQueue(data.queue || [], permEdit);
+
+            // Settings tab sync
             if (data.overlay_qr_enabled !== undefined) {
-                document.getElementById('settingQrEnabled').checked = data.overlay_qr_enabled;
+                const qrEl = document.getElementById('settingQrEnabled');
+                if (qrEl) qrEl.checked = data.overlay_qr_enabled;
             }
             if (data.overlay_qr_mode) {
-                document.getElementById('settingQrMode').value = data.overlay_qr_mode;
+                const qrModeEl = document.getElementById('settingQrMode');
+                if (qrModeEl) qrModeEl.value = data.overlay_qr_mode;
             }
             if (data.image_display_duration) {
-                document.getElementById('settingImageDuration').value = data.image_display_duration;
+                const durEl = document.getElementById('settingImageDuration');
+                if (durEl) durEl.value = data.image_display_duration;
             }
             if (data.image_auto_advance !== undefined) {
-                document.getElementById('settingImageAutoAdvance').checked = data.image_auto_advance;
+                const advEl = document.getElementById('settingImageAutoAdvance');
+                if (advEl) advEl.checked = data.image_auto_advance;
             }
         }
 
@@ -706,17 +909,19 @@
             isOnline = false;
             document.getElementById('statusDot').className = 'w-2 h-2 rounded-full bg-red-500';
             document.getElementById('statusText').innerText = '停止中 (Offline)';
-            document.getElementById('statusText').className = 'text-red-400 font-medium';
+            document.getElementById('statusText').className = 'text-red-400 font-medium truncate';
 
             document.getElementById('btnHeaderLaunch').classList.remove('hidden');
             document.getElementById('btnHeaderStop').classList.add('hidden');
             document.getElementById('btnHeaderRestart').classList.add('hidden');
             document.getElementById('offlineBanner').classList.remove('hidden');
-            document.getElementById('labelTunnelState').innerText = 'Offline';
+            const labelTunnel = document.getElementById('labelTunnelState');
+            if (labelTunnel) labelTunnel.innerText = 'Offline';
         }
 
         function updateToggleBtn(btnId, active) {
             const btn = document.getElementById(btnId);
+            if (!btn) return;
             if (active) {
                 btn.className = "flex items-center gap-1.5 px-3 py-1.5 bg-primary/20 text-primary border border-primary/40 rounded text-xs font-semibold transition";
             } else {
@@ -725,10 +930,10 @@
         }
 
         // Render Queue
-        function renderQueue(queue) {
+        function renderQueue(queue, canEdit = true) {
             const container = document.getElementById('queueContainer');
             const countBadge = document.getElementById('queueCountBadge');
-            countBadge.innerText = `${queue.length} 件`;
+            if (countBadge) countBadge.innerText = `${queue.length} 件`;
 
             if (queue.length === 0) {
                 container.innerHTML = `
@@ -746,47 +951,48 @@
                 const typeBadgeColor = item.is_radio ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : ((item.is_image || item.type === 'image') ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-sky-500/10 text-sky-400 border-sky-500/20');
 
                 return `
-                    <div class="queue-row p-2.5 px-3 flex items-center justify-between gap-3 hover:bg-zinc-800/40 transition group" 
-                        draggable="true" data-index="${index}">
+                    <div class="queue-row p-2.5 px-3 flex items-center justify-between gap-2.5 hover:bg-zinc-800/40 transition group" 
+                        draggable="${canEdit}" data-index="${index}">
                         
-                        <div class="flex items-center gap-2.5 min-w-0 flex-1">
-                            <span class="drag-handle text-zinc-600 group-hover:text-zinc-400 transition cursor-grab">
+                        <div class="flex items-center gap-2 min-w-0 flex-1">
+                            ${canEdit ? `
+                            <span class="drag-handle text-zinc-600 group-hover:text-zinc-400 transition cursor-grab shrink-0">
                                 <i class="ri-draggable text-base"></i>
-                            </span>
-                            <span class="text-xs font-mono text-zinc-500 w-5 text-center">${index + 1}</span>
-                            <span class="text-[9px] font-bold px-1.5 py-0.5 rounded border ${typeBadgeColor}">${typeLabel}</span>
+                            </span>` : ''}
+                            <span class="text-xs font-mono text-zinc-500 w-4 sm:w-5 text-center shrink-0">${index + 1}</span>
+                            <span class="text-[9px] font-bold px-1.5 py-0.5 rounded border ${typeBadgeColor} shrink-0">${typeLabel}</span>
                             <div class="flex flex-col min-w-0 flex-1">
                                 <span class="text-xs font-medium text-zinc-200 truncate" title="${escapeHtml(item.title || '無題')}">${escapeHtml(item.title || '無題')}</span>
                                 <span class="text-[10px] text-zinc-500 truncate">${escapeHtml(item.url || '')}</span>
                             </div>
                         </div>
 
-                        <div class="flex items-center gap-2 shrink-0">
+                        <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
                             <span class="text-xs font-mono text-zinc-400">${duration}</span>
-                            <!-- Move Up / Down -->
+                            ${canEdit ? `
                             <div class="flex items-center">
-                                <button onclick="moveQueueItem(${index}, -1)" ${index === 0 ? 'disabled' : ''} class="p-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 transition">
+                                <button onclick="moveQueueItem(${index}, -1)" ${index === 0 ? 'disabled' : ''} class="p-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 transition" title="上へ移動">
                                     <i class="ri-arrow-up-s-line text-sm"></i>
                                 </button>
-                                <button onclick="moveQueueItem(${index}, 1)" ${index === queue.length - 1 ? 'disabled' : ''} class="p-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 transition">
+                                <button onclick="moveQueueItem(${index}, 1)" ${index === queue.length - 1 ? 'disabled' : ''} class="p-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 transition" title="下へ移動">
                                     <i class="ri-arrow-down-s-line text-sm"></i>
                                 </button>
                             </div>
-                            <!-- Delete -->
                             <button onclick="removeQueueItem(${index})" class="p-1 text-zinc-500 hover:text-red-400 transition" title="キューから削除">
                                 <i class="ri-close-line text-base"></i>
-                            </button>
+                            </button>` : ''}
                         </div>
                     </div>
                 `;
             }).join('');
 
-            bindDragEvents();
+            if (canEdit) bindDragEvents();
         }
 
         // Drag & Drop Queue Reordering
         function setupDragAndDrop() {
             const dropZone = document.getElementById('dropZone');
+            if (!dropZone) return;
             ['dragenter', 'dragover'].forEach(name => {
                 dropZone.addEventListener(name, (e) => {
                     e.preventDefault();
@@ -848,7 +1054,7 @@
             btn.innerHTML = `<i class="ri-loader-4-line animate-spin text-sm"></i>`;
 
             try {
-                // If in radio mode, update radio_mode setting first
+                // If in radio mode, set radio_mode first
                 if (currentAddMode === 'radio') {
                     await fetch(`${apiBase}/api/control`, {
                         method: 'POST',
@@ -882,7 +1088,7 @@
         async function handleImageFiles(files) {
             if (!files || files.length === 0) return;
 
-            showToast(`${files.length}枚の画像をキューに追加中...`, 'info');
+            showToast(`${files.length}枚の画像をアップロード中...`, 'info');
 
             let successCount = 0;
             for (let i = 0; i < files.length; i++) {
@@ -908,13 +1114,17 @@
 
         async function skipCurrent() {
             try {
-                await fetch(`${apiBase}/api/control`, {
+                const res = await fetch(`${apiBase}/api/control`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'skip' })
                 });
-                showToast('スキップしました', 'info');
-                checkServerHealth(true);
+                if (res.ok) {
+                    showToast('スキップしました', 'info');
+                    checkServerHealth(true);
+                } else {
+                    showToast('スキップ操作が許可されていません', 'danger');
+                }
             } catch (e) {
                 showToast('操作に失敗しました', 'danger');
             }
@@ -923,13 +1133,15 @@
         async function toggleLoopQueue() {
             const nextState = !(currentStatusData && currentStatusData.loop_queue);
             try {
-                await fetch(`${apiBase}/api/control`, {
+                const res = await fetch(`${apiBase}/api/control`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'set_loop', enabled: nextState })
                 });
-                showToast(`ループ再生: ${nextState ? '有効' : '無効'}`, 'info');
-                checkServerHealth(true);
+                if (res.ok) {
+                    showToast(`ループ再生: ${nextState ? '有効' : '無効'}`, 'info');
+                    checkServerHealth(true);
+                }
             } catch (e) {
                 showToast('操作に失敗しました', 'danger');
             }
@@ -938,27 +1150,63 @@
         async function toggleShufflePlay() {
             const nextState = !(currentStatusData && currentStatusData.shuffle);
             try {
-                await fetch(`${apiBase}/api/control`, {
+                const res = await fetch(`${apiBase}/api/control`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'set_shuffle', enabled: nextState })
                 });
-                showToast(`シャッフル再生: ${nextState ? '有効' : '無効'}`, 'info');
-                checkServerHealth(true);
+                if (res.ok) {
+                    showToast(`シャッフル再生: ${nextState ? '有効' : '無効'}`, 'info');
+                    checkServerHealth(true);
+                }
             } catch (e) {
                 showToast('操作に失敗しました', 'danger');
             }
         }
 
+        async function changeRadioBg(val) {
+            try {
+                const res = await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'set_radio_bg', background: val })
+                });
+                if (res.ok) {
+                    showToast(`ラジオ背景を ${val} に変更しました`, 'success');
+                    checkServerHealth(true);
+                }
+            } catch (e) {
+                showToast('変更に失敗しました', 'danger');
+            }
+        }
+
+        async function changeDuration(sec) {
+            try {
+                const res = await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'set_image_duration', duration: parseInt(sec) })
+                });
+                if (res.ok) {
+                    showToast(`写真表示時間を ${sec}秒 に変更しました`, 'success');
+                    checkServerHealth(true);
+                }
+            } catch (e) {
+                showToast('変更に失敗しました', 'danger');
+            }
+        }
+
         async function shuffleQueueList() {
             try {
-                await fetch(`${apiBase}/api/control`, {
+                const res = await fetch(`${apiBase}/api/control`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'shuffle' })
                 });
-                showToast('キューの並び順をシャッフルしました', 'success');
-                checkServerHealth(true);
+                if (res.ok) {
+                    showToast('キューの並び順をシャッフルしました', 'success');
+                    checkServerHealth(true);
+                }
             } catch (e) {
                 showToast('操作に失敗しました', 'danger');
             }
@@ -967,13 +1215,17 @@
         async function clearQueueList() {
             if (!confirm('再生キューをすべてクリアしますか？')) return;
             try {
-                await fetch(`${apiBase}/api/control`, {
+                const res = await fetch(`${apiBase}/api/control`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'clear_queue' })
                 });
-                showToast('キューをクリアしました', 'info');
-                checkServerHealth(true);
+                if (res.ok) {
+                    showToast('キューをクリアしました', 'info');
+                    checkServerHealth(true);
+                } else {
+                    showToast('キューの全消去はホストのみ許可されています', 'danger');
+                }
             } catch (e) {
                 showToast('操作に失敗しました', 'danger');
             }
@@ -981,12 +1233,12 @@
 
         async function removeQueueItem(index) {
             try {
-                await fetch(`${apiBase}/api/control`, {
+                const res = await fetch(`${apiBase}/api/control`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'delete_item', index: index })
                 });
-                checkServerHealth(true);
+                if (res.ok) checkServerHealth(true);
             } catch (e) {
                 showToast('操作に失敗しました', 'danger');
             }
@@ -999,12 +1251,12 @@
 
         async function reorderQueueApi(fromIndex, toIndex) {
             try {
-                await fetch(`${apiBase}/api/control`, {
+                const res = await fetch(`${apiBase}/api/control`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action: 'move_item', from_index: fromIndex, to_index: toIndex })
                 });
-                checkServerHealth(true);
+                if (res.ok) checkServerHealth(true);
             } catch (e) {
                 showToast('並び替えに失敗しました', 'danger');
             }
@@ -1017,7 +1269,7 @@
             const autoAdvance = document.getElementById('settingImageAutoAdvance').checked;
 
             try {
-                await fetch(`${apiBase}/api/config`, {
+                const res = await fetch(`${apiBase}/api/config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1029,7 +1281,11 @@
                         image_auto_advance: autoAdvance
                     })
                 });
-                showToast('設定を保存しました', 'success');
+                if (res.ok) {
+                    showToast('設定を保存しました', 'success');
+                } else {
+                    showToast('設定変更はホストのみ許可されています', 'danger');
+                }
             } catch (e) {
                 showToast('設定の保存に失敗しました', 'danger');
             }
@@ -1076,10 +1332,6 @@
             setTimeout(() => handleLaunchServer(), 1500);
         }
 
-        function openWebPlayer() {
-            window.open(apiBase, '_blank');
-        }
-
         function copyStreamUrl() {
             const url = document.getElementById('quickStreamUrl').value;
             if (!url || url === '取得中...') return;
@@ -1096,7 +1348,9 @@
         }
 
         function copyElementText(elId) {
-            const val = document.getElementById(elId).value;
+            const el = document.getElementById(elId);
+            if (!el) return;
+            const val = el.value;
             if (val && val !== '-') {
                 navigator.clipboard.writeText(val);
                 showToast('クリップボードにコピーしました', 'success');
@@ -1120,6 +1374,7 @@
             const toast = document.getElementById('toast');
             const icon = document.getElementById('toastIcon');
             const text = document.getElementById('toastMsg');
+            if (!toast) return;
 
             text.innerText = msg;
             if (type === 'success') {

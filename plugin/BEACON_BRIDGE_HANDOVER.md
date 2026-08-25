@@ -192,15 +192,70 @@ Beacon の `plugin:request` は**本文を文字列しか受け付けない**の
 ただし**ホストが Web からの追加を切ると、Beacon の中からも画像を追加できなくなる**。
 1 の「見落としやすい影響」と同じ食い違いが、ここだけ残る。
 
-選べる道は 3 つ。**どれを採るかは未決定。**
+### 【2026-08-25 実測】「困ったら」ではなく、既に壊れている
 
-| 案 | 中身 | 代償 |
-|---|---|---|
-| A | `/api/upload` は直 `fetch` のまま残す | ホストが Web 追加を切ると Beacon 内からも画像を追加できない。**VRCBeacon 側の変更は不要** |
-| B | VRCBeacon 側の `plugin:request` にバイナリを運ぶ口（`bodyBase64` 等）を足す | **VRCBeacon 側の作業になる**。関門を 1 つ広げるので、許可リストの検査を通ることの確認が要る |
-| C | `_self_origins()` に `beacon-plugin://<id>` を足す | **採らないほうがよい。** Origin の名乗りだけで本人権限を渡すことになり、`_origin_is_self()` を置いた意味が消える |
+`allow_web_queue_add`（既定 true）とは**別の関門**がある。`api_server.py:1164` の
+`check_rate_limit()` は、**非ローカル扱いの相手を IP あたり 2.5 秒に 1 回**に絞る
+（`QUEUE_RATE_LIMIT_SECONDS = 2.5`）。実測:
 
-**C は採らないこと。** A で始めて、画像追加が実際に困ったら B、が順当。
+```
+■ Origin あり（今の iframe からの直 fetch と同じ条件）
+  1 枚目: 200 Successfully uploaded photo: 🖼 photo_1
+  2 枚目: 429 Rate limit exceeded...
+  3 枚目: 429 Rate limit exceeded...
+  4 枚目: 429 Rate limit exceeded...
+■ Origin なし（橋渡し = 主プロセス経由と同じ条件）
+  1〜4 枚目: すべて 200
+```
+
+`handleImageFiles()` は選ばれたファイルを**間を空けずにループ**して投げるので、
+10 枚選んでも通るのは 1 枚。しかも数え方が `if (res.ok) successCount++;` なので、
+**429 は例外にならず、エラーも出さずに「1 枚追加しました」と表示される。9 枚が黙って消える。**
+
+Web リモコン向けの連投防止としては正しい仕様。問題は、**Beacon に埋め込んだパネルまで
+「Web からの他人」として数えられている**こと —— 1 の「見落としやすい影響」と同じ構図が、
+**既定設定のまま既に起きている**。
+
+### 案 B は当初の想定よりずっと簡単だった
+
+`api_server.py:1191` は **multipart 以外の生ボディも受け付ける**（実測で 200 を確認）:
+
+```python
+if "multipart/form-data" in content_type:
+    img_bytes, filename = parse_multipart_file(body_bytes, content_type)
+else:
+    img_bytes = body_bytes
+    filename = "uploaded_image.png"
+```
+
+つまり橋渡し側に **multipart の組み立ては要らない**。そして **base64 も要らない** ——
+`postMessage` も Electron の IPC も structured clone なので、`Uint8Array` をそのまま運べる
+（base64 の 33% 膨張を避けられる）。必要な変更は VRCBeacon 側の 1 箇所だけ:
+
+```javascript
+// src-electron/plugins/index.js の proxyRequest
+// 今: 文字列以外を拒否
+if (typeof body !== 'undefined' && body !== null && typeof body !== 'string') {
+    return { ok: false, reason: '本文は文字列で渡してください' };
+}
+// → Uint8Array / ArrayBuffer も受ける。許可リストの検査は一切変わらない
+```
+
+**題名を残したい場合だけ**、プラグイン側で multipart のバイト列を組み立てて `Uint8Array` で渡す。
+生ボディだと**全部の題名が `🖼 uploaded_image` になる**（実測で確認）。
+サーバー側の上限は 20MB（`MAX_UPLOAD_BODY_BYTES`）なので、`plugin:request` 側もそこへ合わせる
+（応答の 4MB 上限とは別方向の値）。
+
+### 3 案の比較（実測後）
+
+| 案 | 実際どうなるか |
+|---|---|
+| A（現状） | **複数枚選択が既に壊れている**（1 枚だけ、しかも黙って落ちる）。ホストが `allow_web_queue_add` を切ると 403 で全滅 |
+| **B（推奨）** | VRCBeacon 側の 1 箇所で `body` の型を広げるだけ。multipart 解析も base64 も不要。レートリミットも 403 も回避され、題名も保てる |
+| C | **採らない。** Origin の名乗りだけで本人権限を渡すことになり、`_origin_is_self()` を置いた意味が消える |
+
+**当初は「A で始めて、困ったら B」と書いていたが、実測を踏まえて B を推奨に変えた。**
+「困ったら」の状態に既に入っており、しかも B のコストが想定よりはるかに小さいため。
 
 ---
 
@@ -366,11 +421,13 @@ const replyTarget = beacon.origin && beacon.origin !== 'null' ? beacon.origin : 
 実物の exe まで通す統合確認もやり直し、**`/api/config` が 200**、
 `POST /api/control (skip)` が 200、終了後の残存プロセス 0。
 
-## 2. 【未決定】`/api/upload` の扱い
+## 2. 【要対応・案 B 推奨】`/api/upload` の扱い
 
-4 の A / B / C。**A（直 `fetch` のまま）で動いている状態**。
-ホストが `allow_web_queue_add` を切ると Beacon 内からも画像を追加できない、という食い違いが残る。
-困ったら B（VRCBeacon 側にバイナリの口を足す）。**C は採らない。**
+4 を読むこと。**A（現状）は既に壊れている** —— レートリミット（2.5 秒 / IP）により
+複数枚選択で 1 枚しか入らず、しかも UI がエラーを出さないので黙って消える（実測済み）。
+
+**案 B を推奨。** VRCBeacon 側の `proxyRequest` で `body` の型を `Uint8Array` まで広げる 1 箇所。
+multipart 解析も base64 も要らない。**C は採らない。**
 
 ## 3. 【未決定】VRCYouTube 側のコミット方針
 

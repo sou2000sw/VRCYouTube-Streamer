@@ -2,16 +2,19 @@
 
 ## [2.6.0] - 2026-08-25 (Development / 開発途中)
 
-### 🧩 VRCBeacon プラグイン対応 ＆ VRCX トーン＆マナー WebUI (Drop-in Plugin & Modern UI)
-- **VRCBeacon 向けドロップインプラグイン パッケージ化**:
-  - `plugin/` フォルダ配下に `plugin.json`、`icon.svg`、`ui/index.html`、`bin/` を整備。
-  - `build_exe.py` に `--plugin-only` オプションを追加し、`releases/vrcbeacon-plugin-vrcyoutube-v{version}.zip` の自動パッケージングに対応。
-- **VRCBeacon (VRCX) デザイン完全準拠のプラグイン WebUI (`plugin/ui/index.html`)**:
-  - Tailwind CSS + Remix Icon による洗練されたダークテーマ UI。
-  - **サーバー起動 & ライフサイクル管理**: サーバー停止時の起動ボタン（IPC / ローカル対応）、稼働時の停止・再起動・WebPlayerボタン。
-  - **プレイヤー & キュー管理**: 現在再生中カード、YouTube動画/プレイリスト追加（通常 / 📻 BGMラジオ切替）、写真一括アップロード、ドラッグ＆ドロップ並び替え、シャッフル、ループ切替。
-  - **配信・QR設定**: 画面上QRコードオーバーレイ（有効/無効、右下コンパクト/中央全画面）、スライドショー表示秒数・自動送り設定。
-  - **ストリーム情報**: VRChat動画プレイヤー用URLのワンクリックコピー。
+### 🧩 Webリモコン ＆ VRCBeacon プラグインUIの完全統合 (Integrated Web Remote & Plugin UI)
+- **WebリモコンとプラグインUIの一本化**:
+  - 従来別々に存在していた `api_server.py` のWebリモコンHTMLと `plugin/ui/index.html` を1つの洗練されたモダンUI（Tailwind CSS + Remix Icon）に統合。
+  - `api_server.py` の `GET /` 配信で `plugin/ui/index.html`（または内蔵テンプレート）を配信するよう一本化。
+- **インライン HLS ライブストリームプレイヤー (`hls.js`) の統合**:
+  - Webブラウザやスマートフォンから配信中の動画・音声・スライドショーをその場で試聴・プレビューできるプレイヤーを装備（折りたたみトグル対応）。
+- **スマホ共有用 QRコード表示 & ストリームURLコピー**:
+  - 「接続 & スマホ共有」タブおよびプレビュー画面に `/api/qrcode` 画像とワンクリックURLコピーを設置。
+- **権限連動 & レスポンシブ対応**:
+  - ホスト（Beacon内/ローカル）とWebリモコン（リモート）の権限（`permissions`）に応じて操作ボタンの活性/非活性を自動制御。
+  - スマホ縦画面でも快適に操作できるよう、画面幅に応じたレスポンシブナビゲーションを実装。
+- **Beacon Bridge と通常ブラウザ（ローカル/トンネル）の両立**:
+  - VRCBeacon 内では `postMessage` 経由でホスト特権通信を行い、ブラウザで開かれた際は自動で直 `fetch` 通信にフォールバック。
 
 ## [2.5.0] - 2026-08-24
 

@@ -10,440 +10,92 @@ import ipaddress
 from urllib.parse import urlparse
 from streamer_core import HLS_DIR, StreamerCore, log_print
 
+def get_ui_html():
+    """plugin/ui/index.html が存在する場合は優先して読み込み、無ければ内蔵テンプレートを返す"""
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugin", "ui", "index.html"),
+        os.path.join(os.getcwd(), "plugin", "ui", "index.html"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            try:
+                with open(c, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
+    return HTML_PLAYER_TEMPLATE
+
+
 HTML_PLAYER_TEMPLATE = """<!DOCTYPE html>
-<html>
+<html lang="ja" class="dark">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>VRCYouTube Stream & Request Web</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VRCYouTube Streamer & Web Remote</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Remix Icon CDN -->
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css" rel="stylesheet">
+    <!-- Hls.js for Live Stream Inline Preview -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        background: '#121214',
+                        card: '#18181b',
+                        'card-muted': '#202024',
+                        border: '#27272a',
+                        'border-hover': '#3f3f46',
+                        muted: '#71717a',
+                        'muted-foreground': '#a1a1aa',
+                        primary: '#38bdf8',
+                        'primary-hover': '#0284c7',
+                        accent: '#f43f5e',
+                        success: '#22c55e',
+                        warning: '#f59e0b',
+                        danger: '#ef4444',
+                    },
+                    fontFamily: {
+                        sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
     <style>
-        :root {
-            --bg-color: #0f172a;
-            --card-bg: #1e293b;
-            --border-color: #334155;
-            --primary: #38bdf8;
-            --primary-hover: #0284c7;
-            --success: #10b981;
-            --warning: #f59e0b;
-            --danger: #ef4444;
-            --text-main: #f8fafc;
-            --text-muted: #94a3b8;
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
         }
-        * { box-sizing: border-box; }
-        body {
-            background-color: var(--bg-color);
-            color: var(--text-main);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            padding: 16px;
+        ::-webkit-scrollbar-track {
+            background: #121214;
         }
-        .container {
-            max-width: 840px;
-            width: 100%;
-            display: flex;
-            flex-direction: column;
-            gap: 18px;
+        ::-webkit-scrollbar-thumb {
+            background: #27272a;
+            border-radius: 3px;
         }
-        header {
-            text-align: center;
-            padding-bottom: 4px;
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3f3f46;
         }
-        h1 {
-            color: var(--primary);
-            margin: 0 0 4px 0;
-            font-size: 22px;
-            font-weight: 700;
+        .drag-handle {
+            cursor: grab;
         }
-        .subtitle {
-            color: var(--text-muted);
-            font-size: 13px;
-            margin: 0;
+        .drag-handle:active {
+            cursor: grabbing;
         }
-        .card {
-            background-color: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            padding: 16px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+        .dragging {
+            opacity: 0.35;
+            transform: scale(0.99);
         }
-        .video-wrapper {
-            position: relative;
-            padding-bottom: 56.25%; /* 16:9 */
-            height: 0;
-            background-color: #000;
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        video {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-        }
-        .status-badge {
-            margin-top: 12px;
-            padding: 10px;
-            border-radius: 8px;
-            background-color: #334155;
-            font-size: 13px;
-            font-weight: 600;
-            text-align: center;
-            transition: background-color 0.3s;
-            cursor: pointer;
-        }
-        /* Forms */
-        .form-row {
-            display: flex;
-            gap: 8px;
-            margin-top: 8px;
-        }
-        input[type="text"] {
-            flex: 1;
-            background-color: #0f172a;
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 12px 14px;
-            color: var(--text-main);
-            font-size: 14px;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-        input[type="text"]:focus {
-            border-color: var(--primary);
-        }
-        button {
-            background-color: var(--primary);
-            color: #0f172a;
-            border: none;
-            border-radius: 8px;
-            padding: 12px 20px;
-            font-size: 14px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: opacity 0.2s, background-color 0.2s;
-            white-space: nowrap;
-        }
-        button:hover { background-color: var(--primary-hover); }
-        button:disabled { opacity: 0.5; cursor: not-allowed; }
-        .msg-box {
-            font-size: 12px;
-            margin-top: 8px;
-            padding: 8px 12px;
-            border-radius: 6px;
-            display: none;
-        }
-        .msg-success { background-color: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #059669; }
-        .msg-error { background-color: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #dc2626; }
-        /* URL & QR Card */
-        .share-container {
-            display: flex;
-            gap: 16px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        .qr-wrapper {
-            background-color: #ffffff;
-            padding: 10px;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-        }
-        .share-info {
-            flex: 1;
-            min-width: 240px;
-        }
-        .share-info code {
-            display: block;
-            background-color: #0f172a;
-            color: var(--primary);
-            padding: 10px 12px;
-            border-radius: 6px;
-            margin-top: 6px;
-            word-break: break-all;
-            user-select: all;
-            font-family: monospace;
-            font-size: 12px;
-            border: 1px solid var(--border-color);
-            cursor: pointer;
-        }
-        /* Queue List */
-        .queue-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-        .queue-title {
-            font-weight: 700;
-            font-size: 15px;
-            color: var(--text-main);
-        }
-        .control-btn-group {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
-        .btn-sm {
-            padding: 6px 12px;
-            font-size: 12px;
-            font-weight: 600;
-            border-radius: 6px;
-            background-color: #334155;
-            color: var(--text-main);
-        }
-        .btn-sm:hover {
-            background-color: #475569;
-        }
-        .btn-active {
-            background-color: var(--primary) !important;
-            color: #0f172a !important;
-        }
-        .btn-danger {
-            background-color: rgba(239, 68, 68, 0.2);
-            color: #f87171;
-            border: 1px solid #dc2626;
-        }
-        .btn-danger:hover {
-            background-color: #dc2626;
-            color: #fff;
-        }
-        /* Photo Upload Dropzone */
-        .upload-drop-zone {
-            border: 2px dashed var(--border-color);
-            border-radius: 8px;
-            padding: 20px 14px;
-            text-align: center;
-            background-color: #0f172a;
-            cursor: pointer;
-            transition: border-color 0.2s, background-color 0.2s;
-            margin-top: 8px;
-        }
-        .upload-drop-zone:hover, .upload-drop-zone.dragover {
-            border-color: var(--primary);
-            background-color: rgba(56, 189, 248, 0.05);
-        }
-        .select-sm {
-            background-color: #0f172a;
-            border: 1px solid var(--border-color);
-            color: var(--text-main);
-            border-radius: 6px;
-            padding: 6px 10px;
-            font-size: 12px;
-            outline: none;
-            cursor: pointer;
-        }
-        .select-sm:focus {
-            border-color: var(--primary);
-        }
-        .queue-list {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            max-height: 280px;
-            overflow-y: auto;
-        }
-        .queue-item {
-            background-color: #0f172a;
-            border: 1px solid var(--border-color);
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 13px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .queue-item.active {
-            border-color: var(--primary);
-            background-color: rgba(56, 189, 248, 0.08);
-        }
-        .queue-idx {
-            color: var(--primary);
-            font-weight: 700;
-            font-size: 12px;
-            min-width: 24px;
-        }
-        .queue-name {
-            flex: 1;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .queue-duration {
-            color: var(--text-muted);
-            font-size: 11px;
-            margin-right: 4px;
-        }
-        .item-actions {
-            display: flex;
-            gap: 4px;
-        }
-        .item-action-btn {
-            background-color: #1e293b;
-            color: var(--text-main);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            padding: 3px 8px;
-            font-size: 11px;
-            cursor: pointer;
-            line-height: 1.2;
-        }
-        .item-action-btn:hover {
-            background-color: var(--primary);
-            color: #0f172a;
-        }
-        .item-action-btn.del:hover {
-            background-color: var(--danger);
-            color: #fff;
+        .drag-over {
+            border-top: 2px solid #38bdf8 !important;
         }
     </style>
 </head>
-<body>
-    <div class="container">
-        <header>
-            <h1>VRCYouTube Web Request & Remote</h1>
-            <p class="subtitle">Scan QR or enter YouTube URL / Photo to add videos & control the stream</p>
-        </header>
-
-        <!-- 1. Video Player Card -->
-        <div class="card">
-            <div class="video-wrapper">
-                <video id="video" controls autoplay playsinline></video>
-            </div>
-            <div id="status" class="status-badge">Checking stream status...</div>
-        </div>
-
-        <!-- 2. Add Video Form Card -->
-        <div class="card">
-            <div class="queue-title">🎬 動画をリクエスト (Add Video)</div>
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
-                YouTubeの動画またはプレイリストURLを入力してキューに追加できます
-            </div>
-            <div class="form-row">
-                <input type="text" id="url-input" placeholder="https://www.youtube.com/watch?v=... / プレイリストURL / 画像URL">
-                <button id="add-btn">キューに追加</button>
-            </div>
-            <div id="msg-box" class="msg-box"></div>
-        </div>
-
-        <!-- 3. Share Photo Upload Card -->
-        <div class="card">
-            <div class="queue-title">🖼️ 写真・画像を共有 (Share Photo)</div>
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
-                スマートフォンやPCから写真をアップロードして配信スクリーンに表示できます
-            </div>
-            <div class="upload-drop-zone" id="upload-zone" onclick="document.getElementById('photo-input').click()">
-                <input type="file" id="photo-input" accept="image/*" multiple style="display:none" onchange="handlePhotoUpload(this.files)">
-                <div style="font-size: 26px; margin-bottom: 2px;">📷</div>
-                <div style="font-size: 13px; font-weight: 600; color: var(--primary);">タップして写真を選択（複数選択可） / ドロップ</div>
-                <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">JPEG, PNG, WebP, GIF (最大20MB/枚)</div>
-            </div>
-            <div id="photo-msg-box" class="msg-box"></div>
-        </div>
-
-        <!-- 4. Playback Controls Card -->
-        <div class="card" id="playback-control-card">
-            <div class="queue-header">
-                <div class="queue-title">🎛️ 再生コントロール (Playback Control)</div>
-                <div class="control-btn-group">
-                    <button class="btn-sm" id="btn-skip" onclick="skipCurrentVideo()">⏭ スキップ (Skip)</button>
-                    <button class="btn-sm" id="btn-radio-toggle" onclick="toggleRadio()">📻 BGM/ラジオ: OFF</button>
-                    <button class="btn-sm" id="btn-photo-pause" onclick="togglePhotoAdvance()">⏱ 自動送り: OFF</button>
-                    <button class="btn-sm" id="btn-shuffle-now" onclick="shuffleNow()">🔀 並び替え (Shuffle)</button>
-                    <button class="btn-sm" id="btn-loop-toggle" onclick="toggleLoop()">🔁 ループ: OFF</button>
-                    <button class="btn-sm" id="btn-shuffle-toggle" onclick="toggleShuffle()">🔀 シャッフル: OFF</button>
-                </div>
-            </div>
-            <div style="margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border-color); padding-top: 10px;">
-                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-                    <span>📻 ラジオ背景 (Radio Background):</span>
-                    <select id="select-radio-bg" class="select-sm" onchange="changeRadioBg(this.value)">
-                        <option value="card">🎵 サムネイルカード (Card)</option>
-                        <option value="slideshow">🖼️ スライドショー (Slideshow)</option>
-                        <option value="standby">⏹ 待機画面 (Standby)</option>
-                    </select>
-                </div>
-                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
-                    <span>⏱ 写真表示時間 (Photo Duration):</span>
-                    <select id="select-duration" class="select-sm" onchange="changeDuration(this.value)">
-                        <option value="5">5 秒 (5s)</option>
-                        <option value="10">10 秒 (10s)</option>
-                        <option value="15" selected>15 秒 (15s)</option>
-                        <option value="20">20 秒 (20s)</option>
-                        <option value="30">30 秒 (30s)</option>
-                        <option value="60">60 秒 (60s)</option>
-                        <option value="120">120 秒 (120s)</option>
-                    </select>
-                </div>
-            </div>
-        </div>
-
-        <!-- 4. VRChat URL & Mobile Share QR Card -->
-        <div class="card">
-            <div class="share-container">
-                <div class="qr-wrapper">
-                    <img id="qr-img" src="/api/qrcode" alt="Request QR Code" width="115" height="115" style="display:block; border-radius:4px; background:#fff;">
-                </div>
-                <div class="share-info">
-                    <div style="font-size: 13px; font-weight: 600; color: #38bdf8;">
-                        📱 スマホ共有用QRコード & VRChatストリームURL
-                    </div>
-                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
-                        QRコードをスマホで読み取ると、フレンドもこのリクエスト画面を開いて動画を追加・操作できます。<br>
-                        VRChatプレイヤーに入力するURL（クリックしてコピー）:
-                    </div>
-                    <code id="hls-url" title="クリックしてコピー">__TUNNEL_STREAM_URL__</code>
-                    <div id="copy-msg" style="font-size: 11px; color: var(--success); margin-top: 4px; display: none;">✓ URLをクリップボードにコピーしました！</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 5. Play Queue Card -->
-        <div class="card">
-            <div class="queue-header">
-                <div class="queue-title" id="queue-header-title">🎵 プレイリスト / キュー (0 items)</div>
-                <div id="mode-badges" style="font-size: 11px; color: var(--text-muted);"></div>
-            </div>
-            <ul class="queue-list" id="queue-list">
-                <li style="color: var(--text-muted); font-size: 12px; padding: 8px;">(キューは空です)</li>
-            </ul>
-        </div>
-    </div>
-
-    <script>
-        const video = document.getElementById('video');
-        const statusDiv = document.getElementById('status');
-        const hlsUrlSpan = document.getElementById('hls-url');
-        const copyMsg = document.getElementById('copy-msg');
-        const urlInput = document.getElementById('url-input');
-        const addBtn = document.getElementById('add-btn');
-        const msgBox = document.getElementById('msg-box');
-        const photoMsgBox = document.getElementById('photo-msg-box');
-        const uploadZone = document.getElementById('upload-zone');
-        const queueList = document.getElementById('queue-list');
-        const queueHeaderTitle = document.getElementById('queue-header-title');
-        const modeBadges = document.getElementById('mode-badges');
-        const btnSkip = document.getElementById('btn-skip');
-        const btnPhotoPause = document.getElementById('btn-photo-pause');
-        const btnRadio = document.getElementById('btn-radio-toggle');
-        const btnShuffleNow = document.getElementById('btn-shuffle-now');
-        const btnLoop = document.getElementById('btn-loop-toggle');
-        const btnShuffle = document.getElementById('btn-shuffle-toggle');
-        const selectRadioBg = document.getElementById('select-radio-bg');
-        const selectDuration = document.getElementById('select-duration');
-        const streamUrl = window.location.origin + '/stream.m3u8';
-
         let currentLoopState = false;
         let currentShuffleState = false;
         let currentRadioState = false;
@@ -1134,7 +786,8 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 tunnel_stream_url = "(サーバー初期化中)"
 
-            html = HTML_PLAYER_TEMPLATE.replace("__LIVE_SYNC_DURATION_COUNT__", str(live_sync))
+            html = get_ui_html()
+            html = html.replace("__LIVE_SYNC_DURATION_COUNT__", str(live_sync))
             html = html.replace("__TUNNEL_STREAM_URL__", tunnel_stream_url)
             content = html.encode("utf-8")
             self.send_response(200)
