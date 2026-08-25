@@ -86,7 +86,7 @@ parent.postMessage({
     url,                // 絶対 URL。permissions の許可リスト内であること
     method,             // GET / POST / PUT / PATCH / DELETE
     headers,            // accept と content-type だけ通る。他は捨てられる
-    body                // 文字列のみ（後述の 4 を読むこと）
+    body                // 文字列、または Uint8Array / ArrayBuffer（上限 20MB。後述の 4）
 }, 'beacon-plugin://vrcyoutube-streamer');
 ```
 
@@ -142,9 +142,12 @@ parent.postMessage({
 
     window.fetch = function (input, init = {}) {
         const url = typeof input === 'string' ? input : input?.url;
-        // Beacon の外、apiBase 以外、文字列にできない本文は、今までどおり直で。
-        if (!beacon || typeof url !== 'string' || !url.startsWith(apiBase) ||
-            (init.body != null && typeof init.body !== 'string')) {
+        // Beacon の外、apiBase 以外、運べない本文は、今までどおり直で。
+        // 運べるのは文字列とバイト列（Uint8Array / ArrayBuffer）。FormData は運べないので、
+        // /api/upload はプラグイン側で multipart のバイト列を組んでから渡すこと（4 を読む）。
+        const bodyOk = init.body == null || typeof init.body === 'string' ||
+            ArrayBuffer.isView(init.body) || init.body instanceof ArrayBuffer;
+        if (!beacon || typeof url !== 'string' || !url.startsWith(apiBase) || !bodyOk) {
             return nativeFetch(input, init);
         }
 
@@ -163,7 +166,7 @@ parent.postMessage({
                 __beaconPlugin: 'request', requestId, url,
                 method: init.method || 'GET',
                 headers: init.headers || {},
-                body: typeof init.body === 'string' ? init.body : undefined
+                body: init.body ?? undefined
             }, beacon.origin);
         });
     };
@@ -182,15 +185,11 @@ origin を覚えているだけなので、そこまで書くこと）。
 
 ---
 
-## 4. `/api/upload` だけは通せない —— 判断が要る
+## 4. `/api/upload` —— 案 B。Beacon 側は対応済み、この repo が残り
 
 `ui/index.html` 810 行目の画像アップロードは **`FormData` に `File` を入れて投げている**。
-Beacon の `plugin:request` は**本文を文字列しか受け付けない**ので、この 1 箇所は
-上の雛形でも直 `fetch` に落ちる（`typeof init.body !== 'string'` で除外される）。
-
-直のままでも既定設定なら通る（`allow_web_queue_add` 既定 True）。
-ただし**ホストが Web からの追加を切ると、Beacon の中からも画像を追加できなくなる**。
-1 の「見落としやすい影響」と同じ食い違いが、ここだけ残る。
+`FormData` は `postMessage` で運べないので、**この 1 箇所だけはこの repo の書き換えが要る**
+（他の 13 箇所は雛形のままで乗る）。運ぶ形は **multipart のバイト列**。
 
 ### 【2026-08-25 実測】「困ったら」ではなく、既に壊れている
 
@@ -216,7 +215,7 @@ Web リモコン向けの連投防止としては正しい仕様。問題は、*
 「Web からの他人」として数えられている**こと —— 1 の「見落としやすい影響」と同じ構図が、
 **既定設定のまま既に起きている**。
 
-### 案 B は当初の想定よりずっと簡単だった
+### 案 B —— 当初の想定よりずっと簡単だった
 
 `api_server.py:1191` は **multipart 以外の生ボディも受け付ける**（実測で 200 を確認）:
 
@@ -241,10 +240,29 @@ if (typeof body !== 'undefined' && body !== null && typeof body !== 'string') {
 // → Uint8Array / ArrayBuffer も受ける。許可リストの検査は一切変わらない
 ```
 
+### 【2026-08-25 対応済み】Beacon 側
+
+`normalizeRequestBody()` が入り、`proxyRequest` の本文は **文字列 / `Uint8Array` /
+`ArrayBuffer`** の 3 つで受ける。上限は `MAX_REQUEST_BODY_BYTES = 20MB`
+（応答側の 4MB とは別方向の値なので分けてある）。
+**許可リスト・メソッド・ヘッダの検査は 1 行も変わっていない。**
+
+この repo から見て効いてくるのは 3 点:
+
+- `Uint8Array` を渡せば**そのまま**運ばれる。base64 に包む必要は無い
+- **切り出した `Uint8Array`（`subarray` 等）は、その範囲だけが送られる**
+- 20MB を超える本文は Beacon 側で `ok: false` になる（相手へ届く前に落ちる）
+
+### 残り —— この repo
+
+`handleImageFiles()` の `FormData` を、**multipart のバイト列を自前で組む**形へ。
+生ボディでも 200 は返るが、**題名が全部 `🖼 uploaded_image` になる**（実測）ので組む方を採る。
+`successCount` の数え方（`if (res.ok)`）も、橋渡しの外（Web リモコン）では
+429 を黙って飲み込むままなので、あわせて見ておくとよい。
+
 **題名を残したい場合だけ**、プラグイン側で multipart のバイト列を組み立てて `Uint8Array` で渡す。
 生ボディだと**全部の題名が `🖼 uploaded_image` になる**（実測で確認）。
-サーバー側の上限は 20MB（`MAX_UPLOAD_BODY_BYTES`）なので、`plugin:request` 側もそこへ合わせる
-（応答の 4MB 上限とは別方向の値）。
+サーバー側の上限は 20MB（`MAX_UPLOAD_BODY_BYTES`）で、`plugin:request` 側もそこへ合わせてある。
 
 ### 3 案の比較（実測後）
 
@@ -421,13 +439,14 @@ const replyTarget = beacon.origin && beacon.origin !== 'null' ? beacon.origin : 
 実物の exe まで通す統合確認もやり直し、**`/api/config` が 200**、
 `POST /api/control (skip)` が 200、終了後の残存プロセス 0。
 
-## 2. 【要対応・案 B 推奨】`/api/upload` の扱い
+## 2. 【対応中・案 B】`/api/upload` の扱い
 
 4 を読むこと。**A（現状）は既に壊れている** —— レートリミット（2.5 秒 / IP）により
 複数枚選択で 1 枚しか入らず、しかも UI がエラーを出さないので黙って消える（実測済み）。
 
-**案 B を推奨。** VRCBeacon 側の `proxyRequest` で `body` の型を `Uint8Array` まで広げる 1 箇所。
-multipart 解析も base64 も要らない。**C は採らない。**
+**Beacon 側は 2026-08-25 に対応済み**（`proxyRequest` が `Uint8Array` / `ArrayBuffer` を受ける。
+上限 20MB）。**残りはこの repo** —— `handleImageFiles()` の `FormData` を multipart の
+バイト列に組み替え、雛形の除外条件を「バイト列も通す」形にする。**C は採らない。**
 
 ## 3. 【未決定】VRCYouTube 側のコミット方針
 

@@ -13,7 +13,7 @@ if sys.platform == "win32" and sys.stdout is not None:
     except Exception:
         pass
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.6.0"
 
 def generate_startup_shortcuts(target_dir):
     """指定ディレクトリに各種起動用バッチファイルを作成"""
@@ -102,7 +102,15 @@ def package_plugin(version=APP_VERSION):
     print(f"Packaging VRCBeacon Plugin for v{version}...", flush=True)
     print(f"==================================================", flush=True)
 
-    # 1. dist/ から plugin/bin/ へバイナリを同期
+    # 1. UI 資材 (ui/index.html) を plugin/ui/ へ同期
+    src_ui = os.path.abspath("ui/index.html")
+    plugin_ui_dir = os.path.join(plugin_root, "ui")
+    os.makedirs(plugin_ui_dir, exist_ok=True)
+    if os.path.exists(src_ui):
+        shutil.copy2(src_ui, os.path.join(plugin_ui_dir, "index.html"))
+        print("[OK] Copied ui/index.html -> plugin/ui/index.html", flush=True)
+
+    # 2. dist/ から plugin/bin/ へバイナリを同期
     src_exe = os.path.abspath("dist/VRCYouTubeStreamer.exe")
     if os.path.exists(src_exe):
         shutil.copy2(src_exe, os.path.join(plugin_bin, "VRCYouTubeStreamer.exe"))
@@ -118,7 +126,7 @@ def package_plugin(version=APP_VERSION):
         shutil.copy2(src_config, os.path.join(plugin_bin, "config.json"))
         print("[OK] Copied config.json -> plugin/bin/", flush=True)
 
-    # 2. プラグインZIPアーカイブ作成
+    # 3. プラグインZIPアーカイブ作成
     zip_path = os.path.join(releases_root, f"vrcbeacon-plugin-vrcyoutube-v{version}.zip")
     print(f"Creating Plugin ZIP archive: {zip_path} ...", flush=True)
     try:

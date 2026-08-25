@@ -1,11 +1,13 @@
 # 更新履歴 (CHANGELOG)
 
-## [2.6.0] - 2026-08-25 (Development / 開発途中)
+## [2.6.0] - 2026-08-25
 
-### 🧩 Webリモコン ＆ VRCBeacon プラグインUIの完全統合 (Integrated Web Remote & Plugin UI)
+### 🧩 Webリモコン ＆ VRCBeacon プラグインUIの完全統合 ＆ UI正本配置の整理 (Integrated Web Remote & Plugin UI)
 - **WebリモコンとプラグインUIの一本化**:
-  - 従来別々に存在していた `api_server.py` のWebリモコンHTMLと `plugin/ui/index.html` を1つの洗練されたモダンUI（Tailwind CSS + Remix Icon）に統合。
-  - `api_server.py` の `GET /` 配信で `plugin/ui/index.html`（または内蔵テンプレート）を配信するよう一本化。
+  - 従来別々に存在していた `api_server.py` のWebリモコンHTMLとプラグインUIを1つの洗練されたモダンUI（Tailwind CSS + Remix Icon）に統合。
+  - ルート直下に `ui/index.html` を正本として配置し、VRCYouTube本体のUI資産として責務を明確化。
+  - `build_exe.py` のパッケージング処理により、プラグイン配布フォルダ `plugin/ui/index.html` への自動同期を実現。
+  - `api_server.py` の `GET /` 配信で `ui/index.html`（または内蔵テンプレート）を配信するよう一本化。
 - **インライン HLS ライブストリームプレイヤー (`hls.js`) の統合**:
   - Webブラウザやスマートフォンから配信中の動画・音声・スライドショーをその場で試聴・プレビューできるプレイヤーを装備（折りたたみトグル対応）。
 - **スマホ共有用 QRコード表示 & ストリームURLコピー**:

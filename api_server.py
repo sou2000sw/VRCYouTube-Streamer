@@ -11,8 +11,10 @@ from urllib.parse import urlparse
 from streamer_core import HLS_DIR, StreamerCore, log_print
 
 def get_ui_html():
-    """plugin/ui/index.html が存在する場合は優先して読み込み、無ければ内蔵テンプレートを返す"""
+    """ui/index.html または plugin/ui/index.html が存在する場合は優先して読み込み、無ければ内蔵テンプレートを返す"""
     candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui", "index.html"),
+        os.path.join(os.getcwd(), "ui", "index.html"),
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugin", "ui", "index.html"),
         os.path.join(os.getcwd(), "plugin", "ui", "index.html"),
     ]
