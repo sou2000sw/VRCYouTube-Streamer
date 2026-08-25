@@ -43,3 +43,6 @@ standby_test.png
 
 # === 配布パッケージ（ビルド成果物） ===
 release/
+releases/
+plugin/bin/
+*.exe

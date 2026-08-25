@@ -1,0 +1,23 @@
+{
+  "id": "vrcyoutube-streamer",
+  "name": "VRCYouTube Streamer",
+  "version": "2.5.0",
+  "description": "YouTube動画・プレイリスト・写真のHLS低遅延ストリーミング配信＆操作UI",
+  "author": "VRCYouTube",
+  "category": "Media",
+  "icon": "icon.svg",
+  "ui": {
+    "type": "custom",
+    "entry": "ui/index.html"
+  },
+  "backend": {
+    "type": "process",
+    "executable": "bin/VRCYouTubeStreamer.exe",
+    "args": ["--headless", "--port", "8000"],
+    "port": 8000,
+    "apiBase": "http://127.0.0.1:8000"
+  },
+  "permissions": [
+    "http://127.0.0.1:8000/*"
+  ]
+}

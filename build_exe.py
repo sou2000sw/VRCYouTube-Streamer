@@ -90,6 +90,48 @@ def get_ffmpeg_source():
             return ffmpeg_path
     return None
 
+def package_plugin(version=APP_VERSION):
+    """plugin/ フォルダの資材を整理し、VRCBeacon用プラグインZIPパッケージを生成"""
+    plugin_root = os.path.abspath("plugin")
+    plugin_bin = os.path.join(plugin_root, "bin")
+    releases_root = os.path.abspath("releases")
+    os.makedirs(plugin_bin, exist_ok=True)
+    os.makedirs(releases_root, exist_ok=True)
+
+    print(f"\n==================================================", flush=True)
+    print(f"Packaging VRCBeacon Plugin for v{version}...", flush=True)
+    print(f"==================================================", flush=True)
+
+    # 1. dist/ から plugin/bin/ へバイナリを同期
+    src_exe = os.path.abspath("dist/VRCYouTubeStreamer.exe")
+    if os.path.exists(src_exe):
+        shutil.copy2(src_exe, os.path.join(plugin_bin, "VRCYouTubeStreamer.exe"))
+        print("[OK] Copied VRCYouTubeStreamer.exe -> plugin/bin/", flush=True)
+
+    ffmpeg_src = get_ffmpeg_source()
+    if ffmpeg_src and os.path.exists(ffmpeg_src):
+        shutil.copy2(ffmpeg_src, os.path.join(plugin_bin, "ffmpeg.exe"))
+        print(f"[OK] Copied ffmpeg.exe -> plugin/bin/", flush=True)
+
+    src_config = os.path.abspath("config.json")
+    if os.path.exists(src_config):
+        shutil.copy2(src_config, os.path.join(plugin_bin, "config.json"))
+        print("[OK] Copied config.json -> plugin/bin/", flush=True)
+
+    # 2. プラグインZIPアーカイブ作成
+    zip_path = os.path.join(releases_root, f"vrcbeacon-plugin-vrcyoutube-v{version}.zip")
+    print(f"Creating Plugin ZIP archive: {zip_path} ...", flush=True)
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(plugin_root):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, plugin_root)
+                    zf.write(file_path, arcname)
+        print(f"[OK] Successfully generated Plugin ZIP: {zip_path}", flush=True)
+    except Exception as e:
+        print(f"[WARN] Failed to create Plugin ZIP: {e}", flush=True)
+
 def create_versioned_release(version=APP_VERSION):
     """releases/VRCYouTubeStreamer_v{version}/ 配布用パッケージおよび ZIP を生成"""
     release_dir_name = f"VRCYouTubeStreamer_v{version}"
@@ -147,6 +189,9 @@ def create_versioned_release(version=APP_VERSION):
         print(f"[OK] Successfully generated ZIP: {zip_path}", flush=True)
     except Exception as e:
         print(f"[WARN] Failed to create ZIP archive: {e}", flush=True)
+
+    # 7. プラグインパッケージの作成
+    package_plugin(version)
 
     print(f"\n==================================================", flush=True)
     print(f"Release v{version} package created successfully!", flush=True)
@@ -208,9 +253,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build and Package VRCYouTubeStreamer")
     parser.add_argument("--version", "-v", type=str, default=APP_VERSION, help=f"Release version string (default: {APP_VERSION})")
     parser.add_argument("--package-only", action="store_true", help="Skip PyInstaller build and only package existing dist/ files")
+    parser.add_argument("--plugin-only", action="store_true", help="Package only the VRCBeacon plugin")
     args = parser.parse_args()
 
-    if args.package_only:
+    if args.plugin_only:
+        package_plugin(args.version)
+    elif args.package_only:
         create_versioned_release(args.version)
     else:
         build(args.version)

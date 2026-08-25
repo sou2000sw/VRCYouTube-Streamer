@@ -1,5 +1,18 @@
 # 更新履歴 (CHANGELOG)
 
+## [2.6.0] - 2026-08-25
+
+### 🧩 VRCBeacon プラグイン対応 ＆ VRCX トーン＆マナー WebUI (Drop-in Plugin & Modern UI)
+- **VRCBeacon 向けドロップインプラグイン パッケージ化**:
+  - `plugin/` フォルダ配下に `plugin.json`、`icon.svg`、`ui/index.html`、`bin/` を整備。
+  - `build_exe.py` に `--plugin-only` オプションを追加し、`releases/vrcbeacon-plugin-vrcyoutube-v{version}.zip` の自動パッケージングに対応。
+- **VRCBeacon (VRCX) デザイン完全準拠のプラグイン WebUI (`plugin/ui/index.html`)**:
+  - Tailwind CSS + Remix Icon による洗練されたダークテーマ UI。
+  - **サーバー起動 & ライフサイクル管理**: サーバー停止時の起動ボタン（IPC / ローカル対応）、稼働時の停止・再起動・WebPlayerボタン。
+  - **プレイヤー & キュー管理**: 現在再生中カード、YouTube動画/プレイリスト追加（通常 / 📻 BGMラジオ切替）、写真一括アップロード、ドラッグ＆ドロップ並び替え、シャッフル、ループ切替。
+  - **配信・QR設定**: 画面上QRコードオーバーレイ（有効/無効、右下コンパクト/中央全画面）、スライドショー表示秒数・自動送り設定。
+  - **ストリーム情報**: VRChat動画プレイヤー用URLのワンクリックコピー。
+
 ## [2.5.0] - 2026-08-24
 
 ### 🔄 曲切り替わり時のフリーズ・タイムライン停止の解消 ＆ シームレス遷移 (Seamless Track Transitions & Prefetch)

@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="ja" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VRCYouTube Streamer</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Remix Icon CDN (VRCBeacon standard) -->
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        background: '#121214',
+                        card: '#18181b',
+                        'card-muted': '#202024',
+                        border: '#27272a',
+                        'border-hover': '#3f3f46',
+                        muted: '#71717a',
+                        'muted-foreground': '#a1a1aa',
+                        primary: '#38bdf8',
+                        'primary-hover': '#0284c7',
+                        accent: '#f43f5e',
+                        success: '#22c55e',
+                        warning: '#f59e0b',
+                        danger: '#ef4444',
+                    },
+                    fontFamily: {
+                        sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom scrollbar matching VRCBeacon */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #121214;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #27272a;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #3f3f46;
+        }
+        .drag-handle {
+            cursor: grab;
+        }
+        .drag-handle:active {
+            cursor: grabbing;
+        }
+        .dragging {
+            opacity: 0.35;
+            transform: scale(0.99);
+        }
+        .drag-over {
+            border-top: 2px solid #38bdf8 !important;
+        }
+    </style>
+</head>
+<body class="bg-background text-zinc-100 min-h-screen flex flex-col font-sans select-none antialiased text-sm">
+
+    <!-- Top Navigation / Status Header -->
+    <header class="h-12 bg-card border-b border-border px-4 flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2">
+                <i class="ri-youtube-fill text-red-500 text-xl"></i>
+                <span class="font-bold text-sm tracking-wide text-zinc-100">VRCYouTube</span>
+                <span class="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700">v2.5.0</span>
+            </div>
+            <!-- Server Status Indicator -->
+            <div id="serverStatusBadge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-zinc-800/80 text-zinc-400 border border-zinc-700/60">
+                <span class="w-2 h-2 rounded-full bg-zinc-500 animate-pulse" id="statusDot"></span>
+                <span id="statusText">接続確認中...</span>
+            </div>
+        </div>
+
+        <!-- Header Actions -->
+        <div class="flex items-center gap-2">
+            <!-- Launch Button (When Offline) -->
+            <button id="btnHeaderLaunch" onclick="handleLaunchServer()" class="hidden flex items-center gap-1.5 px-3 py-1 bg-primary text-zinc-950 hover:bg-primary-hover font-semibold rounded text-xs transition shadow-sm">
+                <i class="ri-play-circle-fill text-sm"></i>
+                <span>サーバー起動</span>
+            </button>
+
+            <!-- Stop Button (When Online) -->
+            <button id="btnHeaderStop" onclick="handleStopServer()" class="hidden flex items-center gap-1.5 px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition">
+                <i class="ri-stop-circle-line text-sm"></i>
+                <span>停止</span>
+            </button>
+
+            <!-- Restart Button -->
+            <button id="btnHeaderRestart" onclick="handleRestartServer()" class="hidden flex items-center gap-1.5 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition">
+                <i class="ri-refresh-line text-sm"></i>
+                <span>再起動</span>
+            </button>
+
+            <!-- Open Web Player -->
+            <button id="btnOpenWeb" onclick="openWebPlayer()" class="flex items-center gap-1.5 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition">
+                <i class="ri-external-link-line text-sm"></i>
+                <span>Web Player</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <div class="flex-1 flex overflow-hidden">
+
+        <!-- Sidebar Navigation (Beacon style) -->
+        <nav class="w-48 bg-card border-r border-border p-2 flex flex-col gap-1 shrink-0">
+            <button onclick="switchTab('player')" id="nav-player" class="nav-tab active flex items-center gap-2.5 px-3 py-2 rounded text-zinc-200 bg-zinc-800 text-xs font-medium transition">
+                <i class="ri-play-list-line text-base text-primary"></i>
+                <span>プレイヤー & キュー</span>
+            </button>
+            <button onclick="switchTab('settings')" id="nav-settings" class="nav-tab flex items-center gap-2.5 px-3 py-2 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 text-xs font-medium transition">
+                <i class="ri-settings-4-line text-base"></i>
+                <span>配信・QR設定</span>
+            </button>
+            <button onclick="switchTab('info')" id="nav-info" class="nav-tab flex items-center gap-2.5 px-3 py-2 rounded text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 text-xs font-medium transition">
+                <i class="ri-information-line text-base"></i>
+                <span>接続URL & ガイド</span>
+            </button>
+
+            <div class="mt-auto border-t border-border pt-2 text-[11px] text-zinc-500 flex flex-col gap-1">
+                <div class="flex justify-between">
+                    <span>ポート:</span>
+                    <span id="labelPort" class="text-zinc-400 font-mono">8000</span>
+                </div>
+                <div class="flex justify-between">
+                    <span>トンネル:</span>
+                    <span id="labelTunnelState" class="text-zinc-400 truncate max-w-[100px]">-</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Workspace -->
+        <main class="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+
+            <!-- OFFLINE HERO BANNER (Shown when backend is stopped) -->
+            <div id="offlineBanner" class="hidden bg-card border border-amber-500/30 rounded-lg p-6 flex flex-col items-center justify-center text-center gap-3 my-auto">
+                <div class="w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 text-3xl">
+                    <i class="ri-server-line"></i>
+                </div>
+                <div class="flex flex-col gap-1">
+                    <h2 class="text-base font-semibold text-zinc-100">VRCYouTube サーバーが停止しています</h2>
+                    <p class="text-xs text-zinc-400 max-w-md">
+                        動画の再生やHLSストリーミングを開始するには、バックエンドの VRCYouTube サーバーを起動してください。
+                    </p>
+                </div>
+                <div class="flex items-center gap-3 mt-2">
+                    <button onclick="handleLaunchServer()" class="flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary-hover text-zinc-950 font-bold rounded text-xs transition shadow-md">
+                        <i class="ri-play-fill text-base"></i>
+                        <span>VRCYouTube を起動する</span>
+                    </button>
+                    <button onclick="checkServerHealth(true)" class="flex items-center gap-1.5 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition">
+                        <i class="ri-refresh-line"></i>
+                        <span>状態を再確認</span>
+                    </button>
+                </div>
+                <div class="mt-2 text-[11px] text-zinc-500">
+                    または手動起動: <code class="bg-zinc-900 px-1.5 py-0.5 rounded text-zinc-400">VRCYouTubeStreamer.exe --headless</code>
+                </div>
+            </div>
+
+            <!-- TAB 1: PLAYER & QUEUE -->
+            <div id="tab-player" class="tab-pane flex flex-col gap-4">
+
+                <!-- Live Stream & Now Playing Banner -->
+                <div class="bg-card border border-border rounded-lg p-4 flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
+                    <div class="flex items-center gap-3.5 min-w-0">
+                        <div id="currentThumbWrapper" class="w-24 h-14 bg-zinc-900 rounded border border-border flex items-center justify-center overflow-hidden shrink-0 relative">
+                            <img id="currentThumb" src="" alt="Thumbnail" class="w-full h-full object-cover hidden">
+                            <i id="currentThumbPlaceholder" class="ri-film-line text-2xl text-zinc-600"></i>
+                            <span id="currentTypeBadge" class="hidden absolute bottom-1 right-1 text-[9px] font-bold px-1 rounded bg-black/80 text-primary uppercase">VIDEO</span>
+                        </div>
+                        <div class="flex flex-col gap-1 min-w-0">
+                            <div class="flex items-center gap-2">
+                                <span id="streamStateBadge" class="text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 uppercase">STANDBY</span>
+                                <span id="currentDuration" class="text-xs text-muted-foreground font-mono">00:00 / 00:00</span>
+                            </div>
+                            <h3 id="currentTitle" class="text-sm font-semibold text-zinc-100 truncate max-w-lg" title="待機中">
+                                待機中（キューが空です）
+                            </h3>
+                            <p id="currentUrl" class="text-[11px] text-zinc-500 truncate max-w-md cursor-pointer hover:text-primary transition" onclick="copyCurrentUrl()">
+                                URLなし
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Global Stream Controls -->
+                    <div class="flex items-center gap-2 self-end md:self-center shrink-0">
+                        <button id="btnLoopQueue" onclick="toggleLoopQueue()" class="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 text-zinc-400 border border-zinc-700 hover:border-zinc-500 rounded text-xs transition" title="キュー保持ループ再生">
+                            <i class="ri-repeat-line text-sm"></i>
+                            <span>ループ</span>
+                        </button>
+                        <button id="btnShufflePlay" onclick="toggleShufflePlay()" class="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 text-zinc-400 border border-zinc-700 hover:border-zinc-500 rounded text-xs transition" title="シャッフル再生">
+                            <i class="ri-shuffle-line text-sm"></i>
+                            <span>シャッフル</span>
+                        </button>
+                        <button id="btnSkip" onclick="skipCurrent()" class="flex items-center gap-1.5 px-3.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded text-xs font-medium transition" title="次のアイテムへスキップ">
+                            <i class="ri-skip-forward-fill text-sm text-primary"></i>
+                            <span>スキップ</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- VRChat Playback Link Quick-Bar -->
+                <div class="bg-card-muted border border-border rounded-lg px-3 py-2 flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <i class="ri-link text-primary text-base"></i>
+                        <span class="text-xs text-zinc-400 shrink-0">VRChat プレイヤー用URL:</span>
+                        <input id="quickStreamUrl" readonly class="bg-zinc-900 border border-zinc-700/80 rounded px-2 py-0.5 text-xs text-zinc-200 font-mono w-72 md:w-96 truncate focus:outline-none focus:border-primary" value="取得中...">
+                    </div>
+                    <button onclick="copyStreamUrl()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded text-xs transition shrink-0">
+                        <i class="ri-file-copy-line"></i>
+                        <span>コピー</span>
+                    </button>
+                </div>
+
+                <!-- Input Forms Grid (Add YouTube & Photos) -->
+                <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+
+                    <!-- YouTube / URL Input Card -->
+                    <div class="lg:col-span-7 bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <i class="ri-video-add-line text-primary text-base"></i>
+                                <span class="font-semibold text-xs text-zinc-200">YouTube 動画 / プレイリスト追加</span>
+                            </div>
+                            <!-- Mode Toggle Pill -->
+                            <div class="flex items-center bg-zinc-900 p-0.5 rounded border border-border text-[11px]">
+                                <button id="modeVideoBtn" onclick="setAddMode('video')" class="px-2 py-0.5 rounded bg-zinc-800 text-primary font-medium transition">通常動画</button>
+                                <button id="modeRadioBtn" onclick="setAddMode('radio')" class="px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1">
+                                    <i class="ri-radio-line text-xs"></i>
+                                    <span>📻 BGMラジオ</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="flex gap-2">
+                            <div class="relative flex-1">
+                                <i class="ri-youtube-line absolute left-3 top-2.5 text-zinc-500 text-sm"></i>
+                                <input id="inputVideoUrl" type="text" placeholder="https://www.youtube.com/watch?v=... または プレイリストURL" 
+                                    class="w-full bg-zinc-900 border border-zinc-700 rounded pl-9 pr-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-primary transition"
+                                    onkeydown="if(event.key==='Enter') addVideoUrl()">
+                            </div>
+                            <button onclick="addVideoUrl()" id="btnAddUrl" class="px-4 py-1.5 bg-primary hover:bg-primary-hover text-zinc-950 font-bold rounded text-xs transition flex items-center gap-1 shrink-0">
+                                <i class="ri-add-line text-sm"></i>
+                                <span>追加</span>
+                            </button>
+                        </div>
+                        <div class="text-[11px] text-zinc-500 flex items-center gap-1.5">
+                            <i class="ri-information-line"></i>
+                            <span id="modeDescription">通常モード: 高画質・低遅延HLS動画ストリーミング</span>
+                        </div>
+                    </div>
+
+                    <!-- Photo Upload Card -->
+                    <div class="lg:col-span-5 bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <i class="ri-image-add-line text-emerald-400 text-base"></i>
+                                <span class="font-semibold text-xs text-zinc-200">写真・スライドショー共有</span>
+                            </div>
+                            <span class="text-[10px] text-zinc-500">複数枚一括対応</span>
+                        </div>
+
+                        <div id="dropZone" onclick="document.getElementById('fileInput').click()" 
+                            class="border border-dashed border-zinc-700 hover:border-emerald-500/80 bg-zinc-900/60 hover:bg-zinc-900 rounded p-3 text-center cursor-pointer transition flex flex-col items-center gap-1">
+                            <i class="ri-upload-cloud-line text-xl text-zinc-400"></i>
+                            <span class="text-xs text-zinc-300 font-medium">クリックまたは画像をドラッグ＆ドロップ</span>
+                            <span class="text-[10px] text-zinc-500">JPEG, PNG, WebP, GIF</span>
+                            <input type="file" id="fileInput" multiple accept="image/*" class="hidden" onchange="handleImageFiles(this.files)">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Queue List Card -->
+                <div class="bg-card border border-border rounded-lg flex flex-col overflow-hidden">
+                    <div class="p-3 border-b border-border flex items-center justify-between bg-card-muted">
+                        <div class="flex items-center gap-2">
+                            <i class="ri-play-list-2-line text-primary"></i>
+                            <span class="font-semibold text-xs text-zinc-200">再生キュー</span>
+                            <span id="queueCountBadge" class="text-[10px] bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded border border-zinc-700 font-mono">0 件</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="shuffleQueueList()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="キューの順序を即時シャッフル">
+                                <i class="ri-shuffle-line"></i>
+                                <span>並び替えシャッフル</span>
+                            </button>
+                            <button onclick="clearQueueList()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition" title="キューを全消去">
+                                <i class="ri-delete-bin-line"></i>
+                                <span>クリア</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Queue Items Container -->
+                    <div id="queueContainer" class="divide-y divide-border/60 max-h-96 overflow-y-auto">
+                        <!-- Dynamic items will be injected here -->
+                        <div class="p-8 text-center text-zinc-500 text-xs flex flex-col items-center gap-2">
+                            <i class="ri-inbox-line text-2xl"></i>
+                            <span>キューは空です。URLまたは写真を追加してください。</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 2: SETTINGS & QR -->
+            <div id="tab-settings" class="tab-pane hidden flex flex-col gap-4">
+                <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-4">
+                    <div class="flex items-center gap-2 pb-2 border-b border-border">
+                        <i class="ri-qr-code-line text-primary text-base"></i>
+                        <h3 class="font-semibold text-xs text-zinc-200">配信画面 QRコード オーバーレイ設定</h3>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">QRコード表示</label>
+                            <div class="flex items-center gap-4">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" id="settingQrEnabled" onchange="updateSettings()" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                                    <span class="text-xs text-zinc-200">画面上にWebリクエストQRを表示する</span>
+                                </label>
+                            </div>
+                            <p class="text-[11px] text-zinc-500">※有効時は待機画面および動画配信時にWebリクエスト用QRがウォーターマーク表示されます。</p>
+                        </div>
+
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">表示モード / サイズ</label>
+                            <select id="settingQrMode" onchange="updateSettings()" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary">
+                                <option value="bottom-right">コンパクト (右下に小さく表示)</option>
+                                <option value="fullscreen">フル画面 (中央に大きく表示)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-4">
+                    <div class="flex items-center gap-2 pb-2 border-b border-border">
+                        <i class="ri-slideshow-3-line text-emerald-400 text-base"></i>
+                        <h3 class="font-semibold text-xs text-zinc-200">写真スライドショー設定</h3>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">1枚あたりの表示秒数</label>
+                            <div class="flex items-center gap-2">
+                                <input type="number" id="settingImageDuration" min="5" max="300" step="5" value="15" onchange="updateSettings()" class="w-24 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary font-mono">
+                                <span class="text-xs text-zinc-400">秒</span>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">自動スライド送り</label>
+                            <label class="flex items-center gap-2 cursor-pointer mt-1">
+                                <input type="checkbox" id="settingImageAutoAdvance" onchange="updateSettings()" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                                <span class="text-xs text-zinc-200">指定秒数ごとに自動で次の写真へ進む</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-4">
+                    <div class="flex items-center gap-2 pb-2 border-b border-border">
+                        <i class="ri-server-line text-amber-400 text-base"></i>
+                        <h3 class="font-semibold text-xs text-zinc-200">API接続先設定</h3>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">API Base URL</label>
+                            <input type="text" id="settingApiBase" value="http://127.0.0.1:8000" onchange="saveApiBase()" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary font-mono">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 3: INFO & GUIDE -->
+            <div id="tab-info" class="tab-pane hidden flex flex-col gap-4">
+                <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-3">
+                    <div class="flex items-center gap-2 pb-2 border-b border-border">
+                        <i class="ri-link text-primary text-base"></i>
+                        <h3 class="font-semibold text-xs text-zinc-200">ストリーム接続情報</h3>
+                    </div>
+
+                    <div class="flex flex-col gap-2 text-xs">
+                        <div class="flex flex-col gap-1">
+                            <span class="text-zinc-400 font-medium">Cloudflare トンネルURL (Web Player / リモコン用):</span>
+                            <div class="flex gap-2">
+                                <input id="infoTunnelUrl" readonly class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 font-mono text-zinc-200" value="-">
+                                <button onclick="copyElementText('infoTunnelUrl')" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-200">コピー</button>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col gap-1 mt-2">
+                            <span class="text-zinc-400 font-medium">VRChat プレイヤー入力用 URL (iwaSync3 / YPlay / ProTV):</span>
+                            <div class="flex gap-2">
+                                <input id="infoStreamUrl" readonly class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 font-mono text-primary font-bold" value="-">
+                                <button onclick="copyElementText('infoStreamUrl')" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-200">コピー</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-2 text-xs text-zinc-400 leading-relaxed">
+                    <h4 class="font-semibold text-zinc-200 mb-1 flex items-center gap-1.5">
+                        <i class="ri-question-line text-primary"></i> VRChat での再生手順
+                    </h4>
+                    <ol class="list-decimal list-inside space-y-1 text-zinc-300">
+                        <li>上記 <b>VRChat プレイヤー入力用 URL</b> をコピーします。</li>
+                        <li>VRChat ワールド内の動画プレイヤー（iwaSync, TopazChat, YPlay 等）の入力欄にペーストします。</li>
+                        <li>動画または写真を追加すると、自動的に低遅延HLSストリームとして再生されます。</li>
+                    </ol>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-4 right-4 bg-zinc-800 border border-zinc-700 text-zinc-100 text-xs px-3.5 py-2 rounded shadow-lg transform translate-y-12 opacity-0 transition-all duration-200 flex items-center gap-2 pointer-events-none z-50">
+        <i id="toastIcon" class="ri-check-line text-emerald-400 text-sm"></i>
+        <span id="toastMsg">通知メッセージ</span>
+    </div>
+
+    <script>
+        // State
+        let apiBase = localStorage.getItem('vrcyoutube_api_base') || 'http://127.0.0.1:8000';
+        let currentAddMode = 'video';
+        let isOnline = false;
+        let isPolling = false;
+        let draggedItemIndex = null;
+        let currentStatusData = null;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('settingApiBase').value = apiBase;
+            updatePortLabel();
+            checkServerHealth(true);
+            setInterval(() => checkServerHealth(false), 2000);
+            setupDragAndDrop();
+        });
+
+        function updatePortLabel() {
+            try {
+                const url = new URL(apiBase);
+                document.getElementById('labelPort').innerText = url.port || '80';
+            } catch {
+                document.getElementById('labelPort').innerText = '8000';
+            }
+        }
+
+        function saveApiBase() {
+            let val = document.getElementById('settingApiBase').value.trim();
+            if (!val.startsWith('http://') && !val.startsWith('https://')) {
+                val = 'http://' + val;
+            }
+            apiBase = val;
+            localStorage.setItem('vrcyoutube_api_base', apiBase);
+            updatePortLabel();
+            showToast('API接続先を保存しました', 'success');
+            checkServerHealth(true);
+        }
+
+        // Tab Navigation
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-pane').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.nav-tab').forEach(el => {
+                el.classList.remove('active', 'bg-zinc-800', 'text-zinc-200');
+                el.classList.add('text-zinc-400');
+            });
+
+            const targetPane = document.getElementById('tab-' + tabId);
+            const targetNav = document.getElementById('nav-' + tabId);
+            if (targetPane) targetPane.classList.remove('hidden');
+            if (targetNav) {
+                targetNav.classList.add('active', 'bg-zinc-800', 'text-zinc-200');
+                targetNav.classList.remove('text-zinc-400');
+            }
+        }
+
+        // Add Mode Toggle (Normal Video vs BGM Radio)
+        function setAddMode(mode) {
+            currentAddMode = mode;
+            const vBtn = document.getElementById('modeVideoBtn');
+            const rBtn = document.getElementById('modeRadioBtn');
+            const desc = document.getElementById('modeDescription');
+
+            if (mode === 'video') {
+                vBtn.className = "px-2 py-0.5 rounded bg-zinc-800 text-primary font-medium transition";
+                rBtn.className = "px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1";
+                desc.innerText = "通常モード: 高画質・低遅延HLS動画ストリーミング";
+            } else {
+                rBtn.className = "px-2 py-0.5 rounded bg-zinc-800 text-primary font-medium transition flex items-center gap-1";
+                vBtn.className = "px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 transition";
+                desc.innerText = "📻 BGMラジオ: 音声のみ抽出しアルバムアートカード画面と合成（帯域約300kbps・超軽量）";
+            }
+        }
+
+        // Server Health & Status Polling
+        async function checkServerHealth(manual = false) {
+            if (isPolling && !manual) return;
+            isPolling = true;
+
+            try {
+                const res = await fetch(`${apiBase}/api/status`, { cache: 'no-store' });
+                if (res.ok) {
+                    const data = await res.json();
+                    currentStatusData = data;
+                    updateUiOnline(data);
+                } else {
+                    updateUiOffline();
+                }
+            } catch (err) {
+                updateUiOffline();
+            } finally {
+                isPolling = false;
+            }
+        }
+
+        function updateUiOnline(data) {
+            isOnline = true;
+            document.getElementById('statusDot').className = 'w-2 h-2 rounded-full bg-emerald-500';
+            document.getElementById('statusText').innerText = '稼働中 (Active)';
+            document.getElementById('statusText').className = 'text-emerald-400 font-medium';
+
+            document.getElementById('btnHeaderLaunch').classList.add('hidden');
+            document.getElementById('btnHeaderStop').classList.remove('hidden');
+            document.getElementById('btnHeaderRestart').classList.remove('hidden');
+            document.getElementById('offlineBanner').classList.add('hidden');
+
+            // Update Stream URLs
+            const streamUrl = data.stream_url || (data.tunnel_url ? `${data.tunnel_url}/stream.m3u8` : `${apiBase}/stream.m3u8`);
+            const tunnelUrl = data.tunnel_url || apiBase;
+
+            document.getElementById('quickStreamUrl').value = streamUrl;
+            document.getElementById('infoStreamUrl').value = streamUrl;
+            document.getElementById('infoTunnelUrl').value = tunnelUrl;
+            document.getElementById('labelTunnelState').innerText = data.tunnel_url ? 'Active' : 'Local Only';
+
+            // Now Playing
+            const cur = data.current_video;
+            const currentThumb = document.getElementById('currentThumb');
+            const currentThumbPlaceholder = document.getElementById('currentThumbPlaceholder');
+            const currentTypeBadge = document.getElementById('currentTypeBadge');
+            const currentTitle = document.getElementById('currentTitle');
+            const currentUrl = document.getElementById('currentUrl');
+            const currentDuration = document.getElementById('currentDuration');
+            const streamStateBadge = document.getElementById('streamStateBadge');
+
+            if (cur && cur.title) {
+                currentTitle.innerText = cur.title;
+                currentTitle.title = cur.title;
+                currentUrl.innerText = cur.url || '';
+                currentDuration.innerText = formatDuration(cur.duration);
+
+                if (cur.thumbnail) {
+                    currentThumb.src = cur.thumbnail;
+                    currentThumb.classList.remove('hidden');
+                    currentThumbPlaceholder.classList.add('hidden');
+                } else {
+                    currentThumb.classList.add('hidden');
+                    currentThumbPlaceholder.classList.remove('hidden');
+                }
+
+                currentTypeBadge.classList.remove('hidden');
+                if (cur.is_radio) {
+                    currentTypeBadge.innerText = 'RADIO';
+                    currentTypeBadge.className = 'absolute bottom-1 right-1 text-[9px] font-bold px-1 rounded bg-amber-500 text-zinc-950';
+                } else if (cur.is_image || cur.type === 'image') {
+                    currentTypeBadge.innerText = 'PHOTO';
+                    currentTypeBadge.className = 'absolute bottom-1 right-1 text-[9px] font-bold px-1 rounded bg-emerald-500 text-zinc-950';
+                } else {
+                    currentTypeBadge.innerText = 'VIDEO';
+                    currentTypeBadge.className = 'absolute bottom-1 right-1 text-[9px] font-bold px-1 rounded bg-primary text-zinc-950';
+                }
+
+                streamStateBadge.innerText = data.status || 'STREAMING';
+                streamStateBadge.className = 'text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 uppercase';
+            } else {
+                currentTitle.innerText = '待機中（キューが空です）';
+                currentUrl.innerText = 'URLなし';
+                currentDuration.innerText = '00:00 / 00:00';
+                currentThumb.classList.add('hidden');
+                currentThumbPlaceholder.classList.remove('hidden');
+                currentTypeBadge.classList.add('hidden');
+                streamStateBadge.innerText = 'STANDBY';
+                streamStateBadge.className = 'text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 uppercase';
+            }
+
+            // Loop & Shuffle states
+            updateToggleBtn('btnLoopQueue', data.loop_queue);
+            updateToggleBtn('btnShufflePlay', data.shuffle);
+
+            // Queue List
+            renderQueue(data.queue || []);
+
+            // Settings sync
+            if (data.overlay_qr_enabled !== undefined) {
+                document.getElementById('settingQrEnabled').checked = data.overlay_qr_enabled;
+            }
+            if (data.overlay_qr_mode) {
+                document.getElementById('settingQrMode').value = data.overlay_qr_mode;
+            }
+            if (data.image_display_duration) {
+                document.getElementById('settingImageDuration').value = data.image_display_duration;
+            }
+            if (data.image_auto_advance !== undefined) {
+                document.getElementById('settingImageAutoAdvance').checked = data.image_auto_advance;
+            }
+        }
+
+        function updateUiOffline() {
+            isOnline = false;
+            document.getElementById('statusDot').className = 'w-2 h-2 rounded-full bg-red-500';
+            document.getElementById('statusText').innerText = '停止中 (Offline)';
+            document.getElementById('statusText').className = 'text-red-400 font-medium';
+
+            document.getElementById('btnHeaderLaunch').classList.remove('hidden');
+            document.getElementById('btnHeaderStop').classList.add('hidden');
+            document.getElementById('btnHeaderRestart').classList.add('hidden');
+            document.getElementById('offlineBanner').classList.remove('hidden');
+            document.getElementById('labelTunnelState').innerText = 'Offline';
+        }
+
+        function updateToggleBtn(btnId, active) {
+            const btn = document.getElementById(btnId);
+            if (active) {
+                btn.className = "flex items-center gap-1.5 px-3 py-1.5 bg-primary/20 text-primary border border-primary/40 rounded text-xs font-semibold transition";
+            } else {
+                btn.className = "flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 text-zinc-400 border border-zinc-700 hover:border-zinc-500 rounded text-xs transition";
+            }
+        }
+
+        // Render Queue
+        function renderQueue(queue) {
+            const container = document.getElementById('queueContainer');
+            const countBadge = document.getElementById('queueCountBadge');
+            countBadge.innerText = `${queue.length} 件`;
+
+            if (queue.length === 0) {
+                container.innerHTML = `
+                    <div class="p-8 text-center text-zinc-500 text-xs flex flex-col items-center gap-2">
+                        <i class="ri-inbox-line text-2xl"></i>
+                        <span>キューは空です。URLまたは写真を追加してください。</span>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = queue.map((item, index) => {
+                const duration = formatDuration(item.duration);
+                const typeLabel = item.is_radio ? 'RADIO' : ((item.is_image || item.type === 'image') ? 'PHOTO' : 'VIDEO');
+                const typeBadgeColor = item.is_radio ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : ((item.is_image || item.type === 'image') ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-sky-500/10 text-sky-400 border-sky-500/20');
+
+                return `
+                    <div class="queue-row p-2.5 px-3 flex items-center justify-between gap-3 hover:bg-zinc-800/40 transition group" 
+                        draggable="true" data-index="${index}">
+                        
+                        <div class="flex items-center gap-2.5 min-w-0 flex-1">
+                            <span class="drag-handle text-zinc-600 group-hover:text-zinc-400 transition cursor-grab">
+                                <i class="ri-draggable text-base"></i>
+                            </span>
+                            <span class="text-xs font-mono text-zinc-500 w-5 text-center">${index + 1}</span>
+                            <span class="text-[9px] font-bold px-1.5 py-0.5 rounded border ${typeBadgeColor}">${typeLabel}</span>
+                            <div class="flex flex-col min-w-0 flex-1">
+                                <span class="text-xs font-medium text-zinc-200 truncate" title="${escapeHtml(item.title || '無題')}">${escapeHtml(item.title || '無題')}</span>
+                                <span class="text-[10px] text-zinc-500 truncate">${escapeHtml(item.url || '')}</span>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center gap-2 shrink-0">
+                            <span class="text-xs font-mono text-zinc-400">${duration}</span>
+                            <!-- Move Up / Down -->
+                            <div class="flex items-center">
+                                <button onclick="moveQueueItem(${index}, -1)" ${index === 0 ? 'disabled' : ''} class="p-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 transition">
+                                    <i class="ri-arrow-up-s-line text-sm"></i>
+                                </button>
+                                <button onclick="moveQueueItem(${index}, 1)" ${index === queue.length - 1 ? 'disabled' : ''} class="p-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 transition">
+                                    <i class="ri-arrow-down-s-line text-sm"></i>
+                                </button>
+                            </div>
+                            <!-- Delete -->
+                            <button onclick="removeQueueItem(${index})" class="p-1 text-zinc-500 hover:text-red-400 transition" title="キューから削除">
+                                <i class="ri-close-line text-base"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            bindDragEvents();
+        }
+
+        // Drag & Drop Queue Reordering
+        function setupDragAndDrop() {
+            const dropZone = document.getElementById('dropZone');
+            ['dragenter', 'dragover'].forEach(name => {
+                dropZone.addEventListener(name, (e) => {
+                    e.preventDefault();
+                    dropZone.classList.add('border-emerald-500', 'bg-emerald-950/20');
+                });
+            });
+            ['dragleave', 'drop'].forEach(name => {
+                dropZone.addEventListener(name, (e) => {
+                    e.preventDefault();
+                    dropZone.classList.remove('border-emerald-500', 'bg-emerald-950/20');
+                });
+            });
+            dropZone.addEventListener('drop', (e) => {
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    handleImageFiles(e.dataTransfer.files);
+                }
+            });
+        }
+
+        function bindDragEvents() {
+            const rows = document.querySelectorAll('.queue-row');
+            rows.forEach(row => {
+                row.addEventListener('dragstart', (e) => {
+                    draggedItemIndex = parseInt(row.getAttribute('data-index'));
+                    row.classList.add('dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                });
+                row.addEventListener('dragend', () => {
+                    row.classList.remove('dragging');
+                    document.querySelectorAll('.queue-row').forEach(r => r.classList.remove('drag-over'));
+                });
+                row.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    row.classList.add('drag-over');
+                });
+                row.addEventListener('dragleave', () => {
+                    row.classList.remove('drag-over');
+                });
+                row.addEventListener('drop', async (e) => {
+                    e.preventDefault();
+                    row.classList.remove('drag-over');
+                    const targetIndex = parseInt(row.getAttribute('data-index'));
+                    if (draggedItemIndex !== null && draggedItemIndex !== targetIndex) {
+                        await reorderQueueApi(draggedItemIndex, targetIndex);
+                    }
+                });
+            });
+        }
+
+        // API Actions
+        async function addVideoUrl() {
+            const input = document.getElementById('inputVideoUrl');
+            const url = input.value.trim();
+            if (!url) return;
+
+            const btn = document.getElementById('btnAddUrl');
+            btn.disabled = true;
+            btn.innerHTML = `<i class="ri-loader-4-line animate-spin text-sm"></i>`;
+
+            try {
+                // If in radio mode, update radio_mode setting first
+                if (currentAddMode === 'radio') {
+                    await fetch(`${apiBase}/api/control`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ action: 'set_radio_mode', enabled: true })
+                    });
+                }
+
+                const res = await fetch(`${apiBase}/api/queue`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url })
+                });
+
+                if (res.ok) {
+                    input.value = '';
+                    showToast('キューに追加しました', 'success');
+                    checkServerHealth(true);
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    showToast(err.message || '追加に失敗しました', 'danger');
+                }
+            } catch (e) {
+                showToast('APIサーバーと通信できませんでした', 'danger');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = `<i class="ri-add-line text-sm"></i><span>追加</span>`;
+            }
+        }
+
+        async function handleImageFiles(files) {
+            if (!files || files.length === 0) return;
+
+            showToast(`${files.length}枚の画像をキューに追加中...`, 'info');
+
+            let successCount = 0;
+            for (let i = 0; i < files.length; i++) {
+                const formData = new FormData();
+                formData.append('image', files[i]);
+
+                try {
+                    const res = await fetch(`${apiBase}/api/upload`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    if (res.ok) successCount++;
+                } catch (e) {}
+            }
+
+            if (successCount > 0) {
+                showToast(`${successCount}枚の画像を追加しました`, 'success');
+                checkServerHealth(true);
+            } else {
+                showToast('画像の追加に失敗しました', 'danger');
+            }
+        }
+
+        async function skipCurrent() {
+            try {
+                await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'skip' })
+                });
+                showToast('スキップしました', 'info');
+                checkServerHealth(true);
+            } catch (e) {
+                showToast('操作に失敗しました', 'danger');
+            }
+        }
+
+        async function toggleLoopQueue() {
+            const nextState = !(currentStatusData && currentStatusData.loop_queue);
+            try {
+                await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'set_loop', enabled: nextState })
+                });
+                showToast(`ループ再生: ${nextState ? '有効' : '無効'}`, 'info');
+                checkServerHealth(true);
+            } catch (e) {
+                showToast('操作に失敗しました', 'danger');
+            }
+        }
+
+        async function toggleShufflePlay() {
+            const nextState = !(currentStatusData && currentStatusData.shuffle);
+            try {
+                await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'set_shuffle', enabled: nextState })
+                });
+                showToast(`シャッフル再生: ${nextState ? '有効' : '無効'}`, 'info');
+                checkServerHealth(true);
+            } catch (e) {
+                showToast('操作に失敗しました', 'danger');
+            }
+        }
+
+        async function shuffleQueueList() {
+            try {
+                await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'shuffle' })
+                });
+                showToast('キューの並び順をシャッフルしました', 'success');
+                checkServerHealth(true);
+            } catch (e) {
+                showToast('操作に失敗しました', 'danger');
+            }
+        }
+
+        async function clearQueueList() {
+            if (!confirm('再生キューをすべてクリアしますか？')) return;
+            try {
+                await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'clear_queue' })
+                });
+                showToast('キューをクリアしました', 'info');
+                checkServerHealth(true);
+            } catch (e) {
+                showToast('操作に失敗しました', 'danger');
+            }
+        }
+
+        async function removeQueueItem(index) {
+            try {
+                await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'delete_item', index: index })
+                });
+                checkServerHealth(true);
+            } catch (e) {
+                showToast('操作に失敗しました', 'danger');
+            }
+        }
+
+        async function moveQueueItem(fromIdx, delta) {
+            const toIdx = fromIdx + delta;
+            await reorderQueueApi(fromIdx, toIdx);
+        }
+
+        async function reorderQueueApi(fromIndex, toIndex) {
+            try {
+                await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'move_item', from_index: fromIndex, to_index: toIndex })
+                });
+                checkServerHealth(true);
+            } catch (e) {
+                showToast('並び替えに失敗しました', 'danger');
+            }
+        }
+
+        async function updateSettings() {
+            const qrEnabled = document.getElementById('settingQrEnabled').checked;
+            const qrMode = document.getElementById('settingQrMode').value;
+            const duration = parseInt(document.getElementById('settingImageDuration').value) || 15;
+            const autoAdvance = document.getElementById('settingImageAutoAdvance').checked;
+
+            try {
+                await fetch(`${apiBase}/api/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        overlay_qr_enabled: qrEnabled,
+                        overlay_qr_video: qrEnabled,
+                        overlay_qr_image: qrEnabled,
+                        overlay_qr_mode: qrMode,
+                        image_display_duration: duration,
+                        image_auto_advance: autoAdvance
+                    })
+                });
+                showToast('設定を保存しました', 'success');
+            } catch (e) {
+                showToast('設定の保存に失敗しました', 'danger');
+            }
+        }
+
+        // Server Lifecycle Management
+        async function handleLaunchServer() {
+            showToast('サーバー起動を要求しています...', 'info');
+
+            // 1. Check if running inside VRCBeacon / Electron with IPC
+            if (window.electron && window.electron.ipcRenderer) {
+                try {
+                    await window.electron.ipcRenderer.invoke('plugin:launch', 'vrcyoutube-streamer');
+                    setTimeout(() => checkServerHealth(true), 2000);
+                    return;
+                } catch (e) {
+                    console.log('VRCBeacon IPC not available:', e);
+                }
+            }
+
+            // 2. Guide user for standalone mode
+            showToast('起動コマンドを実行するか、VRCBeaconからプラグインを起動してください', 'info');
+            setTimeout(() => checkServerHealth(true), 2500);
+        }
+
+        async function handleStopServer() {
+            if (!confirm('VRCYouTube サーバーを停止しますか？')) return;
+            try {
+                await fetch(`${apiBase}/api/shutdown`, { method: 'POST' });
+                showToast('サーバー停止シグナルを送信しました', 'info');
+                setTimeout(() => checkServerHealth(true), 1200);
+            } catch (e) {
+                showToast('停止リクエストを送信しました', 'info');
+                setTimeout(() => checkServerHealth(true), 1200);
+            }
+        }
+
+        async function handleRestartServer() {
+            if (!confirm('VRCYouTube サーバーを再起動しますか？')) return;
+            showToast('再起動シグナル送信中...', 'info');
+            try {
+                await fetch(`${apiBase}/api/shutdown`, { method: 'POST' });
+            } catch (e) {}
+            setTimeout(() => handleLaunchServer(), 1500);
+        }
+
+        function openWebPlayer() {
+            window.open(apiBase, '_blank');
+        }
+
+        function copyStreamUrl() {
+            const url = document.getElementById('quickStreamUrl').value;
+            if (!url || url === '取得中...') return;
+            navigator.clipboard.writeText(url);
+            showToast('VRChat用ストリームURLをコピーしました', 'success');
+        }
+
+        function copyCurrentUrl() {
+            const url = document.getElementById('currentUrl').innerText;
+            if (url && url !== 'URLなし') {
+                navigator.clipboard.writeText(url);
+                showToast('動画URLをコピーしました', 'success');
+            }
+        }
+
+        function copyElementText(elId) {
+            const val = document.getElementById(elId).value;
+            if (val && val !== '-') {
+                navigator.clipboard.writeText(val);
+                showToast('クリップボードにコピーしました', 'success');
+            }
+        }
+
+        // Helpers
+        function formatDuration(sec) {
+            if (!sec || isNaN(sec) || sec <= 0) return '00:00';
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60);
+            return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+        }
+
+        function showToast(msg, type = 'info') {
+            const toast = document.getElementById('toast');
+            const icon = document.getElementById('toastIcon');
+            const text = document.getElementById('toastMsg');
+
+            text.innerText = msg;
+            if (type === 'success') {
+                icon.className = 'ri-checkbox-circle-fill text-emerald-400 text-sm';
+            } else if (type === 'danger') {
+                icon.className = 'ri-error-warning-fill text-rose-400 text-sm';
+            } else {
+                icon.className = 'ri-information-fill text-sky-400 text-sm';
+            }
+
+            toast.classList.remove('opacity-0', 'translate-y-12');
+            toast.classList.add('opacity-100', 'translate-y-0');
+
+            setTimeout(() => {
+                toast.classList.remove('opacity-100', 'translate-y-0');
+                toast.classList.add('opacity-0', 'translate-y-12');
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
