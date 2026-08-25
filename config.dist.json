@@ -1,0 +1,23 @@
+{
+  "host": "127.0.0.1",
+  "trust_lan_clients": false,
+  "port": 8000,
+  "enable_tunnel": true,
+  "hls_segment_time": 3,
+  "hls_list_size": 15,
+  "video_transition_wait_seconds": 1,
+  "live_sync_duration_count": 4,
+  "loop_queue": true,
+  "shuffle": false,
+  "allow_web_queue_add": true,
+  "allow_web_queue_edit": true,
+  "allow_web_playback_control": true,
+  "image_display_duration": 5,
+  "image_auto_advance": true,
+  "overlay_qr_enabled": false,
+  "overlay_qr_video": false,
+  "overlay_qr_image": false,
+  "overlay_qr_mode": "bottom-right",
+  "radio_mode": true,
+  "radio_bg_source": "card"
+}

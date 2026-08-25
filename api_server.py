@@ -670,21 +670,31 @@ class APIServer:
 
     def start(self):
         port = self.streamer_core.config.get("port", 8000)
-        host = self.streamer_core.config.get("host", "0.0.0.0")
-        
-        # 0.0.0.0 または トンネル無効時（ローカルテスト時）は全インターフェースへバインドしてLAN内からアクセス可能にする
-        is_tunnel_disabled = bool(self.streamer_core and not self.streamer_core.enable_tunnel)
-        if host in ("0.0.0.0", "") or is_tunnel_disabled:
-            bind_host = ""
-        else:
-            bind_host = host
+        host = self.streamer_core.config.get("host", "127.0.0.1")
+
+        # config の host をそのまま尊重する。
+        # 以前はトンネル無効時に host 設定を無視して全インターフェースへバインドしており、
+        # "127.0.0.1" 指定でも実際は 0.0.0.0 で待ち受けていた（ログ表示も実態と食い違っていた）。
+        # LAN公開したい場合は host を "0.0.0.0" にするか、起動時に --host 0.0.0.0 を渡す。
+        bind_host = "" if host in ("0.0.0.0", "") else host
+        listens_on_all = bind_host == ""
 
         from streamer_core import get_local_ip
         local_ip = get_local_ip()
 
         try:
             self.httpd = ThreadedHTTPServer((bind_host, port), self.create_handler)
-            log_print(f"[APIServer] Listening on {host or '0.0.0.0'}:{port} (Local: http://127.0.0.1:{port}, LAN: http://{local_ip}:{port})")
+            endpoints = f"Local: http://127.0.0.1:{port}"
+            if listens_on_all:
+                endpoints += f", LAN: http://{local_ip}:{port}"
+            log_print(f"[APIServer] Listening on {'0.0.0.0' if listens_on_all else host}:{port} ({endpoints})")
+            if listens_on_all:
+                trust_lan = bool(self.streamer_core.config.get("trust_lan_clients", False))
+                log_print(
+                    "[APIServer] Bound to ALL interfaces. LAN clients are treated as "
+                    + ("HOSTS (trust_lan_clients=true)" if trust_lan
+                       else "guests (allow_web_* permissions apply)")
+                )
             self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
             self.server_thread.start()
             return True

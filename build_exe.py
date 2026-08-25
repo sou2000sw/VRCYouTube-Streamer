@@ -1,6 +1,8 @@
 import os
 import sys
 import io
+import json
+import time
 import argparse
 import subprocess
 import shutil
@@ -15,6 +17,42 @@ if sys.platform == "win32" and sys.stdout is not None:
 
 APP_VERSION = "2.6.0"
 
+# 配布物に含めてはいけない実行時生成物・作業ファイル。
+# hls_output/ には利用者がアップロードした写真が溜まるため、同梱するとプライバシー漏洩になる。
+EXCLUDED_DIRS = {"hls_output", "__pycache__", ".pytest_cache", ".git", "build"}
+EXCLUDED_FILE_SUFFIXES = (".log", ".pyc", ".pyo", ".tmp")
+
+
+def iter_packagable_files(root_dir):
+    """配布ZIPに含めてよいファイルだけを列挙する。"""
+    for root, dirs, files in os.walk(root_dir):
+        dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
+        for file in files:
+            if file.lower().endswith(EXCLUDED_FILE_SUFFIXES):
+                continue
+            yield os.path.join(root, file)
+
+
+def write_dist_config(dest_path, overrides=None):
+    """配布用テンプレート config.dist.json から設定ファイルを生成する。
+
+    開発中の作業用 config.json をそのまま同梱すると、開発者のローカル設定
+    (ポート・トンネル無効・ラジオ背景など) が配布物の既定値になってしまうため、
+    配布用テンプレートを正本として分離している。
+    """
+    template = os.path.abspath("config.dist.json")
+    if not os.path.exists(template):
+        print("[WARN] config.dist.json not found; skipping config generation.", flush=True)
+        return False
+    with open(template, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    if overrides:
+        cfg.update(overrides)
+    with open(dest_path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    return True
+
 def generate_startup_shortcuts(target_dir):
     """指定ディレクトリに各種起動用バッチファイルを作成"""
     os.makedirs(target_dir, exist_ok=True)
@@ -25,10 +63,11 @@ def generate_startup_shortcuts(target_dir):
         f.write('@echo off\r\n'
                 'echo ======================================================\r\n'
                 'echo Starting VRCYouTube Streamer in Local Test Mode\r\n'
-                'echo (Cloudflare Tunnel: DISABLED)\r\n'
-                'echo Local URL: http://localhost:8000\r\n'
+                'echo (Cloudflare Tunnel: DISABLED / LAN access: ENABLED)\r\n'
+                'echo Local URL: http://localhost:8000/  (or the "port" in config.json)\r\n'
+                'echo Phone/QR sharing works over the same Wi-Fi.\r\n'
                 'echo ======================================================\r\n'
-                'start "" "%~dp0VRCYouTubeStreamer.exe" --no-tunnel\r\n')
+                'start "" "%~dp0VRCYouTubeStreamer.exe" --no-tunnel --host 0.0.0.0\r\n')
     print(f"Created startup shortcut: {bat_local}", flush=True)
 
     # 2. 通常起動バッチ (トンネルあり)
@@ -48,9 +87,10 @@ def generate_startup_shortcuts(target_dir):
         f.write('@echo off\r\n'
                 'echo ======================================================\r\n'
                 'echo Starting VRCYouTube Streamer in Headless Local Mode\r\n'
-                'echo (Cloudflare Tunnel: DISABLED, GUI: DISABLED)\r\n'
+                'echo (Cloudflare Tunnel: DISABLED, GUI: DISABLED / LAN access: ENABLED)\r\n'
+                'echo Local URL: http://localhost:8000/  (or the "port" in config.json)\r\n'
                 'echo ======================================================\r\n'
-                '"%~dp0VRCYouTubeStreamer.exe" --headless --no-tunnel\r\n'
+                '"%~dp0VRCYouTubeStreamer.exe" --headless --no-tunnel --host 0.0.0.0\r\n'
                 'pause\r\n')
     print(f"Created startup shortcut: {bat_headless}", flush=True)
 
@@ -121,21 +161,25 @@ def package_plugin(version=APP_VERSION):
         shutil.copy2(ffmpeg_src, os.path.join(plugin_bin, "ffmpeg.exe"))
         print(f"[OK] Copied ffmpeg.exe -> plugin/bin/", flush=True)
 
-    src_config = os.path.abspath("config.json")
-    if os.path.exists(src_config):
-        shutil.copy2(src_config, os.path.join(plugin_bin, "config.json"))
-        print("[OK] Copied config.json -> plugin/bin/", flush=True)
+    # プラグインは VRCBeacon がローカルでプロセス起動するため、
+    # plugin.json の --port 8000 に合わせつつトンネルは既定で無効にする。
+    if write_dist_config(os.path.join(plugin_bin, "config.json"), {"enable_tunnel": False}):
+        print("[OK] Generated config.json from config.dist.json -> plugin/bin/", flush=True)
+
+    # 実行時に生成された写真・HLSセグメントを配布物へ混入させない
+    stale_runtime = os.path.join(plugin_bin, "hls_output")
+    if os.path.isdir(stale_runtime):
+        shutil.rmtree(stale_runtime, ignore_errors=True)
+        print("[OK] Removed runtime artifacts: plugin/bin/hls_output/", flush=True)
 
     # 3. プラグインZIPアーカイブ作成
     zip_path = os.path.join(releases_root, f"vrcbeacon-plugin-vrcyoutube-v{version}.zip")
     print(f"Creating Plugin ZIP archive: {zip_path} ...", flush=True)
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for root, dirs, files in os.walk(plugin_root):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, plugin_root)
-                    zf.write(file_path, arcname)
+            for file_path in iter_packagable_files(plugin_root):
+                arcname = os.path.relpath(file_path, plugin_root)
+                zf.write(file_path, arcname)
         print(f"[OK] Successfully generated Plugin ZIP: {zip_path}", flush=True)
     except Exception as e:
         print(f"[WARN] Failed to create Plugin ZIP: {e}", flush=True)
@@ -168,18 +212,28 @@ def create_versioned_release(version=APP_VERSION):
     else:
         print("[WARN] ffmpeg.exe was not found to package.", flush=True)
 
-    # 3. config.json のコピー
-    src_config = os.path.abspath("config.json")
-    if os.path.exists(src_config):
-        shutil.copy2(src_config, os.path.join(target_dir, "config.json"))
-        print("[OK] Copied config.json", flush=True)
+    # 3. config.json の生成 (配布用テンプレート config.dist.json から)
+    if write_dist_config(os.path.join(target_dir, "config.json")):
+        print("[OK] Generated config.json from config.dist.json", flush=True)
 
     # 4. ドキュメント類のコピー
-    for doc in ["dist/README.txt", "dist/FFmpeg_LICENSE.txt", "CHANGELOG.md", "README.md"]:
-        if os.path.exists(doc):
-            dest_name = os.path.basename(doc)
-            shutil.copy2(doc, os.path.join(target_dir, dest_name))
-            print(f"[OK] Copied {dest_name}", flush=True)
+    #    正本はリポジトリ直下に置く。dist/ は .gitignore 対象のビルド成果物であり、
+    #    そこにしか無いドキュメントはクリーンビルドで失われるため、直下 → dist の順で探す。
+    doc_candidates = [
+        ["README.txt", "dist/README.txt"],
+        ["FFmpeg_LICENSE.txt", "dist/FFmpeg_LICENSE.txt"],
+        ["CHANGELOG.md"],
+        ["README.md"],
+    ]
+    for candidates in doc_candidates:
+        for doc in candidates:
+            if os.path.exists(doc):
+                dest_name = os.path.basename(doc)
+                shutil.copy2(doc, os.path.join(target_dir, dest_name))
+                print(f"[OK] Copied {dest_name} (from {doc})", flush=True)
+                break
+        else:
+            print(f"[WARN] Document not found: {candidates[0]}", flush=True)
 
     # 5. 各種起動用バッチファイルの生成
     generate_startup_shortcuts(target_dir)
@@ -189,11 +243,9 @@ def create_versioned_release(version=APP_VERSION):
     print(f"Creating ZIP archive: {zip_path} ...", flush=True)
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for root, dirs, files in os.walk(target_dir):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, releases_root)
-                    zf.write(file_path, arcname)
+            for file_path in iter_packagable_files(target_dir):
+                arcname = os.path.relpath(file_path, releases_root)
+                zf.write(file_path, arcname)
         print(f"[OK] Successfully generated ZIP: {zip_path}", flush=True)
     except Exception as e:
         print(f"[WARN] Failed to create ZIP archive: {e}", flush=True)
@@ -201,11 +253,113 @@ def create_versioned_release(version=APP_VERSION):
     # 7. プラグインパッケージの作成
     package_plugin(version)
 
+    # 8. 配布物のスモークテスト
+    if not verify_release(target_dir):
+        print("[FAIL] Release verification failed. See errors above.", flush=True)
+        sys.exit(1)
+
     print(f"\n==================================================", flush=True)
     print(f"Release v{version} package created successfully!", flush=True)
     print(f"Folder: {target_dir}")
     print(f"Zip:    {zip_path}")
     print(f"==================================================\n", flush=True)
+
+def verify_release(target_dir, port=8991, timeout=45):
+    """ビルドした配布物を実際に起動し、Web リモコン UI が正しく配信されるか検証する。
+
+    v2.6.0 では (1) ui/index.html が EXE に同梱されず (2) 代替の内蔵テンプレートが
+    <body> ごと壊れていた、という2つの不具合が配布物にそのまま乗った。
+    どちらも「起動して GET / の中身を見る」だけで検出できるため、ビルドの一部として常に実行する。
+    """
+    import urllib.request
+
+    exe_path = os.path.join(target_dir, "VRCYouTubeStreamer.exe")
+    ui_path = os.path.abspath(os.path.join("ui", "index.html"))
+
+    print(f"\n==================================================", flush=True)
+    print(f"Verifying release package...", flush=True)
+    print(f"==================================================", flush=True)
+
+    if not os.path.exists(exe_path):
+        print(f"[FAIL] {exe_path} not found.", flush=True)
+        return False
+    if not os.path.exists(ui_path):
+        print(f"[FAIL] {ui_path} not found (UI source of truth is missing).", flush=True)
+        return False
+
+    with open(ui_path, "r", encoding="utf-8") as f:
+        expected_ui = f.read()
+
+    proc = subprocess.Popen(
+        [exe_path, "--headless", "--no-tunnel", "--port", str(port), "--host", "127.0.0.1"],
+        cwd=target_dir,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        served = None
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as r:
+                    served = r.read().decode("utf-8")
+                break
+            except Exception:
+                time.sleep(1)
+
+        if served is None:
+            print(f"[FAIL] Server did not respond on port {port} within {timeout}s.", flush=True)
+            return False
+
+        # 1. 配信された HTML が UI 正本と一致するか
+        #    (api_server 側で __TUNNEL_STREAM_URL__ 等が置換されるため、その分だけ差異を許容)
+        normalized = expected_ui
+        for placeholder in ("__LIVE_SYNC_DURATION_COUNT__", "__TUNNEL_STREAM_URL__"):
+            normalized = normalized.replace(placeholder, "")
+        served_stripped = served
+        if len(served_stripped) < len(normalized) * 0.9:
+            print(f"[FAIL] Served UI is too small: {len(served)} chars "
+                  f"(expected around {len(expected_ui)}). "
+                  f"ui/index.html is probably not bundled into the EXE.", flush=True)
+            return False
+
+        # 2. HTML として壊れていないか (script タグの開閉が釣り合っているか)
+        opens = served.count("<script")
+        closes = served.count("</script>")
+        if opens != closes:
+            print(f"[FAIL] Malformed HTML: {opens} '<script' vs {closes} '</script>'.", flush=True)
+            return False
+        for tag in ("<body", "</body>", "</html>"):
+            if tag not in served:
+                print(f"[FAIL] Malformed HTML: '{tag}' is missing from the served page.", flush=True)
+                return False
+
+        # 3. CORS ヘッダが重複していないか (複数の ACAO はブラウザの CORS を失敗させる)
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=3) as r:
+            acao = r.headers.get_all("Access-Control-Allow-Origin") or []
+        if len(acao) != 1:
+            print(f"[FAIL] Access-Control-Allow-Origin appears {len(acao)} times (must be exactly 1).", flush=True)
+            return False
+
+        print(f"[OK] Served UI: {len(served)} chars, script tags balanced ({opens}/{closes}).", flush=True)
+        print(f"[OK] CORS headers are not duplicated.", flush=True)
+        print(f"[OK] Release package verified.", flush=True)
+        return True
+    finally:
+        try:
+            proc.terminate()
+            proc.wait(timeout=10)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        # 検証のために起動したことで生成された実行時ファイルを配布フォルダから除去する
+        for artifact in ("hls_output",):
+            stale = os.path.join(target_dir, artifact)
+            if os.path.isdir(stale):
+                shutil.rmtree(stale, ignore_errors=True)
+
 
 def build(version=APP_VERSION):
     print(f"Starting PyInstaller build process for v{version}...", flush=True)
@@ -228,6 +382,7 @@ def build(version=APP_VERSION):
         "--noconsole",
         "--name", "VRCYouTubeStreamer",
         "--add-data", "cloudflared.exe;.",
+        "--add-data", "ui;ui",
         "--collect-all", "customtkinter",
         "--collect-all", "qrcode",
         "--collect-all", "PIL",
