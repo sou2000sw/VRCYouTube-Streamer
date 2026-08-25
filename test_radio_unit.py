@@ -146,7 +146,49 @@ def test_radio_api():
         server.stop()
         core.shutdown()
 
+def test_radio_slideshow_advance():
+    print("\n=== Testing Radio Mode Slideshow Auto Advance ===")
+    core = StreamerCore(override_port=8997, override_enable_tunnel=False)
+    
+    # テスト用ダミー画像作成
+    test_img1 = Image.new("RGB", (800, 600), color=(255, 0, 0))
+    test_img2 = Image.new("RGB", (800, 600), color=(0, 255, 0))
+    
+    p1 = core.optimize_image_to_cache(test_img1, "test_photo_1.png")
+    p2 = core.optimize_image_to_cache(test_img2, "test_photo_2.png")
+    
+    assert p1 is not None and os.path.exists(p1)
+    assert p2 is not None and os.path.exists(p2)
+    
+    # 1. get_slideshow_images で画像が取得できるか
+    images = core.get_slideshow_images()
+    assert len(images) >= 2
+    print(f"Discovered {len(images)} slideshow images:", images[:2])
+    
+    # 2. 自動送りが有効な設定での動作確認
+    core.set_radio_mode(True)
+    core.set_radio_bg_source("slideshow")
+    core.set_image_auto_advance(True)
+    core.set_image_duration(10)
+    
+    assert core.config["radio_bg_source"] == "slideshow"
+    assert core.config["image_auto_advance"] is True
+    assert core.config["image_display_duration"] == 10
+    
+    # 一時画像ファイルのクリーンアップ
+    for p in (p1, p2):
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+
+    core.shutdown()
+    print("[PASS] Radio Mode Slideshow Auto Advance Tests Passed!")
+
 if __name__ == "__main__":
     test_radio_card_generation()
     test_radio_core()
     test_radio_api()
+    test_radio_slideshow_advance()
+

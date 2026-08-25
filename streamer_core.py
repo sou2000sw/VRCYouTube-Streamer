@@ -8,6 +8,8 @@ import random
 import socket
 import threading
 import subprocess
+import shutil
+import atexit
 import urllib.request
 import urllib.parse
 import yt_dlp
@@ -33,6 +35,29 @@ QR_OVERLAY_PATH = os.path.join(HLS_DIR, "qr_overlay.png")
 CLOUDFLARED_EXE = os.path.join(BASE_PATH, "cloudflared.exe")
 LOCAL_FFMPEG = os.path.join(APP_DIR, "ffmpeg.exe")
 
+def cleanup_hls_dir_completely():
+    """HLS出力ディレクトリ内の一時ファイル・フォルダを完全に削除"""
+    if not os.path.exists(HLS_DIR):
+        return
+    for attempt in range(3):
+        try:
+            for item in os.listdir(HLS_DIR):
+                item_path = os.path.join(HLS_DIR, item)
+                try:
+                    if os.path.isdir(item_path):
+                        shutil.rmtree(item_path, ignore_errors=True)
+                    else:
+                        os.remove(item_path)
+                except Exception:
+                    pass
+            if not os.listdir(HLS_DIR):
+                break
+            time.sleep(0.1)
+        except Exception:
+            pass
+
+atexit.register(cleanup_hls_dir_completely)
+
 def get_local_ip():
     """LAN内の自ホストIPアドレスを取得 (例: 192.168.1.100)"""
     try:
@@ -49,8 +74,8 @@ DEFAULT_CONFIG = {
     "port": 8000,
     "enable_tunnel": True,
     "hls_segment_time": 3,
-    "hls_list_size": 10,
-    "video_transition_wait_seconds": 5,
+    "hls_list_size": 15,
+    "video_transition_wait_seconds": 1,
     "live_sync_duration_count": 4,
     "loop_queue": False,
     "shuffle": False,
@@ -154,6 +179,48 @@ def is_image_url_or_file(path_or_url):
     clean = path_or_url.split("?")[0].split("#")[0].lower()
     return clean.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
 
+def extract_pts_from_ts_chunk(chunk):
+    """MPEG-TSチャンクから最新のPTS（タイムスタンプ・秒単位）を抽出"""
+    length = len(chunk)
+    if length < 188:
+        return None
+    latest_pts = None
+    offset = 0
+    while offset + 188 <= length:
+        if chunk[offset] == 0x47:
+            pkt = chunk[offset:offset+188]
+            payload_unit_start = bool(pkt[1] & 0x40)
+            adaptation_field_ctrl = (pkt[3] >> 4) & 0x03
+            
+            payload_offset = 4
+            if adaptation_field_ctrl in (2, 3):
+                adaptation_len = pkt[4]
+                payload_offset += 1 + adaptation_len
+                
+            if payload_unit_start and payload_offset + 9 <= 188:
+                if pkt[payload_offset] == 0x00 and pkt[payload_offset+1] == 0x00 and pkt[payload_offset+2] == 0x01:
+                    stream_id = pkt[payload_offset+3]
+                    if (0xE0 <= stream_id <= 0xEF) or (0xC0 <= stream_id <= 0xDF):
+                        flags2 = pkt[payload_offset+7]
+                        pts_flag = (flags2 >> 7) & 0x01
+                        if pts_flag and payload_offset + 14 <= 188:
+                            b0 = pkt[payload_offset+9]
+                            b1 = pkt[payload_offset+10]
+                            b2 = pkt[payload_offset+11]
+                            b3 = pkt[payload_offset+12]
+                            b4 = pkt[payload_offset+13]
+                            pts = (((b0 & 0x0E) << 29) | ((b1 & 0xFF) << 22) |
+                                   ((b2 & 0xFE) << 14) | ((b3 & 0xFF) << 7) |
+                                   ((b4 & 0xFE) >> 1))
+                            latest_pts = pts / 90000.0
+            offset += 188
+        else:
+            next_sync = chunk.find(b'\x47', offset + 1)
+            if next_sync == -1:
+                break
+            offset = next_sync
+    return latest_pts
+
 class StreamerCore:
     def __init__(self, override_port=None, override_host=None, override_enable_tunnel=None):
         self.config = DEFAULT_CONFIG.copy()
@@ -168,7 +235,7 @@ class StreamerCore:
         self.enable_tunnel = bool(self.config.get("enable_tunnel", True))
 
         os.makedirs(HLS_DIR, exist_ok=True)
-        self.clean_hls_dir()
+        self.clean_hls_dir(all_files=True)
 
         # プロセスと同期
         self.hls_proc = None
@@ -180,6 +247,12 @@ class StreamerCore:
         self.history_stack = [] # 履歴管理用 (最大20件)
         self.queue_lock = threading.Lock()
         self.process_lock = threading.Lock()
+
+        # 累積PTSとシームレス遷移管理
+        self.accumulated_pts = 0.0
+        self.last_stream_duration = 0.0
+        self.prefetch_cache = {}
+        self.prefetch_lock = threading.Lock()
 
         # 状態
         # status: "offline", "buffering", "streaming", "finishing", "error"
@@ -196,16 +269,34 @@ class StreamerCore:
         self.reload_stream_event = threading.Event()
         self.current_video_start_time = None
 
-    def clean_hls_dir(self):
-        try:
-            for f in os.listdir(HLS_DIR):
-                if f.endswith(".ts") or f.endswith(".m3u8"):
-                    try:
-                        os.remove(os.path.join(HLS_DIR, f))
-                    except Exception:
-                        pass
-        except Exception as e:
-            log_print(f"[Core] Warning cleaning HLS dir: {e}")
+    def clean_hls_dir(self, all_files=False):
+        """HLS出力ディレクトリのクリーンアップ。all_files=Trueの場合はサブディレクトリ・画像を含む全ファイルを削除"""
+        if not os.path.exists(HLS_DIR):
+            return
+        for attempt in range(3):
+            try:
+                for item in os.listdir(HLS_DIR):
+                    item_path = os.path.join(HLS_DIR, item)
+                    if all_files:
+                        try:
+                            if os.path.isdir(item_path):
+                                shutil.rmtree(item_path, ignore_errors=True)
+                            else:
+                                os.remove(item_path)
+                        except Exception:
+                            pass
+                    else:
+                        if item.endswith(".ts") or item.endswith(".m3u8"):
+                            try:
+                                os.remove(item_path)
+                            except Exception:
+                                pass
+                if all_files and not os.listdir(HLS_DIR):
+                    break
+                time.sleep(0.1)
+            except Exception as e:
+                log_print(f"[Core] Warning cleaning HLS dir: {e}")
+                time.sleep(0.1)
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -390,11 +481,11 @@ class StreamerCore:
                 time.sleep(0.2)
 
         seg_time = str(self.config.get("hls_segment_time", 3))
-        list_size = str(self.config.get("hls_list_size", 10))
+        list_size = str(self.config.get("hls_list_size", 15))
 
         cmd = [
             get_ffmpeg_cmd(), "-y",
-            "-fflags", "+nobuffer+flush_packets",
+            "-fflags", "+nobuffer+flush_packets+genpts+igndts",
             "-i", "pipe:0",
             "-c:v", "copy",
             "-c:a", "copy",
@@ -402,7 +493,7 @@ class StreamerCore:
             "-f", "hls",
             "-hls_time", seg_time,
             "-hls_list_size", list_size,
-            "-hls_flags", "delete_segments+split_by_time",
+            "-hls_flags", "delete_segments+split_by_time+append_list",
             "-hls_segment_filename", os.path.join(HLS_DIR, "seg_%05d.ts"),
             os.path.join(HLS_DIR, "stream.m3u8"),
         ]
@@ -425,16 +516,50 @@ class StreamerCore:
             log_print(f"[Receiver] Error starting HLS FFmpeg: {e}")
             return False
 
-    def relay_stream_data(self, proc_to_read, stdin_to_write, stop_event):
+    def relay_stream_data(self, proc_to_read, stdin_to_write, stop_event, is_paced=True):
+        """
+        送信側FFmpegから受信側HLS FFmpegへのストリーム中継。
+        is_paced=True の場合、初期バースト（約15秒分）を高速生成後、
+        実時間 + 先読みバッファ（15秒）を維持するようにデータ流量を制御する。
+        """
+        BUFFER_AHEAD_SECONDS = 15.0  # 先行バッファ秒数
+        base_pts = None
+        current_stream_pos = 0.0
+        max_relative_pts = 0.0
+        start_wall_time = time.time()
+
         try:
             while not stop_event.is_set() and self.is_running:
-                # read1 があれば即座に利用可能なパケット（1TSパケットでも）を読み出して遅延を防ぐ
                 if hasattr(proc_to_read.stdout, "read1"):
                     data = proc_to_read.stdout.read1(65536)
                 else:
-                    data = proc_to_read.stdout.read(8192)
+                    data = proc_to_read.stdout.read(65536)
+
                 if not data:
                     break
+
+                pts = extract_pts_from_ts_chunk(data)
+                if pts is not None:
+                    if base_pts is None:
+                        base_pts = pts
+                    stream_pos = pts - base_pts
+                    if stream_pos >= 0:
+                        current_stream_pos = stream_pos
+                        if current_stream_pos > max_relative_pts:
+                            max_relative_pts = current_stream_pos
+
+                # PTSの抽出と再生進捗の更新（ペーシング有効時）
+                if is_paced:
+                    # 実経過時間と先行マージンの計算
+                    wall_elapsed = time.time() - start_wall_time
+                    ahead = current_stream_pos - wall_elapsed
+
+                    # 先行秒数が目標バッファ（15秒）を超えている場合、実時間が進むまで待機
+                    if ahead > BUFFER_AHEAD_SECONDS:
+                        sleep_time = min(0.2, ahead - BUFFER_AHEAD_SECONDS)
+                        if sleep_time > 0.02:
+                            time.sleep(sleep_time)
+
                 try:
                     stdin_to_write.write(data)
                     stdin_to_write.flush()
@@ -443,6 +568,8 @@ class StreamerCore:
         except Exception:
             pass
         finally:
+            dur = max_relative_pts if max_relative_pts > 0 else (time.time() - start_wall_time)
+            self.last_stream_duration = max(1.0, dur)
             if not stop_event.is_set():
                 self.video_done_event.set()
 
@@ -455,6 +582,23 @@ class StreamerCore:
             log_print("[Monitor] Video finished naturally.")
             self.video_done_event.set()
 
+    def get_base_ydl_opts(self):
+        """yt-dlp の基本共通オプションを生成（JSチャレンジ問題回避・安定したクライアントフォールバック）"""
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "nocheckcertificate": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android", "ios", "tv", "web"]
+                }
+            }
+        }
+        cookie_path = os.path.abspath("cookies.txt")
+        if os.path.exists(cookie_path):
+            opts["cookiefile"] = cookie_path
+        return opts
+
     def expand_playlist(self, url):
         """URLから動画情報リスト [{"url": ..., "title": ..., "duration": ...}] を展開"""
         is_safe, reason = is_safe_url(url)
@@ -462,12 +606,12 @@ class StreamerCore:
             log_print(f"[Core] Rejected unsafe URL: {reason}")
             return []
 
-        ydl_opts = {
+        ydl_opts = self.get_base_ydl_opts()
+        ydl_opts.update({
             "extract_flat": True,
             "skip_download": True,
-            "quiet": True,
             "playlistend": MAX_PLAYLIST_ITEMS
-        }
+        })
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -497,45 +641,47 @@ class StreamerCore:
             return []
 
     def get_stream_urls(self, youtube_url):
-        ydl_opts = {
-            "format": "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1]/best",
-            "quiet": True,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["ios", "android", "tv"]
-                }
-            }
-        }
+        ydl_opts = self.get_base_ydl_opts()
+        ydl_opts.update({
+            "format": "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1]/bestvideo+bestaudio/best",
+        })
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(youtube_url, download=False)
             video_url = audio_url = None
+            headers = info.get("http_headers", {})
             if "requested_formats" in info:
                 for fmt in info["requested_formats"]:
                     if fmt.get("vcodec") != "none" and fmt.get("acodec") == "none":
                         video_url = fmt.get("url")
+                        if fmt.get("http_headers"):
+                            headers.update(fmt["http_headers"])
                     elif fmt.get("acodec") != "none" and fmt.get("vcodec") == "none":
                         audio_url = fmt.get("url")
+                        if fmt.get("http_headers"):
+                            headers.update(fmt["http_headers"])
             if not video_url or not audio_url:
                 video_url = info.get("url")
                 audio_url = None
+                if info.get("http_headers"):
+                    headers.update(info["http_headers"])
             
-            headers = info.get("http_headers", {})
             return video_url, audio_url, info.get("title", "Unknown"), info.get("duration", 0), headers
 
     def get_audio_only_stream_urls(self, youtube_url):
-        ydl_opts = {
+        ydl_opts = self.get_base_ydl_opts()
+        ydl_opts.update({
             "format": "bestaudio[acodec^=mp4a]/bestaudio/best",
-            "quiet": True,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["ios", "android", "tv"]
-                }
-            }
-        }
+        })
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(youtube_url, download=False)
             audio_url = info.get("url")
             headers = info.get("http_headers", {})
+            if "requested_formats" in info:
+                for fmt in info["requested_formats"]:
+                    if fmt.get("acodec") != "none":
+                        audio_url = fmt.get("url")
+                        if fmt.get("http_headers"):
+                            headers.update(fmt["http_headers"])
             title = info.get("title", "Unknown")
             duration = info.get("duration", 0)
             meta = {
@@ -547,6 +693,59 @@ class StreamerCore:
                 "channel": info.get("channel") or info.get("uploader") or ""
             }
             return audio_url, title, duration, headers, meta
+
+    def prefetch_item(self, item):
+        """次の動画/音楽のストリームURLおよびサムネイル画像をバックグラウンドで先読み"""
+        if not item or item.get("type") == "image":
+            return
+        url = item.get("url")
+        if not url or not url.startswith("http"):
+            return
+
+        with self.prefetch_lock:
+            cached = self.prefetch_cache.get(url)
+            if cached and (time.time() - cached.get("timestamp", 0) < 600):
+                return
+
+        is_radio = bool(self.config.get("radio_mode", False))
+        log_print(f"[Prefetch] Starting prefetch for next item: {item.get('title')} (radio={is_radio})")
+
+        try:
+            if is_radio:
+                res = self.get_audio_only_stream_urls(url)
+                if res and res[0]:
+                    audio_url, title, duration, headers, meta = res if len(res) >= 5 else (*res[:4], {})
+                    bg_source = self.config.get("radio_bg_source", "card")
+                    if bg_source == "card":
+                        self.generate_radio_card_image(item, metadata=meta)
+                    with self.prefetch_lock:
+                        self.prefetch_cache[url] = {
+                            "is_radio": True,
+                            "audio_url": audio_url,
+                            "title": title,
+                            "duration": duration,
+                            "headers": headers,
+                            "meta": meta,
+                            "timestamp": time.time()
+                        }
+                    log_print(f"[Prefetch] Completed prefetch for: {title}")
+            else:
+                res = self.get_stream_urls(url)
+                if res and (res[0] or res[1]):
+                    video_url, audio_url, title, duration, headers = res
+                    with self.prefetch_lock:
+                        self.prefetch_cache[url] = {
+                            "is_radio": False,
+                            "video_url": video_url,
+                            "audio_url": audio_url,
+                            "title": title,
+                            "duration": duration,
+                            "headers": headers,
+                            "timestamp": time.time()
+                        }
+                    log_print(f"[Prefetch] Completed prefetch for: {title}")
+        except Exception as e:
+            log_print(f"[Prefetch] Failed to prefetch item: {e}")
 
     def generate_radio_card_image(self, video_info, metadata=None):
         """YouTubeサムネイルとタイトル・アーティスト情報を合成した 1920x1080 カード画像を生成"""
@@ -738,6 +937,41 @@ class StreamerCore:
             log_print(f"[Radio] Failed to save radio card: {e}")
             return None
 
+    def get_slideshow_images(self):
+        """スライドショーで利用可能な画像パス一覧を取得（キュー画像 + キャッシュ画像）"""
+        images = []
+        # 1. キュー内の画像
+        with self.queue_lock:
+            for item in self.play_queue:
+                if item.get("type") == "image" and item.get("path") and os.path.exists(item["path"]):
+                    images.append(os.path.abspath(item["path"]))
+
+        # 2. キャッシュディレクトリの画像（一時ファイル除外）
+        if os.path.exists(IMAGE_CACHE_DIR):
+            cached = [
+                os.path.abspath(os.path.join(IMAGE_CACHE_DIR, f))
+                for f in os.listdir(IMAGE_CACHE_DIR)
+                if f.lower().endswith((".png", ".jpg", ".jpeg"))
+                and not f.startswith("playback_overlay_")
+                and not f.startswith("temp_")
+            ]
+            images.extend(cached)
+
+        # 重複を排除（順序保持）
+        seen = set()
+        unique_images = []
+        for img in images:
+            norm = os.path.normcase(img)
+            if norm not in seen and os.path.exists(img):
+                seen.add(norm)
+                unique_images.append(img)
+
+        # シャッフル設定が有効ならシャッフル
+        if self.config.get("shuffle", False) and len(unique_images) > 1:
+            random.shuffle(unique_images)
+
+        return unique_images
+
     def get_radio_background_path(self, video_info=None, metadata=None):
         """BGM/ラジオモード用の背景画像パスを取得（カード画面、待機画面、または写真）"""
         source = self.config.get("radio_bg_source", "card")
@@ -747,16 +981,9 @@ class StreamerCore:
                 return card_path
 
         if source == "slideshow":
-            # 1. 写真キューにある画像を探す
-            with self.queue_lock:
-                for item in self.play_queue:
-                    if item.get("type") == "image" and item.get("path") and os.path.exists(item["path"]):
-                        return item["path"]
-            # 2. キャッシュされた写真画像を探す
-            if os.path.exists(IMAGE_CACHE_DIR):
-                cached = [os.path.join(IMAGE_CACHE_DIR, f) for f in os.listdir(IMAGE_CACHE_DIR) if f.endswith((".png", ".jpg", ".jpeg"))]
-                if cached:
-                    return random.choice(cached)
+            images = self.get_slideshow_images()
+            if images:
+                return self.get_image_for_playback(images[0])
 
         # デフォルト・フォールバックは待機画面 (QR & URLカード付き)
         self.generate_standby_image()
@@ -768,12 +995,28 @@ class StreamerCore:
         """BGM/ラジオモード: YouTube音声ストリーム + 静止画/写真を合成し、極小帯域でHLS配信"""
         url = video_info["url"]
         try:
-            res = self.get_audio_only_stream_urls(url)
-            if len(res) >= 5:
-                audio_url, title, duration, headers, metadata = res[:5]
+            cached = None
+            with self.prefetch_lock:
+                if url in self.prefetch_cache and self.prefetch_cache[url].get("is_radio"):
+                    c = self.prefetch_cache.pop(url)
+                    if time.time() - c.get("timestamp", 0) < 600:
+                        cached = c
+
+            if cached:
+                audio_url = cached["audio_url"]
+                title = cached["title"]
+                duration = cached["duration"]
+                headers = cached["headers"]
+                metadata = cached.get("meta") or {"title": title, "duration": duration}
+                log_print(f"[Radio] Using pre-fetched audio URL for: {title}")
             else:
-                audio_url, title, duration, headers = res[:4]
-                metadata = {"title": title, "duration": duration}
+                res = self.get_audio_only_stream_urls(url)
+                if len(res) >= 5:
+                    audio_url, title, duration, headers, metadata = res[:5]
+                else:
+                    audio_url, title, duration, headers = res[:4]
+                    metadata = {"title": title, "duration": duration}
+
             if not audio_url:
                 raise ValueError("No audio stream URL returned by yt-dlp")
             self.current_video = {
@@ -783,7 +1026,7 @@ class StreamerCore:
                 "is_radio": True
             }
             self.current_video_start_time = time.time() - max(0, seek_seconds)
-            log_print(f"[Radio] Now Playing (BGM Audio): {title} (seek: {int(seek_seconds)}s)")
+            log_print(f"[Radio] Now Playing (BGM Audio): {title} (seek: {int(seek_seconds)}s, pts_offset: {self.accumulated_pts:.2f}s)")
         except Exception as e:
             log_print(f"[Radio] Failed to get audio stream URL: {e}")
             self.current_video = {"title": f"Failed: {video_info.get('title', 'Unknown')}", "url": url, "duration": 0, "is_radio": True}
@@ -797,10 +1040,47 @@ class StreamerCore:
             self.status_detail = "FFmpeg Error"
             return None
 
-        bg_path = self.get_radio_background_path(video_info, metadata)
-        if not bg_path or not os.path.exists(bg_path):
-            self.generate_standby_image()
-            bg_path = STANDBY_IMAGE_PATH
+        source = self.config.get("radio_bg_source", "card")
+        auto_advance = bool(self.config.get("image_auto_advance", False)) and not self.image_paused
+
+        slideshow_manifest_path = None
+        if source == "slideshow" and auto_advance:
+            images = self.get_slideshow_images()
+            if images:
+                duration_val = float(self.config.get("image_display_duration", 15))
+                manifest_lines = ["ffconcat version 1.0\n"]
+                for img in images:
+                    pb_path = self.get_image_for_playback(img)
+                    pb_path_clean = os.path.abspath(pb_path).replace("\\", "/")
+                    manifest_lines.append(f"file '{pb_path_clean}'\n")
+                    manifest_lines.append(f"duration {duration_val}\n")
+                # concat demuxer の最終要素の持続時間を有効にするため末尾に複製
+                last_pb = self.get_image_for_playback(images[-1])
+                last_pb_clean = os.path.abspath(last_pb).replace("\\", "/")
+                manifest_lines.append(f"file '{last_pb_clean}'\n")
+
+                os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
+                slideshow_manifest_path = os.path.join(IMAGE_CACHE_DIR, "slideshow_manifest.txt")
+                with open(slideshow_manifest_path, "w", encoding="utf-8") as f:
+                    f.writelines(manifest_lines)
+                log_print(f"[Radio] Prepared slideshow manifest with {len(images)} photos (duration: {duration_val}s/photo).")
+
+        if slideshow_manifest_path and os.path.exists(slideshow_manifest_path):
+            video_input_opts = [
+                "-stream_loop", "-1",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", os.path.abspath(slideshow_manifest_path)
+            ]
+        else:
+            bg_path = self.get_radio_background_path(video_info, metadata)
+            if not bg_path or not os.path.exists(bg_path):
+                self.generate_standby_image()
+                bg_path = STANDBY_IMAGE_PATH
+            video_input_opts = [
+                "-loop", "1",
+                "-i", os.path.abspath(bg_path)
+            ]
 
         headers_str = ""
         if headers:
@@ -819,10 +1099,10 @@ class StreamerCore:
         if seek_seconds > 0:
             input_opts.extend(["-ss", str(int(seek_seconds))])
 
-        cmd = [
-            get_ffmpeg_cmd(), "-re",
-            "-loop", "1", "-i", os.path.abspath(bg_path),
-        ]
+        cmd = [get_ffmpeg_cmd()]
+        if self.accumulated_pts > 0:
+            cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
+        cmd.extend(video_input_opts)
         cmd.extend(input_opts)
         cmd.extend(["-i", audio_url])
         cmd.extend([
@@ -846,6 +1126,7 @@ class StreamerCore:
             "-b:a", "128k",
             "-ar", "44100",
             "-af", "aresample=async=1",
+            "-shortest",
             "-fflags", "+nobuffer+flush_packets",
             "-flush_packets", "1",
             "-muxdelay", "0",
@@ -878,14 +1159,30 @@ class StreamerCore:
     def play_video(self, video_info, seek_seconds=0):
         url = video_info["url"]
         try:
-            video_url, audio_url, title, duration, headers = self.get_stream_urls(url)
+            cached = None
+            with self.prefetch_lock:
+                if url in self.prefetch_cache and not self.prefetch_cache[url].get("is_radio"):
+                    c = self.prefetch_cache.pop(url)
+                    if time.time() - c.get("timestamp", 0) < 600:
+                        cached = c
+
+            if cached:
+                video_url = cached["video_url"]
+                audio_url = cached["audio_url"]
+                title = cached["title"]
+                duration = cached["duration"]
+                headers = cached["headers"]
+                log_print(f"[Player] Using pre-fetched stream URLs for: {title}")
+            else:
+                video_url, audio_url, title, duration, headers = self.get_stream_urls(url)
+
             self.current_video = {
                 "title": title,
                 "url": url,
                 "duration": duration
             }
             self.current_video_start_time = time.time() - max(0, seek_seconds)
-            log_print(f"[Player] Now Playing: {title} (seek: {int(seek_seconds)}s)")
+            log_print(f"[Player] Now Playing: {title} (seek: {int(seek_seconds)}s, pts_offset: {self.accumulated_pts:.2f}s)")
         except Exception as e:
             log_print(f"[Player] Failed to get stream URL: {e}")
             self.current_video = {"title": f"Failed: {video_info.get('title', 'Unknown')}", "url": url, "duration": 0}
@@ -920,7 +1217,9 @@ class StreamerCore:
         overlay_video = bool(self.config.get("overlay_qr_enabled", False) or self.config.get("overlay_qr_video", False))
         qr_overlay_file = self.generate_qr_overlay_image() if overlay_video else None
 
-        cmd = [get_ffmpeg_cmd(), "-re", "-fflags", "+genpts"]
+        cmd = [get_ffmpeg_cmd(), "-fflags", "+genpts"]
+        if self.accumulated_pts > 0:
+            cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
         cmd.extend(input_opts)
         cmd.extend(["-i", video_url])
         if audio_url:
@@ -959,6 +1258,7 @@ class StreamerCore:
                 "-bufsize", "2000k",
                 "-c:a", "aac", "-b:a", "128k",
                 "-af", "aresample=async=1",
+                "-shortest",
                 "-f", "mpegts", "pipe:1"
             ])
         else:
@@ -968,7 +1268,7 @@ class StreamerCore:
             else:
                 cmd.extend(["-map", "0:a:0?"])
             cmd.extend(["-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                        "-af", "aresample=async=1", "-f", "mpegts", "pipe:1"])
+                        "-af", "aresample=async=1", "-shortest", "-f", "mpegts", "pipe:1"])
 
         try:
             proc = subprocess.Popen(
@@ -1112,6 +1412,10 @@ class StreamerCore:
 
         cmd = [
             get_ffmpeg_cmd(), "-re",
+        ]
+        if self.accumulated_pts > 0:
+            cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
+        cmd.extend([
             "-loop", "1", "-i", os.path.abspath(playback_image_path),
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
             "-c:v", "libx264",
@@ -1134,7 +1438,7 @@ class StreamerCore:
             "-muxdelay", "0",
             "-muxpreload", "0",
             "-f", "mpegts", "pipe:1"
-        ]
+        ])
 
         try:
             proc = subprocess.Popen(
@@ -1153,7 +1457,7 @@ class StreamerCore:
 
         stop_event = threading.Event()
         threading.Thread(target=self.relay_stream_data,
-                         args=(proc, self.current_stdin, stop_event), daemon=True).start()
+                         args=(proc, self.current_stdin, stop_event, False), daemon=True).start()
         threading.Thread(target=self.watch_send_proc,
                          args=(proc, stop_event), daemon=True).start()
         return stop_event
@@ -1512,6 +1816,10 @@ class StreamerCore:
 
             cmd = [
                 get_ffmpeg_cmd(), "-re",
+            ]
+            if self.accumulated_pts > 0:
+                cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
+            cmd.extend([
                 "-loop", "1", "-i", os.path.abspath(STANDBY_IMAGE_PATH),
                 "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
                 "-c:v", "libx264",
@@ -1534,7 +1842,7 @@ class StreamerCore:
                 "-muxdelay", "0",
                 "-muxpreload", "0",
                 "-f", "mpegts", "pipe:1"
-            ]
+            ])
 
             try:
                 proc = subprocess.Popen(
@@ -1552,7 +1860,7 @@ class StreamerCore:
 
             stop_event = threading.Event()
             threading.Thread(target=self.relay_stream_data,
-                             args=(proc, self.current_stdin, stop_event), daemon=True).start()
+                             args=(proc, self.current_stdin, stop_event, False), daemon=True).start()
             threading.Thread(target=self.watch_send_proc,
                              args=(proc, stop_event), daemon=True).start()
 
@@ -1578,6 +1886,10 @@ class StreamerCore:
                 if self.send_proc:
                     kill_proc(self.send_proc)
                 self.send_proc = None
+
+            # 待機画面の再生時間を累積PTSに加算
+            self.accumulated_pts += self.last_stream_duration + 0.1
+            log_print(f"[Player] Standby exited. Updated accumulated_pts: {self.accumulated_pts:.2f}s")
 
             # トンネルURL更新による再起動の場合は、キューが空のまま再度ループして新しい画像で配信開始
             if url_updated:
@@ -1631,6 +1943,12 @@ class StreamerCore:
                         time.sleep(1)
                         continue
 
+                    # 次の曲/アイテムのバックグラウンド先読み（プリフェッチ）
+                    with self.queue_lock:
+                        next_queued = self.play_queue[0] if self.play_queue else None
+                    if next_queued:
+                        threading.Thread(target=self.prefetch_item, args=(next_queued,), daemon=True).start()
+
                     # 写真スライドショーのタイマー監視（一時停止対応 & ホットリロード対応）
                     elapsed = 0.0
                     while self.is_running and not self.skip_event.is_set():
@@ -1674,6 +1992,10 @@ class StreamerCore:
                             kill_proc(proc)
                         self.send_proc = None
 
+                    # 写真再生時間を累積PTSに加算
+                    self.accumulated_pts += self.last_stream_duration + 0.1
+                    log_print(f"[Monitor] Photo finished. Updated accumulated_pts: {self.accumulated_pts:.2f}s")
+
                     if self.config.get("loop_queue", False) and next_item:
                         with self.queue_lock:
                             self.play_queue.append(next_item)
@@ -1683,7 +2005,7 @@ class StreamerCore:
                         log_print("[Monitor] Photo skipped.")
                         self.skip_event.clear()
                     self.video_done_event.clear()
-                    time.sleep(0.3)
+                    time.sleep(0.1)
                     continue
 
                 # 動画 / BGM・ラジオ再生フロー
@@ -1700,11 +2022,17 @@ class StreamerCore:
                     log_print("[Monitor] Failed to play. Skipping to next.")
                     self.status = "error"
                     self.status_detail = "Failed to load stream"
-                    time.sleep(2)
+                    time.sleep(1)
                     continue
 
                 self.status = "streaming"
                 self.status_detail = "Active (Radio BGM)" if is_radio else "Active (Streaming)"
+
+                # 次の曲のバックグラウンド先読み（プリフェッチ）を開始！
+                with self.queue_lock:
+                    next_queued = self.play_queue[0] if self.play_queue else None
+                if next_queued:
+                    threading.Thread(target=self.prefetch_item, args=(next_queued,), daemon=True).start()
 
                 # 終了 or スキップを待つ (ホットリロード対応)
                 while self.is_running and not self.skip_event.is_set():
@@ -1727,26 +2055,41 @@ class StreamerCore:
                         if stop_event is None:
                             break
 
-                    if self.video_done_event.wait(timeout=0.4):
-                        break
                     with self.process_lock:
-                        proc = self.send_proc
                         h_proc = self.hls_proc
-                    if proc and proc.poll() is not None:
-                        break
                     if h_proc and h_proc.poll() is not None:
                         log_print("[Monitor] Receiver FFmpeg crashed or exited.")
                         self.status = "error"
                         self.status_detail = "Offline (Receiver Error)"
                         break
 
+                    item_dur = float(next_item.get("duration") or 0)
+                    elapsed_play = (time.time() - self.current_video_start_time) if self.current_video_start_time else 0
+
+                    # 送信側がデータ送信完了（先読み完了）した場合
+                    if self.video_done_event.is_set():
+                        if item_dur > 0:
+                            if elapsed_play >= item_dur:
+                                log_print(f"[Monitor] Video playback finished naturally ({int(elapsed_play)}s / {int(item_dur)}s).")
+                                break
+                        else:
+                            # duration不明の場合は即座に完了
+                            break
+
+                    # 曲の長さを大幅に超過した際のタイムアウト・フェイルセーフ
+                    if item_dur > 0 and elapsed_play > item_dur + 10:
+                        log_print(f"[Monitor] Video reached duration limit ({int(elapsed_play)}s / {int(item_dur)}s). Finishing.")
+                        break
+
+                    self.video_done_event.wait(timeout=0.3)
+
                 # 自然終了（スキップではない）の場合、最後のバッファをプレイヤーが再生しきるまで設定秒数待機
-                wait_secs = self.config.get("video_transition_wait_seconds", 5)
-                if not self.skip_event.is_set() and self.is_running:
+                wait_secs = self.config.get("video_transition_wait_seconds", 1)
+                if not self.skip_event.is_set() and self.is_running and wait_secs > 0:
                     log_print(f"[Monitor] Waiting {wait_secs} seconds for player buffer completion...")
                     self.status = "finishing"
                     self.status_detail = "Finishing Video..."
-                    time.sleep(wait_secs)
+                    self.skip_event.wait(timeout=wait_secs)
 
                 stop_event.set()
                 with self.process_lock:
@@ -1754,6 +2097,10 @@ class StreamerCore:
                     if proc:
                         kill_proc(proc)
                     self.send_proc = None
+
+                # 動画再生時間を累積PTSに加算
+                self.accumulated_pts += self.last_stream_duration + 0.1
+                log_print(f"[Monitor] Video finished. Updated accumulated_pts: {self.accumulated_pts:.2f}s")
 
                 # ループ再生が有効な場合、終了した動画をキューの末尾に再追加
                 if self.config.get("loop_queue", False) and next_item:
@@ -1845,4 +2192,9 @@ class StreamerCore:
             self.send_proc = None
             self.hls_proc = None
             self.tunnel_proc = None
+        
+        # プロセス終了・ファイルロック解除を少し待ってから HLS ディレクトリ内を完全消去
+        time.sleep(0.3)
+        self.clean_hls_dir(all_files=True)
+        log_print("[Core] HLS output directory completely cleaned.")
         log_print("[Core] Shutdown complete.")

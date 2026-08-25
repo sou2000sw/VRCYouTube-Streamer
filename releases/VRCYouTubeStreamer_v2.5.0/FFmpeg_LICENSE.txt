@@ -1,0 +1,5 @@
+■ FFmpeg について
+本パッケージに含まれる「ffmpeg.exe」は、FFmpegプロジェクト（https://ffmpeg.org）によって開発されたソフトウェアであり、GNU General Public License (GPL) または GNU Lesser General Public License (LGPL) に基づいて配布されています。
+
+FFmpegのソースコードは公式サイト（https://ffmpeg.org/download.html）より入手可能です。
+本アプリはFFmpegのバイナリを外部プロセスとして呼び出しており、改造等は一切行っておりません。

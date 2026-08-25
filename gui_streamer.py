@@ -90,7 +90,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.lbl_wait = ctk.CTkLabel(form_frame, text="Transition Wait Duration [sec] (動画切替待機秒数):", anchor="w")
         self.lbl_wait.pack(fill="x", padx=15, pady=(2, 0))
         self.entry_wait = ctk.CTkEntry(form_frame)
-        self.entry_wait.insert(0, str(cfg.get("video_transition_wait_seconds", 5)))
+        self.entry_wait.insert(0, str(cfg.get("video_transition_wait_seconds", 1)))
         self.entry_wait.pack(fill="x", padx=15, pady=(2, 8))
 
         # 5. プレイヤーバッファ保持セグメント数 (Live Sync Count)
