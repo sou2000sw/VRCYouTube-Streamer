@@ -1,48 +1,127 @@
-# === Python ===
+# ==============================================================================
+# Git Ignore Configuration for VRCYouTube
+# ==============================================================================
+
+# === Python キャッシュ & 仮想環境 ===
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 *.pyo
+*.pyd
+.Python
+env/
 venv/
 .venv/
-env/
+ENV/
+env.bak/
+venv.bak/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
 
-# === 機密・資格情報（絶対にコミットしない） ===
-.env*
+# === 機密情報・資格情報・認証トークン（絶対にコミットしない） ===
+.env
+.env.*
+!.env.example
 *token*
 *secret*
 *credential*
 *.key
+*.pem
+*.crt
+*.pfx
+*.p12
 id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
 cookies.txt
+*.cookie
 
-# === 巨大バイナリ / 同梱ツール ===
+# === ローカル設定ファイル（※テンプレートのみ除外解除） ===
+config.json
+**/config.json
+!config.dist.json
+!config.example.json
+
+# === ビルド成果物・一時ディレクトリ・配布バイナリ ===
+build/
+dist/
+dist - */
+dist - コピー/
+release/
+releases/
+releases - */
+releases - コピー/
+plugin/bin/
+VRCYouTubeStreamer/
+*.manifest
+*.spec
+*.toc
+*.pkg
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+
+# 実行ファイル / バイナリ
+*.exe
+*.dll
+*.so
+*.dylib
 cloudflared.exe
 ffmpeg.exe
 **/ffmpeg.exe
-*.zip
+ffprobe.exe
+**/ffprobe.exe
 models/
 
-# === ビルド成果物（ユーザー名を含む絶対パスが残るため除外） ===
-build/
-dist/
-dist*/
-VRCYouTubeStreamer/
-
-# === 実行時に生成される状態ファイル ===
+# === 実行時生成データ・ストリーミング一時ファイル・ログ ===
 hls_output/
 **/hls_output/
-config.json
-*.log
 *.m3u8
 *.ts
+*.mp4
+*.m4a
+*.webm
+*.log
+logs/
+*.log.*
 
-# === 無関係な作業残骸 ===
+# === IDE・エディタ設定 ===
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+*~
+
+# === OS一時ファイル・システム残骸 ===
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.tmp
+*.bak
+*.old
+
+# === 作業用残骸ファイル ===
 ag-stop-probe.json
 config.yml
 standby_test.png
-
-# === 配布パッケージ（ビルド成果物） ===
-release/
-releases/
-plugin/bin/
-*.exe
