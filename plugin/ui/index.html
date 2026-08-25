@@ -435,6 +435,89 @@
     <script>
         // State
         let apiBase = localStorage.getItem('vrcyoutube_api_base') || 'http://127.0.0.1:8000';
+
+        // Beacon の中にいるときだけ、apiBase 宛ての fetch を主プロセス経由へ回す。
+        // 直で叩くと Origin が付き、ホスト本人の操作ではなく Web からの遠隔操作として
+        // 扱われる（設定の取得・停止・全消去が 403、ホストが Web 操作を切ると再生操作も死ぬ）。
+        (function () {
+            let beacon = null; // hello が来るまで null = Beacon の外
+            const pending = new Map();
+            let seq = 0;
+
+            window.addEventListener('message', (event) => {
+                const m = event.data;
+                if (!m || typeof m !== 'object') return;
+                if (m.__beaconPlugin === 'hello') {
+                    // beacon-plugin: は Electron のの中にしか存在しないスキーム。この頁がそこから
+                    // 配られている事実そのものが「Beacon の中にいる」証拠になる。ブラウザで開かれた
+                    // 頁が悪意ある親に埋め込まれた場合は http/https なので、ここで落ちる。
+                    // event.origin を見てはいけない —— あれは送り手（Beacon のレンダラー = file://）の
+                    // オリジンで、beacon-plugin:// とは一致しない。
+                    if (location.protocol !== 'beacon-plugin:') return;
+                    if (event.source !== window.parent || window.parent === window) return;
+                    beacon = { origin: event.origin, id: m.id };
+                    return;
+                }
+                if (m.__beaconPlugin === 'response') {
+                    if (!beacon || event.origin !== beacon.origin) return;
+                    const resolve = pending.get(m.requestId);
+                    if (resolve) {
+                        pending.delete(m.requestId);
+                        resolve(m);
+                    }
+                }
+            });
+
+            const nativeFetch = window.fetch.bind(window);
+
+            window.fetch = function (input, init = {}) {
+                const url = typeof input === 'string' ? input : input?.url;
+                // Beacon の外、apiBase 以外、文字列にできない本文は、今までどおり直で。
+                if (!beacon || typeof url !== 'string' || !url.startsWith(apiBase) ||
+                    (init.body != null && typeof init.body !== 'string')) {
+                    return nativeFetch(input, init);
+                }
+
+                let headers = {};
+                if (init.headers) {
+                    if (typeof Headers !== 'undefined' && init.headers instanceof Headers) {
+                        headers = Object.fromEntries(init.headers.entries());
+                    } else if (Array.isArray(init.headers)) {
+                        headers = Object.fromEntries(init.headers);
+                    } else {
+                        headers = { ...init.headers };
+                    }
+                }
+
+                const requestId = `r${++seq}`;
+                return new Promise((resolve, reject) => {
+                    pending.set(requestId, (m) => {
+                        if (!m.ok) {
+                            reject(new Error(m.reason || 'plugin bridge refused'));
+                            return;
+                        }
+                        // 既存の呼び出しは res.ok / res.status / res.json() を見ているので、
+                        // Response で包んで返す —— 呼び出し側を 1 行も変えないため。
+                        resolve(new Response(m.body, {
+                            status: m.status,
+                            headers: m.contentType ? { 'content-type': m.contentType } : {}
+                        }));
+                    });
+                    // ここへ来る時点で location.protocol と window.parent は確認済みなので、
+                    // '*' へ落としても届く先は Beacon のレンダラーだけ。
+                    const replyTarget = beacon.origin && beacon.origin !== 'null' ? beacon.origin : '*';
+                    parent.postMessage({
+                        __beaconPlugin: 'request',
+                        requestId,
+                        url,
+                        method: init.method || 'GET',
+                        headers,
+                        body: typeof init.body === 'string' ? init.body : undefined
+                    }, replyTarget);
+                });
+            };
+        })();
+
         let currentAddMode = 'video';
         let isOnline = false;
         let isPolling = false;
