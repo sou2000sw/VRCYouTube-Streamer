@@ -1,6 +1,6 @@
 # 更新履歴 (CHANGELOG)
 
-## [2.6.0] - 2026-08-25
+## [2.6.0] - 2026-08-25 (Development / 開発途中)
 
 ### 🧩 VRCBeacon プラグイン対応 ＆ VRCX トーン＆マナー WebUI (Drop-in Plugin & Modern UI)
 - **VRCBeacon 向けドロップインプラグイン パッケージ化**:
