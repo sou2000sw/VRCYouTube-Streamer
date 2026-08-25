@@ -355,7 +355,20 @@
                             <span class="font-semibold text-xs text-zinc-200">再生キュー</span>
                             <span id="queueCountBadge" class="text-[10px] bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded border border-zinc-700 font-mono">0 件</span>
                         </div>
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-2 flex-wrap justify-end">
+                            <select id="selectQueueFilter" onchange="setQueueView('filter', this.value)" class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px] text-zinc-200 focus:outline-none focus:border-primary" title="表示するアイテムの種別で絞り込み（表示のみ・再生順は変わりません）">
+                                <option value="all">すべて</option>
+                                <option value="video">動画のみ</option>
+                                <option value="image">画像のみ</option>
+                            </select>
+                            <select id="selectQueueSort" onchange="setQueueView('sort', this.value)" class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px] text-zinc-200 focus:outline-none focus:border-primary" title="表示順の並べ替え（表示のみ・再生順は変わりません）">
+                                <option value="queue">再生順</option>
+                                <option value="title">タイトル昇順</option>
+                                <option value="title_desc">タイトル降順</option>
+                                <option value="duration">長さ昇順</option>
+                                <option value="duration_desc">長さ降順</option>
+                                <option value="type">種別順</option>
+                            </select>
                             <button id="btnShuffleQueue" onclick="shuffleQueueList()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="キューの順序を即時シャッフル">
                                 <i class="ri-shuffle-line"></i>
                                 <span>並び替え</span>
@@ -594,6 +607,8 @@
 
         let currentAddMode = 'video';
         let addModeUserChangedAt = 0; // 利用者が追加モードを操作した時刻（ポーリングでの巻き戻し防止）
+        let hlsFatalRetries = 0;          // HLSプレビューの致命的エラー連続回数
+        const HLS_MAX_FATAL_RETRIES = 5;  // 上限に達したら再試行を止める（一時ポート枯渇の防止）
         let isOnline = false;
         let isPolling = false;
         let draggedItemIndex = null;
@@ -674,7 +689,10 @@
                 hlsInstance.loadSource(streamM3u8Url);
                 hlsInstance.attachMedia(video);
 
+                hlsFatalRetries = 0;
+
                 hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+                    hlsFatalRetries = 0;
                     if (overlay) overlay.classList.add('opacity-0');
                     video.play().catch(() => {
                         // Autoplay blocked: mute and retry
@@ -684,13 +702,39 @@
                 });
 
                 hlsInstance.on(Hls.Events.ERROR, (event, data) => {
-                    if (data.fatal) {
-                        if (overlay) overlay.classList.remove('opacity-0');
-                        if (statusText) statusText.innerText = 'ストリーム待機中 / 接続中...';
-                        setTimeout(() => {
-                            if (hlsInstance && isOnline) hlsInstance.loadSource(streamM3u8Url);
-                        }, 3000);
+                    if (!data.fatal) return;
+                    if (overlay) overlay.classList.remove('opacity-0');
+
+                    // 以前は 3 秒ごとに loadSource() を無条件で呼び直していた。
+                    // これは前のローダーを止めないまま新しい読み込みを積み上げるため、
+                    // セグメント取得の再試行が際限なく増えて一時ポートを食い潰し、
+                    // Windows で net::ERR_ADDRESS_IN_USE が多発する。
+                    // hls.js 推奨の復旧手順（startLoad / recoverMediaError）に、
+                    // 回数上限とバックオフを付けて置き換える。
+                    if (hlsFatalRetries >= HLS_MAX_FATAL_RETRIES) {
+                        if (statusText) statusText.innerText = 'ストリームに接続できません（「再読込」で再試行してください）';
+                        try { hlsInstance.destroy(); } catch (e) {}
+                        hlsInstance = null;
+                        return;
                     }
+
+                    hlsFatalRetries++;
+                    if (statusText) {
+                        statusText.innerText = `ストリーム待機中 / 再接続中... (${hlsFatalRetries}/${HLS_MAX_FATAL_RETRIES})`;
+                    }
+                    const backoffMs = Math.min(3000 * hlsFatalRetries, 15000);
+                    setTimeout(() => {
+                        if (!hlsInstance || !isOnline) return;
+                        try {
+                            if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                                hlsInstance.recoverMediaError();
+                            } else {
+                                hlsInstance.startLoad();
+                            }
+                        } catch (e) {
+                            // 復旧不能なら次のエラーで上限に達し停止する
+                        }
+                    }, backoffMs);
                 });
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                 video.src = streamM3u8Url;
@@ -958,10 +1002,56 @@
         }
 
         // Render Queue
+        // 表示上のみの絞り込み・並べ替え。サーバー上の再生順は一切変更しない。
+        let queueViewFilter = 'all';
+        let queueViewSort = 'queue';
+
+        function setQueueView(kind, value) {
+            if (kind === 'filter') queueViewFilter = value;
+            else queueViewSort = value;
+            // 直近のステータスで即座に再描画（ポーリングを待たない）
+            if (currentStatusData) {
+                const perms = currentStatusData.permissions || {};
+                renderQueue(currentStatusData.queue || [], perms.allow_web_queue_edit !== false);
+            }
+        }
+
+        function itemKind(item) {
+            return (item.is_image || item.type === 'image') ? 'image' : 'video';
+        }
+
+        function buildQueueView(queue) {
+            // 実キューの添字を保持したまま絞り込む。移動・削除APIは実添字で動くため、
+            // 表示順を変えても添字がずれないようにする必要がある。
+            let entries = queue.map((item, realIndex) => ({ item, realIndex }));
+            if (queueViewFilter !== 'all') {
+                entries = entries.filter(e => itemKind(e.item) === queueViewFilter);
+            }
+            const byTitle = (a, b) => String(a.item.title || '').localeCompare(String(b.item.title || ''), 'ja');
+            const byDuration = (a, b) => (Number(a.item.duration) || 0) - (Number(b.item.duration) || 0);
+            if (queueViewSort === 'title') entries.sort(byTitle);
+            else if (queueViewSort === 'title_desc') entries.sort((a, b) => byTitle(b, a));
+            else if (queueViewSort === 'duration') entries.sort(byDuration);
+            else if (queueViewSort === 'duration_desc') entries.sort((a, b) => byDuration(b, a));
+            else if (queueViewSort === 'type') {
+                entries.sort((a, b) => itemKind(a.item).localeCompare(itemKind(b.item)) || a.realIndex - b.realIndex);
+            }
+            return entries;
+        }
+
         function renderQueue(queue, canEdit = true) {
             const container = document.getElementById('queueContainer');
             const countBadge = document.getElementById('queueCountBadge');
-            if (countBadge) countBadge.innerText = `${queue.length} 件`;
+            const entries = buildQueueView(queue);
+            const isDefaultView = (queueViewFilter === 'all' && queueViewSort === 'queue');
+            if (countBadge) {
+                countBadge.innerText = isDefaultView
+                    ? `${queue.length} 件`
+                    : `${entries.length} / ${queue.length} 件`;
+                countBadge.title = isDefaultView
+                    ? 'キューの件数'
+                    : '表示のみの絞り込み・並べ替えです。実際の再生順は変わりません（並べ替え操作は一時的に無効）。';
+            }
 
             if (queue.length === 0) {
                 container.innerHTML = `
@@ -973,17 +1063,32 @@
                 return;
             }
 
-            container.innerHTML = queue.map((item, index) => {
+            if (entries.length === 0) {
+                container.innerHTML = `
+                    <div class="p-8 text-center text-zinc-500 text-xs flex flex-col items-center gap-2">
+                        <i class="ri-filter-off-line text-2xl"></i>
+                        <span>この絞り込みに該当するアイテムはありません（全 ${queue.length} 件）。</span>
+                    </div>
+                `;
+                return;
+            }
+
+            // 表示順を変えている間は並べ替え操作を無効化する。
+            // 実キューの隣と画面上の隣が一致しないため、そのまま動かすと意図しない位置へ動く。
+            const canReorder = canEdit && isDefaultView;
+
+            container.innerHTML = entries.map(({ item, realIndex }) => {
+                const index = realIndex;
                 const duration = formatDuration(item.duration);
                 const typeLabel = item.is_radio ? 'RADIO' : ((item.is_image || item.type === 'image') ? 'PHOTO' : 'VIDEO');
                 const typeBadgeColor = item.is_radio ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : ((item.is_image || item.type === 'image') ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-sky-500/10 text-sky-400 border-sky-500/20');
 
                 return `
                     <div class="queue-row p-2.5 px-3 flex items-center justify-between gap-2.5 hover:bg-zinc-800/40 transition group" 
-                        draggable="${canEdit}" data-index="${index}">
+                        draggable="${canReorder}" data-index="${index}">
                         
                         <div class="flex items-center gap-2 min-w-0 flex-1">
-                            ${canEdit ? `
+                            ${canReorder ? `
                             <span class="drag-handle text-zinc-600 group-hover:text-zinc-400 transition cursor-grab shrink-0">
                                 <i class="ri-draggable text-base"></i>
                             </span>` : ''}
@@ -997,7 +1102,7 @@
 
                         <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
                             <span class="text-xs font-mono text-zinc-400">${duration}</span>
-                            ${canEdit ? `
+                            ${canReorder ? `
                             <div class="flex items-center">
                                 <button onclick="moveQueueItem(${index}, -1)" ${index === 0 ? 'disabled' : ''} class="p-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 transition" title="上へ移動">
                                     <i class="ri-arrow-up-s-line text-sm"></i>
@@ -1005,7 +1110,8 @@
                                 <button onclick="moveQueueItem(${index}, 1)" ${index === queue.length - 1 ? 'disabled' : ''} class="p-1 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 transition" title="下へ移動">
                                     <i class="ri-arrow-down-s-line text-sm"></i>
                                 </button>
-                            </div>
+                            </div>` : ''}
+                            ${canEdit ? `
                             <button onclick="removeQueueItem(${index})" class="p-1 text-zinc-500 hover:text-red-400 transition" title="キューから削除">
                                 <i class="ri-close-line text-base"></i>
                             </button>` : ''}
@@ -1014,7 +1120,7 @@
                 `;
             }).join('');
 
-            if (canEdit) bindDragEvents();
+            if (canReorder) bindDragEvents();
         }
 
         // Drag & Drop Queue Reordering
@@ -1120,6 +1226,7 @@
             showToast(`${files.length}枚の画像をアップロード中...`, 'info');
 
             let successCount = 0;
+            let lastError = '';
             for (let i = 0; i < files.length; i++) {
                 const formData = new FormData();
                 formData.append('image', files[i]);
@@ -1129,15 +1236,26 @@
                         method: 'POST',
                         body: formData
                     });
-                    if (res.ok) successCount++;
-                } catch (e) {}
+                    if (res.ok) {
+                        successCount++;
+                    } else {
+                        // 失敗を黙って捨てると「1枚しか上がらない」原因が利用者に分からない
+                        const err = await res.json().catch(() => ({}));
+                        lastError = err.message || `HTTP ${res.status}`;
+                    }
+                } catch (e) {
+                    lastError = 'APIサーバーと通信できませんでした';
+                }
             }
 
-            if (successCount > 0) {
+            if (successCount === files.length) {
                 showToast(`${successCount}枚の画像を追加しました`, 'success');
                 checkServerHealth(true);
+            } else if (successCount > 0) {
+                showToast(`${successCount}/${files.length}枚を追加しました（失敗: ${lastError}）`, 'warning');
+                checkServerHealth(true);
             } else {
-                showToast('画像の追加に失敗しました', 'danger');
+                showToast(`画像の追加に失敗しました: ${lastError || '不明なエラー'}`, 'danger');
             }
         }
 
@@ -1412,6 +1530,8 @@
                 icon.className = 'ri-checkbox-circle-fill text-emerald-400 text-sm';
             } else if (type === 'danger') {
                 icon.className = 'ri-error-warning-fill text-rose-400 text-sm';
+            } else if (type === 'warning') {
+                icon.className = 'ri-alert-fill text-amber-400 text-sm';
             } else {
                 icon.className = 'ri-information-fill text-sky-400 text-sm';
             }

@@ -112,8 +112,11 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
 RATE_LIMIT_LOCK = threading.Lock()
-LAST_QUEUE_REQUESTS = {} # {ip: timestamp}
+LAST_QUEUE_REQUESTS = {} # {ip: timestamp} URL追加用（最小間隔方式）
 QUEUE_RATE_LIMIT_SECONDS = 2.5
+UPLOAD_REQUEST_TIMES = {} # {ip: [timestamp, ...]} 写真アップロード用（時間枠内の合計枚数方式）
+UPLOAD_RATE_LIMIT_BURST = 20    # 一括アップロードで許可する枚数
+UPLOAD_RATE_LIMIT_WINDOW = 60.0 # 上記枚数を数える時間枠（秒）
 MAX_REQUEST_BODY_BYTES = 64 * 1024
 MAX_UPLOAD_BODY_BYTES = 20 * 1024 * 1024 # 20MB
 
@@ -263,6 +266,32 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                         del LAST_QUEUE_REQUESTS[k]
             return True
 
+    def check_upload_rate_limit(self):
+        """
+        写真アップロード用のレートリミット。
+
+        URL追加と違い「複数枚をまとめて選ぶ」のが通常の使い方なので、最小間隔方式
+        （2.5秒に1回）だとブラウザからの一括アップロードが2枚目以降すべて 429 になり、
+        「1枚しかアップロードできない」状態になる。そのため一定時間内の合計枚数で
+        制限する方式にして、連投防止は維持しつつ一括アップロードを通す。
+        """
+        client_ip = self.headers.get("cf-connecting-ip") or self.client_address[0]
+        now = time.time()
+        with RATE_LIMIT_LOCK:
+            times = [t for t in UPLOAD_REQUEST_TIMES.get(client_ip, [])
+                     if now - t < UPLOAD_RATE_LIMIT_WINDOW]
+            if len(times) >= UPLOAD_RATE_LIMIT_BURST:
+                UPLOAD_REQUEST_TIMES[client_ip] = times
+                return False
+            times.append(now)
+            UPLOAD_REQUEST_TIMES[client_ip] = times
+            if len(UPLOAD_REQUEST_TIMES) > 1000:
+                for k in list(UPLOAD_REQUEST_TIMES.keys()):
+                    stamps = UPLOAD_REQUEST_TIMES.get(k)
+                    if not stamps or now - stamps[-1] > 3600:
+                        del UPLOAD_REQUEST_TIMES[k]
+            return True
+
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
@@ -383,10 +412,11 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 })
                 return
 
-            if not self.is_local_request() and not self.check_rate_limit():
+            if not self.is_local_request() and not self.check_upload_rate_limit():
                 self.send_json_response(429, {
                     "success": False,
-                    "message": "Rate limit exceeded. Please wait a few seconds before uploading another photo."
+                    "message": (f"Rate limit exceeded: up to {UPLOAD_RATE_LIMIT_BURST} photos per "
+                                f"{int(UPLOAD_RATE_LIMIT_WINDOW)} seconds. Please wait a moment.")
                 })
                 return
 
