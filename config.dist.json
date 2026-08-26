@@ -19,6 +19,7 @@
   "overlay_qr_mode": "bottom-right",
   "overlay_clock_enabled": false,
   "overlay_clock_video": false,
+  "overlay_clock_position": "top-right",
   "radio_mode": true,
   "radio_bg_source": "slideshow"
 }
