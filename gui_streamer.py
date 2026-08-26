@@ -1043,7 +1043,7 @@ class App(ctk.CTk):
             except Exception as e:
                 log_print(f"Error during shutdown: {e}")
             self.destroy()
-            os._exit(0)
+            sys.exit(0)
 
 def run_headless_mode(streamer_core, api_server):
     log_print("==================================================")

@@ -204,7 +204,7 @@
 
                     <!-- Video Element Container -->
                     <div class="relative w-full bg-black rounded-lg overflow-hidden aspect-video max-h-[380px] flex items-center justify-center border border-zinc-800 group">
-                        <video id="liveVideo" class="w-full h-full object-contain" playsinline controls></video>
+                        <video id="liveVideo" class="w-full h-full object-contain" playsinline controls muted></video>
                         <div id="videoOverlayMsg" class="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-2 text-zinc-400 text-xs p-4 text-center pointer-events-none transition-opacity duration-300">
                             <i class="ri-film-line text-3xl text-zinc-600"></i>
                             <span id="videoStatusText">ストリームを読み込み中...</span>
@@ -722,6 +722,7 @@
         let hlsRetryTimer = null;         // 再接続の待機タイマー（作り直し時に必ず解除する）
         let previewResumeWatchdog = null; // 開き直しても再生が戻らないときに作り直す監視タイマー
         let isOnline = false;
+        let wasPreviouslyOffline = true;
         let isPolling = false;
         let draggedItemIndex = null;
         let currentStatusData = null;
@@ -1129,12 +1130,18 @@
                         clearTimeout(previewResumeWatchdog);
                         previewResumeWatchdog = null;
                     }
-                    // 開き直した直後は再試行カウンタが 0 のまま「ストリームを読み込み中...」を
-                    // 表示しているので、カウンタだけを見て早期 return してはいけない。
-                    // オーバーレイが隠れているかどうかで既に復帰済みかを判断する。
                     const overlayEl = document.getElementById('videoOverlayMsg');
-                    if (hlsFatalRetries === 0 && overlayEl && overlayEl.classList.contains('opacity-0')) return;
-                    markPreviewHealthy();
+                    const wasHealthy = hlsFatalRetries === 0 && overlayEl && overlayEl.classList.contains('opacity-0');
+                    if (!wasHealthy) {
+                        markPreviewHealthy();
+                    }
+                    // セグメントが到着しているのに再生が停止している場合は確実に再生
+                    if (video && video.paused) {
+                        video.play().catch(() => {
+                            video.muted = true;
+                            video.play().catch(() => {});
+                        });
+                    }
                 });
 
                 hlsInstance.on(Hls.Events.ERROR, (event, data) => {
@@ -1164,7 +1171,7 @@
                     if (hlsRetryTimer) clearTimeout(hlsRetryTimer);
                     hlsRetryTimer = setTimeout(() => {
                         hlsRetryTimer = null;
-                        if (hlsInstance !== ownInstance || !isOnline || !previewEnabled) return;
+                        if (hlsInstance !== ownInstance || !previewEnabled) return;
                         try {
                             if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                                 hlsInstance.recoverMediaError();
@@ -1347,6 +1354,17 @@
 
         function updateUiOnline(data) {
             isOnline = true;
+            wasPreviouslyOffline = false;
+
+            if (previewEnabled) {
+                const videoEl = document.getElementById('liveVideo');
+                if (!hlsInstance) {
+                    initHlsPlayer();
+                } else if (videoEl && videoEl.paused && videoEl.readyState >= 2) {
+                    videoEl.play().catch(() => {});
+                }
+            }
+
             document.getElementById('statusDot').className = 'w-2 h-2 rounded-full bg-emerald-500';
             document.getElementById('statusText').innerText = '稼働中 (Active)';
             document.getElementById('statusText').className = 'text-emerald-400 font-medium truncate';
@@ -1535,6 +1553,7 @@
 
         function updateUiOffline() {
             isOnline = false;
+            wasPreviouslyOffline = true;
             document.getElementById('statusDot').className = 'w-2 h-2 rounded-full bg-red-500';
             document.getElementById('statusText').innerText = '停止中 (Offline)';
             document.getElementById('statusText').className = 'text-red-400 font-medium truncate';

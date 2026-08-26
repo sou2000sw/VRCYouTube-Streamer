@@ -162,6 +162,18 @@ def parse_multipart_file(body_bytes, content_type_header):
     return None, None
 
 class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
+    # MIMEタイプの明示（Windows等で .ts が text/plain になる問題やプレイヤー互換性を防止）
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        ".m3u8": "application/vnd.apple.mpegurl",
+        ".ts": "video/mp2t",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }
+
     def __init__(self, *args, streamer_core=None, shutdown_callback=None, **kwargs):
         self.streamer_core = streamer_core
         self.shutdown_callback = shutdown_callback
@@ -582,8 +594,19 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(500, {"error": "Failed to generate QR code"})
                 return
 
-        # 4. HTML Player (Root or /stream.m3u8 requested by browser)
-        elif path == "/" or (path == "/stream.m3u8" and "text/html" in accept_header):
+        # 4. HTML Player (Root or /stream.m3u8 directly navigated in browser)
+        # /stream.m3u8 はブラウザのアドレスバー直接入力（Sec-Fetch-Dest: document 等）の場合のみ UI を返し、
+        # メディアプレイヤー・XHR・Fetch 等によるリクエストには HLS マニフェスト（m3u8）を返す
+        elif path == "/" or (
+            path == "/stream.m3u8"
+            and "text/html" in accept_header
+            and self.headers.get("Sec-Fetch-Dest", "") in ("document", "")
+            and self.headers.get("Sec-Fetch-Mode", "") in ("navigate", "")
+            and not self.headers.get("X-Requested-With")
+            and "video" not in accept_header
+            and "application/vnd.apple.mpegurl" not in accept_header
+            and "application/x-mpegurl" not in accept_header
+        ):
             live_sync = self.streamer_core.config.get("live_sync_duration_count", 4) if self.streamer_core else 4
             tunnel_stream_url = ""
             if self.streamer_core:

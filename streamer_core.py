@@ -13,6 +13,7 @@ import shutil
 import atexit
 import urllib.request
 import urllib.parse
+import hashlib
 import yt_dlp
 import qrcode
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
@@ -38,20 +39,13 @@ CLOUDFLARED_EXE = os.path.join(BASE_PATH, "cloudflared.exe")
 LOCAL_FFMPEG = os.path.join(APP_DIR, "ffmpeg.exe")
 
 def cleanup_hls_dir_completely():
-    """HLS出力ディレクトリ内の一時ファイル・フォルダを削除する（atexit ハンドラ）。
-
-    images/ は利用者がアップロードした写真とラジオカードのキャッシュであり、
-    配信の一時ファイルではないため残す。ここで消していたため、プロセス終了のたびに
-    写真が全て失われ、次回起動時にラジオ背景のスライドショーが空になっていた。
-    """
+    """HLS出力ディレクトリ内の全一時ファイル・フォルダを完全消去する（atexit ハンドラ）。"""
     if not os.path.exists(HLS_DIR):
         return
-    preserved = {"images"}
-    for attempt in range(3):
+    for attempt in range(5):
         try:
+            remaining = False
             for item in os.listdir(HLS_DIR):
-                if item in preserved:
-                    continue
                 item_path = os.path.join(HLS_DIR, item)
                 try:
                     if os.path.isdir(item_path):
@@ -59,12 +53,12 @@ def cleanup_hls_dir_completely():
                     else:
                         os.remove(item_path)
                 except Exception:
-                    pass
-            if not (set(os.listdir(HLS_DIR)) - preserved):
+                    remaining = True
+            if not remaining and not os.listdir(HLS_DIR):
                 break
-            time.sleep(0.1)
+            time.sleep(0.2)
         except Exception:
-            pass
+            time.sleep(0.2)
 
 atexit.register(cleanup_hls_dir_completely)
 
@@ -124,6 +118,10 @@ def kill_proc(proc):
         return
     try:
         proc.kill()
+        try:
+            proc.wait(timeout=2.0)
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -309,7 +307,7 @@ class StreamerCore:
         self.enable_tunnel = bool(self.config.get("enable_tunnel", True))
 
         os.makedirs(HLS_DIR, exist_ok=True)
-        self.clean_hls_dir(all_files=True, preserve_images=True)
+        self.clean_hls_dir(all_files=True, preserve_images=False)
 
         # プロセスと同期
         self.hls_proc = None
@@ -356,8 +354,9 @@ class StreamerCore:
         if not os.path.exists(HLS_DIR):
             return
         preserved = {"images"} if preserve_images else set()
-        for attempt in range(3):
+        for attempt in range(5):
             try:
+                remaining = False
                 for item in os.listdir(HLS_DIR):
                     if item in preserved:
                         continue
@@ -369,19 +368,19 @@ class StreamerCore:
                             else:
                                 os.remove(item_path)
                         except Exception:
-                            pass
+                            remaining = True
                     else:
                         if item.endswith(".ts") or item.endswith(".m3u8"):
                             try:
                                 os.remove(item_path)
                             except Exception:
-                                pass
-                if all_files and not (set(os.listdir(HLS_DIR)) - preserved):
+                                remaining = True
+                if not remaining and (not all_files or not (set(os.listdir(HLS_DIR)) - preserved)):
                     break
-                time.sleep(0.1)
+                time.sleep(0.2)
             except Exception as e:
                 log_print(f"[Core] Warning cleaning HLS dir: {e}")
-                time.sleep(0.1)
+                time.sleep(0.2)
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -1071,6 +1070,7 @@ class StreamerCore:
                 for f in os.listdir(IMAGE_CACHE_DIR)
                 if f.lower().endswith((".png", ".jpg", ".jpeg"))
                 and not f.startswith("playback_overlay_")
+                and not f.startswith("playback_prep")
                 and not f.startswith("temp_")
             ]
             images.extend(cached)
@@ -1185,13 +1185,13 @@ class StreamerCore:
                 self.slideshow_cursor = (start + consumed) % len(images)
 
                 manifest_lines = ["ffconcat version 1.0\n"]
-                for img in images:
-                    pb_path = self.get_image_for_playback(img)
+                for idx, img in enumerate(images):
+                    pb_path = self.get_image_for_playback(img, unique_id=idx)
                     pb_path_clean = os.path.abspath(pb_path).replace("\\", "/")
                     manifest_lines.append(f"file '{pb_path_clean}'\n")
                     manifest_lines.append(f"duration {duration_val}\n")
                 # concat demuxer の最終要素の持続時間を有効にするため末尾に複製
-                last_pb = self.get_image_for_playback(images[-1])
+                last_pb = self.get_image_for_playback(images[-1], unique_id=len(images))
                 last_pb_clean = os.path.abspath(last_pb).replace("\\", "/")
                 manifest_lines.append(f"file '{last_pb_clean}'\n")
 
@@ -1805,36 +1805,61 @@ class StreamerCore:
             log_print(f"[Core] Error generating QR overlay image: {e}")
             return None
 
-    def get_image_for_playback(self, image_path):
-        """写真再生時、overlay_qr_enabled設定に応じてQRコード・URLを合成した画像パスを返す"""
-        overlay_enabled = bool(self.config.get("overlay_qr_enabled", False) or self.config.get("overlay_qr_image", False))
-        if not overlay_enabled:
+    def get_image_for_playback(self, image_path, unique_id=None):
+        """写真・スライドショー再生用: 1920x1080に正規化し、QR/URL設定に応じてオーバーレイを合成した画像パスを返す"""
+        if not image_path or not os.path.exists(image_path):
             return image_path
 
-        qr_path = self.generate_qr_overlay_image()
-        if not qr_path or not os.path.exists(qr_path):
-            return image_path
+        overlay_enabled = bool(self.config.get("overlay_qr_enabled", False) or self.config.get("overlay_qr_image", False))
+        qr_path = self.generate_qr_overlay_image() if overlay_enabled else None
+        has_qr = bool(qr_path and os.path.exists(qr_path))
 
         try:
-            base_img = Image.open(image_path).convert("RGBA")
-            qr_img = Image.open(qr_path).convert("RGBA")
+            # 1. 元画像を読み込み、EXIFの向きを補正
+            src_img = Image.open(image_path)
+            src_img = ImageOps.exif_transpose(src_img)
+            if src_img.mode != "RGB":
+                src_img = src_img.convert("RGBA")
 
-            bw, bh = base_img.size
-            qw, qh = qr_img.size
-            mode = self.config.get("overlay_qr_mode", "bottom-right")
+            # 2. 1920x1080 キャンバスにアスペクト比を維持してレターボックス配置
+            target_w, target_h = 1920, 1080
+            src_w, src_h = src_img.size
+            ratio = min(target_w / src_w, target_h / src_h)
+            new_w = max(1, int(src_w * ratio))
+            new_h = max(1, int(src_h * ratio))
 
-            if mode == "fullscreen":
-                base_img.alpha_composite(qr_img, dest=(0, 0))
+            img_resized = src_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 255))
+            offset_x = (target_w - new_w) // 2
+            offset_y = (target_h - new_h) // 2
+
+            if img_resized.mode == "RGBA":
+                canvas.paste(img_resized, (offset_x, offset_y), img_resized)
             else:
-                pos_x = bw - qw - 25
-                pos_y = bh - qh - 25
-                base_img.alpha_composite(qr_img, dest=(pos_x, pos_y))
+                canvas.paste(img_resized, (offset_x, offset_y))
 
-            temp_path = os.path.join(IMAGE_CACHE_DIR, f"playback_overlay_{int(time.time())}.png")
-            base_img.convert("RGB").save(temp_path, "PNG")
+            # 3. QRコード・URLカードのオーバーレイ合成（有効な場合）
+            if has_qr:
+                qr_img = Image.open(qr_path).convert("RGBA")
+                qw, qh = qr_img.size
+                mode = self.config.get("overlay_qr_mode", "bottom-right")
+
+                if mode == "fullscreen":
+                    canvas.alpha_composite(qr_img, dest=(0, 0))
+                else:
+                    pos_x = max(0, target_w - qw - 25)
+                    pos_y = max(0, target_h - qh - 25)
+                    canvas.alpha_composite(qr_img, dest=(pos_x, pos_y))
+
+            # 4. 一時ファイルとして保存（衝突しないユニークな名前）
+            os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
+            path_hash = hashlib.md5(f"{os.path.abspath(image_path)}_{overlay_enabled}_{unique_id}".encode()).hexdigest()[:8]
+            id_tag = f"_{unique_id}" if unique_id is not None else ""
+            temp_path = os.path.join(IMAGE_CACHE_DIR, f"playback_prep{id_tag}_{path_hash}.png")
+            canvas.convert("RGB").save(temp_path, "PNG")
             return temp_path
         except Exception as e:
-            log_print(f"[Core] Failed to composite QR overlay onto image: {e}")
+            log_print(f"[Core] Failed to prepare playback image ({image_path}): {e}")
             return image_path
 
     def generate_standby_image(self):
@@ -2188,7 +2213,7 @@ class StreamerCore:
                                 if self.send_proc:
                                     kill_proc(self.send_proc)
                                 self.send_proc = None
-                            time.sleep(0.1)
+                            time.sleep(0.3)
                             stop_event = self.play_image(next_item)
                             if stop_event is None:
                                 break
@@ -2428,8 +2453,8 @@ class StreamerCore:
             self.hls_proc = None
             self.tunnel_proc = None
         
-        # プロセス終了・ファイルロック解除を少し待ってから HLS ディレクトリ内を完全消去
-        time.sleep(0.3)
-        self.clean_hls_dir(all_files=True, preserve_images=True)
+        # プロセス終了・ファイルロック解除を確実に待ってから HLS ディレクトリ内を完全消去
+        time.sleep(0.5)
+        self.clean_hls_dir(all_files=True, preserve_images=False)
         log_print("[Core] HLS output directory completely cleaned.")
         log_print("[Core] Shutdown complete.")

@@ -194,3 +194,30 @@ YouTube側のプレイヤー仕様変更や暗号化シグネチャ変更（n-si
 - `config.dist.json`（`video_encoder: "auto"` 追加）
 - `gui_streamer.py` / `ui/index.html`（エンコーダー選択UI）
 
+---
+
+## 7. 🛠️ CLI 引数・環境設定オーバーライド機構の総点検・堅牢化 (CLI Arguments & Config Overrides Overhaul) 【実装予定 📝】
+
+### 概要
+CLI 引数（`--port`, `--host`, `--no-tunnel`, `--resolution`, `--bitrate` 等）や `StreamerCore` 初期化時のオーバーライド引数（`override_port`, `override_host`, `override_enable_tunnel` 等）が、設定ファイル（`config.json`）の読み込み・保存や GUI / Web API（`/api/config`）からの動的設定更新と干渉し、CLI による一時指定が意図せず上書きされたり無効化される問題の総点検と再設計。
+
+### 現状と課題
+- **設定優先順位の曖昧さ**: `load_config()` や `update_config()` の実行時に、CLI で指定されたオーバーライド値が `config.json` の値で上書きされたり、逆に一時的な CLI 指定値が `config.json` に永続保存されてしまうリスクがある。
+- **対応パラメータの不足**: 現状のオーバーライド機構が一部の主要パラメータ（port, host, enable_tunnel）に限定されており、他の設定項目（解像度、ビットレート、ラジオモード、QRオーバーレイ等）を CLI や一時引数から確実にオーバーライドする一貫した仕組みが不足している。
+
+### 仕様・実装設計
+1. **設定優先順位の厳格な階層化 (Configuration Precedence)**:
+   - **優先度1 (最高)**: CLI 引数・環境変数・初期化時オーバーライド（明示的に指定された場合のみ、セッション中常に最優先）
+   - **優先度2**: `config.json` に保存されたユーザー設定
+   - **優先度3 (最低)**: システム既定値（デフォルト値）
+2. **オーバーライド値の保護と `config.json` 永続化の分離**:
+   - `self._cli_overrides` ディクショナリで CLI / 一時オーバーライド値を独立保持。
+   - `get_config(key)` 参照時はオーバーライド値を返しつつ、`save_config()` 実行時は元の永続設定を破損させないクリーンな分離構造を確立。
+3. **網羅的な単体テストの整備**:
+   - CLI 引数指定時、設定ファイル読み込み時、API からの設定更新時における優先順位と動作を検証する自動テスト（`test_config_overrides.py`）を追加。
+
+### 変更対象予定ファイル
+- `streamer_core.py`（設定管理クラス / `_cli_overrides` メカニズムの刷新、`get_config` / `update_config` の整理）
+- `gui_streamer.py`（CLI 引数パースと `StreamerCore` へのオーバーライド伝達の統合）
+- `tests/test_config_overrides.py`（オーバーライド優先順位と永続化分離の単体テスト）
+
