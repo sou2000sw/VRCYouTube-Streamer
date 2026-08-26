@@ -221,3 +221,30 @@ CLI 引数（`--port`, `--host`, `--no-tunnel`, `--resolution`, `--bitrate` 等�
 - `gui_streamer.py`（CLI 引数パースと `StreamerCore` へのオーバーライド伝達の統合）
 - `tests/test_config_overrides.py`（オーバーライド優先順位と永続化分離の単体テスト）
 
+---
+
+## 8. 🌐 通常ブラウザ（localhost含む）利用時のサーバーライフサイクルボタン（停止・再起動・起動）非表示化 【実装予定 📝】
+
+### 概要
+WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge 等）から `http://localhost:8000/` やトンネルURLで開いた際、ヘッダーおよびオフラインバナーに表示されている「サーバー停止」「再起動」「サーバー起動」ボタンを非表示にするタスク。
+
+### 現状と課題
+- **背景**: `ui/index.html` は VRCBeacon プラグイン（Electron IPC連携）と通常ブラウザ（スタンドアローン）の両用UIとして設計されている。
+- **問題点**:
+  - **起動ボタン**: 通常ブラウザにはOSのローカルプロセスを起動する権限・IPCがないため、押しても「起動コマンドを実行してください」と表示されるだけで起動できない。
+  - **停止ボタン**: `/api/shutdown` が呼ばれてサーバープロセスが終了すると、Webサーバー自体が停止するため、ブラウザ画面が接続エラーとなり以後の操作が不能になる。
+  - **再起動ボタン**: プロセス終了後にブラウザから再起動をかけることができないため、停止したまま復旧不能になる。
+  - **結論**: VRCBeacon（Electron IPC環境）外の通常ブラウザでは、これら3つのボタンは動作しない上に利用者を混乱させるため、非表示にするのが安全。
+
+### 仕様・実装設計
+1. **実行環境判定の厳格化 (`isVRCBeaconEnvironment()`)**:
+   - `window.electron && window.electron.ipcRenderer` の存在をチェック。
+   - VRCBeacon 内（IPC利用可能環境）の場合のみ、サーバーの「停止」「再起動」「起動」ボタンを表示・活性化。
+2. **通常ブラウザ環境（localhost / リモート問わず）での挙動**:
+   - ヘッダーの `btnHeaderStop`, `btnHeaderRestart`, `btnHeaderLaunch` を常時非表示（`hidden`）。
+   - オフラインバナー（`offlineBanner`）内の「VRCYouTube サーバーを起動」ボタンを非表示にし、「※サーバーが停止しています。ホストPCで VRCYouTubeStreamer.exe を起動してください。」という手動案内のみを表示。
+
+### 変更対象予定ファイル
+- `ui/index.html`（環境判定ロジックの改善、ライフサイクルボタンの表示制御）
+- `plugin/ui/index.html`（ビルド自動同期）
+

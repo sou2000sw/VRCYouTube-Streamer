@@ -420,3 +420,18 @@ python -m pytest test_security.py test_radio_unit.py -q
 3. **単体テストの作成**:
    - `test_config_overrides.py` で CLI オーバーライドと `config.json` 保存の独立性を保証するテストを追加。
 
+---
+
+## 10. ⚠️ 今後の重要課題・タスク: 通常ブラウザ時のサーバー操作ボタン（停止・再起動・起動）非表示化
+
+### 課題の概要
+- **通常ブラウザ（localhost含む）での操作不能と誤爆リスク**:
+  - `ui/index.html` は VRCBeacon プラグイン（Electron IPC）と通常ブラウザ（スタンドアローン）の両用UI。
+  - 通常ブラウザ（Chrome / Edge 等）から `http://localhost:8000/` で開いた場合：
+    - 「起動」ボタン: OSプロセスを起動する権限・IPCがないため押しても起動できない。
+    - 「停止」ボタン: サーバープロセスが終了するとWebサーバーも落ちるため、以後の操作が不能になる。
+    - 「再起動」ボタン: 停止後に新プロセスを起動できないため、単に停止したままになる。
+- **対応方針**:
+  - `window.electron && window.electron.ipcRenderer`（VRCBeacon IPC環境）の有無を判定。
+  - VRCBeacon 内でのみ「停止」「再起動」「起動」ボタンを表示し、通常ブラウザ（localhost / リモート問わず）ではこれら3つのボタンを完全非表示にする。
+
