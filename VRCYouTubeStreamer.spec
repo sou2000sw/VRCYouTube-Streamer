@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('cloudflared.exe', '.'), ('ui', 'ui')]
+datas = [('cloudflared.exe', '.'), ('ui', 'ui'), ('assets', 'assets')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('customtkinter')

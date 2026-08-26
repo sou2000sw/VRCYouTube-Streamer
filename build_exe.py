@@ -410,6 +410,7 @@ def build(version=APP_VERSION):
         "--name", "VRCYouTubeStreamer",
         "--add-data", "cloudflared.exe;.",
         "--add-data", "ui;ui",
+        "--add-data", "assets;assets",
         "--collect-all", "customtkinter",
         "--collect-all", "qrcode",
         "--collect-all", "PIL",

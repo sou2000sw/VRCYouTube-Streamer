@@ -151,6 +151,31 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self.lbl_radio_info.pack(fill="x", padx=15, pady=(0, 8))
 
+        # 6.5. 待機画面 (Standby Screen) 設定
+        self.lbl_standby_section = ctk.CTkLabel(form_frame, text="📺 Standby Screen (キュー空時の待機画面):", font=ctk.CTkFont(weight="bold"), anchor="w")
+        self.lbl_standby_section.pack(fill="x", padx=15, pady=(8, 2))
+
+        curr_standby_mode = cfg.get("standby_mode", "image")
+        standby_mode_val = "QR Code Info (QR案内)" if curr_standby_mode == "qr" else "Custom Image (固定画像)"
+        self.seg_standby_mode = ctk.CTkSegmentedButton(form_frame, values=["Custom Image (固定画像)", "QR Code Info (QR案内)"])
+        self.seg_standby_mode.set(standby_mode_val)
+        self.seg_standby_mode.pack(fill="x", padx=15, pady=(2, 4))
+
+        self.current_standby_img_path = cfg.get("standby_image_path", "")
+
+        standby_img_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        standby_img_frame.pack(fill="x", padx=15, pady=(2, 6))
+
+        display_name = os.path.basename(self.current_standby_img_path) if self.current_standby_img_path else "(デフォルト画像)"
+        self.lbl_standby_path = ctk.CTkLabel(standby_img_frame, text=f"待機画像: {display_name}", anchor="w", font=ctk.CTkFont(size=12))
+        self.lbl_standby_path.pack(side="left", fill="x", expand=True)
+
+        self.btn_select_standby_img = ctk.CTkButton(standby_img_frame, text="画像選択...", width=90, command=self.select_standby_image)
+        self.btn_select_standby_img.pack(side="right", padx=(5, 0))
+
+        self.btn_reset_standby_img = ctk.CTkButton(standby_img_frame, text="初期化", width=60, fg_color="#64748B", hover_color="#475569", command=self.reset_standby_image)
+        self.btn_reset_standby_img.pack(side="right", padx=(5, 0))
+
         # 7. QRコード上書き表示 (ウォーターマーク) 設定
         is_qr_on = bool(cfg.get("overlay_qr_enabled", False) or cfg.get("overlay_qr_video", False) or cfg.get("overlay_qr_image", False))
         self.switch_qr_overlay = ctk.CTkSwitch(form_frame, text="🔲 QR Overlay (動画・写真にQR・URL上書き表示)")
@@ -208,7 +233,32 @@ class SettingsWindow(ctk.CTkToplevel):
         self.switch_web_control = ctk.CTkSwitch(form_frame, text="Allow Playback Control (スキップ・ループ等の操作を許可)")
         if cfg.get("allow_web_playback_control", True):
             self.switch_web_control.select()
-        self.switch_web_control.pack(anchor="w", padx=15, pady=(2, 12))
+        self.switch_web_control.pack(anchor="w", padx=15, pady=(2, 8))
+
+        # 10. Webリモコン パスワード/PIN保護設定
+        self.lbl_web_pw = ctk.CTkLabel(form_frame, text="🔒 Web Remote Password / PIN (パスワード保護):", font=ctk.CTkFont(weight="bold"), anchor="w")
+        self.lbl_web_pw.pack(fill="x", padx=15, pady=(8, 2))
+
+        self.lbl_web_pw_desc = ctk.CTkLabel(
+            form_frame,
+            text="※空欄の場合は認証なし。PIN番号（例: 1234）やパスワードを設定すると、\n　認証したユーザーのみがリモコン画面の閲覧・操作を行えます（ホスト負荷防止）。",
+            font=ctk.CTkFont(size=11),
+            text_color="#95A5A6",
+            anchor="w",
+            justify="left"
+        )
+        self.lbl_web_pw_desc.pack(fill="x", padx=15, pady=(0, 4))
+
+        pw_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        pw_frame.pack(fill="x", padx=15, pady=(2, 12))
+
+        self.entry_web_password = ctk.CTkEntry(pw_frame, placeholder_text="未設定 (誰でもアクセス可能)", width=240, show="*")
+        if cfg.get("web_password", ""):
+            self.entry_web_password.insert(0, str(cfg.get("web_password", "")))
+        self.entry_web_password.pack(side="left", padx=(0, 10))
+
+        self.chk_show_pw = ctk.CTkCheckBox(pw_frame, text="パスワードを表示", command=self.toggle_show_web_password)
+        self.chk_show_pw.pack(side="left")
 
         # --- 折りたたみ式 API リファレンス ---
         self.api_toggle_btn = ctk.CTkButton(
@@ -298,6 +348,25 @@ class SettingsWindow(ctk.CTkToplevel):
         self.btn_cancel = ctk.CTkButton(btn_frame, text="Cancel / キャンセル", fg_color="#7F8C8D", hover_color="#707B7C", command=self.destroy)
         self.btn_cancel.pack(side="right")
 
+    def toggle_show_web_password(self):
+        if self.chk_show_pw.get():
+            self.entry_web_password.configure(show="")
+        else:
+            self.entry_web_password.configure(show="*")
+
+    def select_standby_image(self):
+        file_path = filedialog.askopenfilename(
+            title="待機用画像を選択",
+            filetypes=[("Image Files", "*.png;*.jpg;*.jpeg;*.webp;*.bmp"), ("All Files", "*.*")]
+        )
+        if file_path:
+            self.current_standby_img_path = file_path
+            self.lbl_standby_path.configure(text=f"待機画像: {os.path.basename(file_path)}")
+
+    def reset_standby_image(self):
+        self.current_standby_img_path = ""
+        self.lbl_standby_path.configure(text="待機画像: (デフォルト画像)")
+
     def toggle_api_ref(self):
         if self.is_api_ref_open:
             self.api_ref_frame.pack_forget()
@@ -319,6 +388,7 @@ class SettingsWindow(ctk.CTkToplevel):
             shuffle = bool(self.switch_shuffle.get())
             photo_advance = bool(self.switch_photo_advance.get())
             radio_mode = bool(self.switch_radio.get())
+            web_password = self.entry_web_password.get().strip()
             
             selected_bg = self.seg_radio_bg.get()
             if "Slideshow" in selected_bg:
@@ -338,6 +408,7 @@ class SettingsWindow(ctk.CTkToplevel):
             qr_mode = "fullscreen" if "Fullscreen" in self.seg_qr_mode.get() else "bottom-right"
             qr_enabled = bool(self.switch_qr_overlay.get())
             clock_enabled = bool(self.switch_clock_overlay.get())
+            standby_mode = "qr" if "QR" in self.seg_standby_mode.get() else "image"
 
             new_cfg = {
                 "port": port,
@@ -346,6 +417,8 @@ class SettingsWindow(ctk.CTkToplevel):
                 "image_auto_advance": photo_advance,
                 "radio_mode": radio_mode,
                 "radio_bg_source": radio_bg,
+                "standby_mode": standby_mode,
+                "standby_image_path": self.current_standby_img_path,
                 "overlay_qr_enabled": qr_enabled,
                 "overlay_qr_video": qr_enabled,
                 "overlay_qr_image": qr_enabled,
@@ -359,10 +432,12 @@ class SettingsWindow(ctk.CTkToplevel):
                 "shuffle": shuffle,
                 "allow_web_queue_add": bool(self.switch_web_add.get()),
                 "allow_web_queue_edit": bool(self.switch_web_edit.get()),
-                "allow_web_playback_control": bool(self.switch_web_control.get())
+                "allow_web_playback_control": bool(self.switch_web_control.get()),
+                "web_password": web_password
             }
 
             self.streamer_core.save_config(new_cfg)
+            self.streamer_core.generate_standby_image()
             
             if port != old_port:
                 messagebox.showinfo("Saved", "Settings saved successfully!\nNote: Port change will take effect on next restart.")

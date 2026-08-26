@@ -116,6 +116,12 @@
                 <i class="ri-tv-2-line text-sm text-primary"></i>
                 <span class="hidden sm:inline" id="previewBtnLabel">プレビュー</span>
             </button>
+
+            <!-- Logout / Lock Button (When Password Protected) -->
+            <button id="btnHeaderLogout" onclick="handleLogout()" class="hidden flex items-center gap-1 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-red-400 border border-zinc-700 rounded text-xs transition" title="ログアウトして再ロック">
+                <i class="ri-lock-line text-sm"></i>
+                <span class="hidden sm:inline">ロック</span>
+            </button>
         </div>
     </header>
 
@@ -539,6 +545,39 @@
         </main>
     </div>
 
+    <!-- Password / PIN Authentication Modal -->
+    <div id="authModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md transition-opacity duration-200">
+        <div class="bg-card border border-border rounded-xl max-w-sm w-full p-6 shadow-2xl mx-4 flex flex-col gap-4">
+            <div class="flex flex-col items-center gap-2 text-center">
+                <div class="w-12 h-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary text-2xl">
+                    <i class="ri-lock-password-line"></i>
+                </div>
+                <h3 class="font-bold text-base text-zinc-100">Webリモコン 認証</h3>
+                <p class="text-xs text-zinc-400 leading-relaxed">
+                    配信ホストによりWebリモコンがパスワード保護されています。<br>PINコードまたはパスワードを入力してください。
+                </p>
+            </div>
+
+            <form id="authForm" onsubmit="submitPasswordAuth(event)" class="flex flex-col gap-3">
+                <div class="relative">
+                    <input type="password" id="inputWebPassword" autocomplete="current-password" placeholder="PINコードまたはパスワード" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3.5 py-2.5 pr-10 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-primary transition font-mono tracking-widest text-center" autofocus required>
+                    <button type="button" onclick="togglePasswordVisibility('inputWebPassword', 'iconTogglePw')" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200">
+                        <i id="iconTogglePw" class="ri-eye-line text-base"></i>
+                    </button>
+                </div>
+
+                <div id="authErrorMsg" class="hidden text-xs text-red-400 text-center font-medium bg-red-950/40 border border-red-800/50 py-1.5 px-2 rounded">
+                    パスワードが違います
+                </div>
+
+                <button type="submit" id="btnSubmitAuth" class="w-full bg-primary text-zinc-950 hover:bg-primary-hover font-semibold py-2.5 rounded-lg text-sm transition flex items-center justify-center gap-2 shadow">
+                    <i class="ri-login-box-line"></i>
+                    <span>ロック解除して入室</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
     <!-- Toast Notification -->
     <div id="toast" class="fixed bottom-4 right-4 bg-zinc-800 border border-zinc-700 text-zinc-100 text-xs px-3.5 py-2 rounded shadow-lg transform translate-y-12 opacity-0 transition-all duration-200 flex items-center gap-2 pointer-events-none z-50">
         <i id="toastIcon" class="ri-check-line text-emerald-400 text-sm"></i>
@@ -554,9 +593,28 @@
             return localStorage.getItem('vrcyoutube_api_base') || 'http://127.0.0.1:8000';
         })();
 
+        // Web Password / PIN Auth helpers
+        function getStoredWebPassword() {
+            try {
+                return sessionStorage.getItem('vrcyoutube_web_password') || '';
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function setStoredWebPassword(pw) {
+            try {
+                if (pw) {
+                    sessionStorage.setItem('vrcyoutube_web_password', pw);
+                } else {
+                    sessionStorage.removeItem('vrcyoutube_web_password');
+                }
+            } catch (e) {}
+        }
+
+        let isPasswordLocked = false;
+
         // Beacon Bridge: Beaconの中にいるときだけ、apiBase 宛ての fetch を主プロセス経由へ回す。
-        // 直で叩くと Origin が付き、ホスト本人の操作ではなく Web からの遠隔操作として
-        // 扱われる（設定の取得・停止・全消去が 403、ホストが Web 操作を切ると再生操作も死ぬ）。
         (function () {
             let beacon = null; // hello が来るまで null = Beacon の外
             const pending = new Map();
@@ -566,7 +624,6 @@
                 const m = event.data;
                 if (!m || typeof m !== 'object') return;
                 if (m.__beaconPlugin === 'hello') {
-                    // beacon-plugin: は Electron のの中にしか存在しないスキーム。
                     if (location.protocol !== 'beacon-plugin:') return;
                     if (event.source !== window.parent || window.parent === window) return;
                     beacon = { origin: event.origin, id: m.id };
@@ -586,12 +643,9 @@
 
             window.fetch = function (input, init = {}) {
                 const url = typeof input === 'string' ? input : input?.url;
-                // Beacon の外、apiBase 以外、文字列にできない本文は、今までどおり直で。
-                if (!beacon || typeof url !== 'string' || !url.startsWith(apiBase) ||
-                    (init.body != null && typeof init.body !== 'string')) {
-                    return nativeFetch(input, init);
-                }
+                const storedPw = getStoredWebPassword();
 
+                // ヘッダーに X-Web-Password を自動付与
                 let headers = {};
                 if (init.headers) {
                     if (typeof Headers !== 'undefined' && init.headers instanceof Headers) {
@@ -602,6 +656,22 @@
                         headers = { ...init.headers };
                     }
                 }
+                if (storedPw && !headers['X-Web-Password'] && !headers['x-web-password']) {
+                    headers['X-Web-Password'] = storedPw;
+                }
+                init.headers = headers;
+
+                // Beacon の外、apiBase 以外、文字列にできない本文は、nativeFetch で。
+                if (!beacon || typeof url !== 'string' || !url.startsWith(apiBase) ||
+                    (init.body != null && typeof init.body !== 'string')) {
+                    return nativeFetch(input, init).then(res => {
+                        if (res.status === 401 && typeof url === 'string' && url.includes('/api/') && !url.includes('/api/auth')) {
+                            isPasswordLocked = true;
+                            showPasswordModal(false);
+                        }
+                        return res;
+                    });
+                }
 
                 const requestId = `r${++seq}`;
                 return new Promise((resolve, reject) => {
@@ -610,11 +680,15 @@
                             reject(new Error(m.reason || 'plugin bridge refused'));
                             return;
                         }
-                        // 既存の呼び出しは res.ok / res.status / res.json() を見ているので Response で包んで返す
-                        resolve(new Response(m.body, {
+                        const res = new Response(m.body, {
                             status: m.status,
                             headers: m.contentType ? { 'content-type': m.contentType } : {}
-                        }));
+                        });
+                        if (m.status === 401 && typeof url === 'string' && url.includes('/api/') && !url.includes('/api/auth')) {
+                            isPasswordLocked = true;
+                            showPasswordModal(false);
+                        }
+                        resolve(res);
                     });
                     const replyTarget = beacon.origin && beacon.origin !== 'null' ? beacon.origin : '*';
                     parent.postMessage({
@@ -641,10 +715,124 @@
         let hlsInstance = null;
         let previewEnabled = true;
 
+        // Password / PIN Modal Handlers
+        function showPasswordModal(hasError = false) {
+            const modal = document.getElementById('authModal');
+            if (!modal) return;
+            modal.classList.remove('hidden');
+            const errEl = document.getElementById('authErrorMsg');
+            if (errEl) {
+                if (hasError) {
+                    errEl.classList.remove('hidden');
+                } else {
+                    errEl.classList.add('hidden');
+                }
+            }
+            const input = document.getElementById('inputWebPassword');
+            if (input) {
+                input.focus();
+                input.select();
+            }
+        }
+
+        function hidePasswordModal() {
+            const modal = document.getElementById('authModal');
+            if (modal) modal.classList.add('hidden');
+            const errEl = document.getElementById('authErrorMsg');
+            if (errEl) errEl.classList.add('hidden');
+        }
+
+        function togglePasswordVisibility(inputId, iconId) {
+            const input = document.getElementById(inputId);
+            const icon = document.getElementById(iconId);
+            if (!input || !icon) return;
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.className = 'ri-eye-off-line text-base text-primary';
+            } else {
+                input.type = 'password';
+                icon.className = 'ri-eye-line text-base';
+            }
+        }
+
+        async function submitPasswordAuth(event) {
+            if (event) event.preventDefault();
+            const input = document.getElementById('inputWebPassword');
+            const btn = document.getElementById('btnSubmitAuth');
+            const errEl = document.getElementById('authErrorMsg');
+            if (!input) return;
+            const pw = input.value.trim();
+            if (!pw) return;
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = `<i class="ri-loader-4-line animate-spin text-base"></i><span>認証中...</span>`;
+            }
+            if (errEl) errEl.classList.add('hidden');
+
+            try {
+                const res = await fetch(`${apiBase}/api/auth`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Web-Password': pw
+                    },
+                    body: JSON.stringify({ password: pw })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    setStoredWebPassword(pw);
+                    isPasswordLocked = false;
+                    hidePasswordModal();
+                    showToast('認証に成功しました', 'success');
+                    checkServerHealth(true);
+                } else {
+                    if (errEl) {
+                        errEl.innerText = data.message || "パスワードが違います";
+                        errEl.classList.remove('hidden');
+                    }
+                    input.focus();
+                    input.select();
+                }
+            } catch (e) {
+                if (errEl) {
+                    errEl.innerText = "認証サーバーへの接続に失敗しました";
+                    errEl.classList.remove('hidden');
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = `<i class="ri-login-box-line"></i><span>ロック解除して入室</span>`;
+                }
+            }
+        }
+
+        function handleLogout() {
+            setStoredWebPassword('');
+            isPasswordLocked = true;
+            showPasswordModal(false);
+            const input = document.getElementById('inputWebPassword');
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+            showToast('ログアウトしました', 'info');
+        }
+
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             const apiBaseInput = document.getElementById('settingApiBase');
             if (apiBaseInput) apiBaseInput.value = apiBase;
+
+            // Check URL parameters for ?pin= or ?password=
+            try {
+                const params = new URLSearchParams(window.location.search);
+                const pinParam = params.get('pin') || params.get('password');
+                if (pinParam) {
+                    setStoredWebPassword(pinParam);
+                }
+            } catch (e) {}
+
             updatePortLabel();
             updateClock();
             setInterval(updateClock, 1000);
@@ -991,14 +1179,23 @@
 
         // Server Health & Status Polling
         async function checkServerHealth(manual = false) {
+            if (isPasswordLocked && !manual) return;
             if (isPolling && !manual) return;
             isPolling = true;
 
             try {
                 const res = await fetch(`${apiBase}/api/status`, { cache: 'no-store' });
+                if (res.status === 401) {
+                    isPasswordLocked = true;
+                    showPasswordModal(false);
+                    updateUiOffline();
+                    return;
+                }
                 if (res.ok) {
                     const data = await res.json();
                     currentStatusData = data;
+                    isPasswordLocked = false;
+                    hidePasswordModal();
                     updateUiOnline(data);
                 } else {
                     updateUiOffline();
@@ -1032,6 +1229,17 @@
                 document.getElementById('btnHeaderStop').classList.add('hidden');
                 document.getElementById('btnHeaderRestart').classList.add('hidden');
             }
+
+            // Logout / Lock button visibility
+            const btnLogout = document.getElementById('btnHeaderLogout');
+            if (btnLogout) {
+                if (data.has_web_password) {
+                    btnLogout.classList.remove('hidden');
+                } else {
+                    btnLogout.classList.add('hidden');
+                }
+            }
+
             document.getElementById('offlineBanner').classList.add('hidden');
 
             // Apply Granular Web Permissions

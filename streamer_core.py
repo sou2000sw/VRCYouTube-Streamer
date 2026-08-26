@@ -32,6 +32,7 @@ HLS_DIR = os.path.join(APP_DIR, "hls_output")
 IMAGE_CACHE_DIR = os.path.join(HLS_DIR, "images")
 RADIO_CACHE_DIR = os.path.join(IMAGE_CACHE_DIR, "radio_cache")
 STANDBY_IMAGE_PATH = os.path.join(HLS_DIR, "standby.png")
+DEFAULT_STANDBY_IMAGE_PATH = os.path.join(BASE_PATH, "assets", "standby_default.jpg")
 QR_OVERLAY_PATH = os.path.join(HLS_DIR, "qr_overlay.png")
 CLOUDFLARED_EXE = os.path.join(BASE_PATH, "cloudflared.exe")
 LOCAL_FFMPEG = os.path.join(APP_DIR, "ffmpeg.exe")
@@ -101,7 +102,10 @@ DEFAULT_CONFIG = {
     "overlay_clock_video": False,
     "overlay_clock_position": "top-right",
     "radio_mode": False,
-    "radio_bg_source": "card"
+    "radio_bg_source": "card",
+    "standby_mode": "image",
+    "standby_image_path": "",
+    "web_password": ""
 }
 
 def log_print(msg):
@@ -476,13 +480,26 @@ class StreamerCore:
             "overlay_clock_position": str(self.config.get("overlay_clock_position", "top-right")),
             "radio_mode": bool(self.config.get("radio_mode", False)),
             "radio_bg_source": str(self.config.get("radio_bg_source", "standby")),
+            "standby_mode": str(self.config.get("standby_mode", "image")),
+            "standby_image_path": str(self.config.get("standby_image_path", "")),
             "has_prev": has_prev,
+            "has_web_password": bool(str(self.config.get("web_password", "")).strip()),
             "permissions": {
                 "allow_web_queue_add": bool(self.config.get("allow_web_queue_add", True)),
                 "allow_web_queue_edit": bool(self.config.get("allow_web_queue_edit", True)),
                 "allow_web_playback_control": bool(self.config.get("allow_web_playback_control", True))
             }
         }
+
+    def set_standby_config(self, mode: str = None, image_path: str = None):
+        if mode in ("image", "qr"):
+            self.config["standby_mode"] = mode
+        if image_path is not None:
+            self.config["standby_image_path"] = image_path
+        self.save_config()
+        self.generate_standby_image()
+        log_print(f"[Core] Standby config updated: mode={self.config.get('standby_mode')}, image_path={self.config.get('standby_image_path')}")
+        return self.config.get("standby_mode")
 
     def set_overlay_clock(self, enabled: bool, video: bool = None, position: str = None):
         self.config["overlay_clock_enabled"] = bool(enabled)
@@ -1821,7 +1838,58 @@ class StreamerCore:
             return image_path
 
     def generate_standby_image(self):
-        """待機用画面（QRコード & URL付き 1920x1080）を生成して保存"""
+        """待機用画面（固定画像またはQRコード & URL付き 1920x1080）を生成して保存"""
+        standby_mode = self.config.get("standby_mode", "image")
+
+        if standby_mode == "image":
+            # ==================== 固定画像モード (デフォルト) ====================
+            custom_path = self.config.get("standby_image_path", "")
+            target_image_path = None
+            if custom_path and os.path.exists(custom_path):
+                target_image_path = custom_path
+            elif os.path.exists(DEFAULT_STANDBY_IMAGE_PATH):
+                target_image_path = DEFAULT_STANDBY_IMAGE_PATH
+
+            if target_image_path:
+                try:
+                    img = Image.open(target_image_path)
+                    img = ImageOps.exif_transpose(img)
+                    if img.mode != "RGB":
+                        img = img.convert("RGBA")
+                        canvas = Image.new("RGBA", img.size, (0, 0, 0, 255))
+                        img = Image.alpha_composite(canvas, img).convert("RGB")
+
+                    target_w, target_h = 1920, 1080
+                    src_w, src_h = img.size
+                    ratio = min(target_w / src_w, target_h / src_h)
+                    new_w = max(1, int(src_w * ratio))
+                    new_h = max(1, int(src_h * ratio))
+
+                    img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                    final_img = Image.new("RGB", (target_w, target_h), (0, 0, 0))
+                    offset_x = (target_w - new_w) // 2
+                    offset_y = (target_h - new_h) // 2
+                    final_img.paste(img_resized, (offset_x, offset_y))
+
+                    final_img.save(STANDBY_IMAGE_PATH, "PNG")
+                    return
+                except Exception as e:
+                    log_print(f"[Core] Error rendering custom standby image ({target_image_path}): {e}")
+
+            # フォールバック (画像が開けない場合、シンプルな待機画面を生成)
+            img = Image.new("RGB", (1920, 1080), color="#0F172A")
+            draw = ImageDraw.Draw(img)
+            font_title = get_pil_font(52, bold=True)
+            font_sub = get_pil_font(30, bold=False)
+            draw.text((960, 480), "VRCYouTube Live Streamer", fill="#38BDF8", anchor="mm", font=font_title)
+            draw.text((960, 560), "Standby — Queue is Empty", fill="#94A3B8", anchor="mm", font=font_sub)
+            try:
+                img.save(STANDBY_IMAGE_PATH, "PNG")
+            except Exception as e:
+                log_print(f"[Core] Failed to save fallback standby image: {e}")
+            return
+
+        # ==================== QRコード & URL 案内画面モード ====================
         is_tunnel_ready = bool(self.tunnel_raw_url and "trycloudflare.com" in self.tunnel_raw_url)
         is_tunnel_enabled = getattr(self, "enable_tunnel", True)
         port = self.config.get("port", 8000)

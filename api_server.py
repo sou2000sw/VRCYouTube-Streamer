@@ -291,10 +291,40 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                         del UPLOAD_REQUEST_TIMES[k]
             return True
 
+    def check_web_password_auth(self, input_password=None):
+        """
+        Webリモコンのパスワード/PIN認証を検証。
+        - ホスト本人（localhost / ループバック）は常に認証不要（True）。
+        - web_password が設定されていない（空文字）場合は常に認証不要（True）。
+        - X-Web-Password ヘッダまたは Authorization: Bearer <pw>、または直接渡された input_password を検証。
+        """
+        if self.is_local_request():
+            return True
+        if not self.streamer_core:
+            return True
+        configured_password = str(self.streamer_core.config.get("web_password", "")).strip()
+        if not configured_password:
+            return True
+
+        # 入力パスワード候補をチェック
+        candidate = None
+        if input_password is not None:
+            candidate = str(input_password).strip()
+        elif "x-web-password" in self.headers:
+            candidate = self.headers.get("x-web-password", "").strip()
+        elif "X-Web-Password" in self.headers:
+            candidate = self.headers.get("X-Web-Password", "").strip()
+        elif "authorization" in self.headers or "Authorization" in self.headers:
+            auth_hdr = self.headers.get("Authorization") or self.headers.get("authorization", "")
+            if auth_hdr.lower().startswith("bearer "):
+                candidate = auth_hdr[7:].strip()
+
+        return candidate == configured_password
+
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-Web-Password")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
@@ -316,8 +346,28 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         path = parsed.path
         accept_header = self.headers.get("Accept", "")
 
+        # 0. API: Auth Check
+        if path == "/api/auth":
+            configured_pw = str(self.streamer_core.config.get("web_password", "")).strip() if self.streamer_core else ""
+            has_pw = bool(configured_pw)
+            authed = self.check_web_password_auth()
+            self.send_json_response(200, {
+                "success": True,
+                "has_web_password": has_pw,
+                "authenticated": authed,
+                "is_local": self.is_local_request()
+            })
+            return
+
         # 1. API: Status
-        if path == "/api/status":
+        elif path == "/api/status":
+            if not self.check_web_password_auth():
+                self.send_json_response(401, {
+                    "success": False,
+                    "error": "Unauthorized: Web password required or invalid.",
+                    "has_web_password": True
+                })
+                return
             if self.streamer_core:
                 data = self.streamer_core.get_status_data()
             else:
@@ -338,6 +388,12 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
 
         # 3. API: QR Code Image
         elif path == "/api/qrcode":
+            if not self.check_web_password_auth():
+                self.send_json_response(401, {
+                    "success": False,
+                    "error": "Unauthorized: Web password required or invalid."
+                })
+                return
             url = ""
             if self.streamer_core and self.streamer_core.tunnel_raw_url:
                 url = self.streamer_core.tunnel_raw_url
@@ -404,6 +460,13 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
 
         # 1. API: Photo Upload (写真・画像アップロード)
         if path == "/api/upload":
+            if not self.check_web_password_auth():
+                self.send_json_response(401, {
+                    "success": False,
+                    "message": "Unauthorized: Web password required or invalid."
+                })
+                return
+
             if not self.is_local_request() and not self.streamer_core.config.get("allow_web_queue_add", True):
                 self.send_json_response(403, {
                     "success": False,
@@ -483,8 +546,31 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
 
         log_print(f"[APIServer] POST {path} body: {body_json}")
 
+        # 1.5. API: Auth Check / Login
+        if path == "/api/auth":
+            input_pw = body_json.get("password")
+            if self.check_web_password_auth(input_password=input_pw):
+                self.send_json_response(200, {
+                    "success": True,
+                    "message": "Authentication successful"
+                })
+            else:
+                self.send_json_response(401, {
+                    "success": False,
+                    "message": "Invalid password",
+                    "error": "Unauthorized"
+                })
+            return
+
         # 2. API: Queue (動画・画像URL追加)
         if path == "/api/queue":
+            if not self.check_web_password_auth():
+                self.send_json_response(401, {
+                    "success": False,
+                    "message": "Unauthorized: Web password required or invalid."
+                })
+                return
+
             # 外部からの動画追加 許可チェック
             if not self.is_local_request() and not self.streamer_core.config.get("allow_web_queue_add", True):
                 self.send_json_response(403, {
@@ -529,6 +615,13 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
 
         # 3. API: Control (再生・キュー制御)
         elif path == "/api/control":
+            if not self.check_web_password_auth():
+                self.send_json_response(401, {
+                    "success": False,
+                    "message": "Unauthorized: Web password required or invalid."
+                })
+                return
+
             action = body_json.get("action", "").strip().lower()
             if not self.streamer_core:
                 self.send_json_response(500, {"success": False, "message": "Streamer core not available"})

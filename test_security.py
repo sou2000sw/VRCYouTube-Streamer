@@ -55,17 +55,17 @@ def run_security_tests():
     print(f"Remote POST /api/queue (file:// exploit) -> {status}: {res.get('message')}")
     assert status == 400
 
+    # 5.5. Rate limit spam attempt immediately after previous request (Should be 429 Too Many Requests)
+    status, res = make_request("POST", "/api/queue", {"url": "https://example.com/dummy"}, headers=remote_headers)
+    print(f"Remote POST /api/queue (Spam within 2.5s) -> {status}: {res.get('message')}")
+    assert status == 429
+
     time.sleep(2.6)
 
     # 6. Safe Remote Video Add (Should succeed when allow_web_queue_add is True)
     status, res = make_request("POST", "/api/queue", {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}, headers=remote_headers)
     print(f"Remote POST /api/queue (Safe URL) -> {status}")
     assert status == 200
-
-    # 7. Rate limit spam attempt (Should be 429 Too Many Requests)
-    status, res = make_request("POST", "/api/queue", {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"}, headers=remote_headers)
-    print(f"Remote POST /api/queue (Spam within 2.5s) -> {status}: {res.get('message')}")
-    assert status == 429
 
     print("\n=== Security Test 3: Granular Web Permissions ===")
     # Disable playback control and queue edit from host
@@ -103,7 +103,50 @@ def run_security_tests():
     print(f"Remote POST /api/control (skip when allowed) -> {status}")
     assert status == 200
 
-    print("\n=== Security Test 4: Local Shutdown ===")
+    print("\n=== Security Test 4: Web PIN / Password Protection ===")
+    # 1. パスワードを設定
+    make_request("POST", "/api/config", {"web_password": "secret1234"})
+
+    # 2. ローカルからのアクセスはパスワード未付与でもアクセス可能 (バイパス)
+    status, res = make_request("GET", "/api/status")
+    print(f"Local GET /api/status without password -> {status}")
+    assert status == 200
+    assert res.get("has_web_password") is True
+
+    # 3. リモートからのアクセス（パスワードなし）-> 401 Unauthorized
+    status, res = make_request("GET", "/api/status", headers=remote_headers)
+    print(f"Remote GET /api/status without password -> {status}")
+    assert status == 401
+    assert res.get("has_web_password") is True
+
+    # 4. リモートからの認証エンドポイント検証 (誤ったパスワード -> 401)
+    status, res = make_request("POST", "/api/auth", {"password": "wrong_password"}, headers=remote_headers)
+    print(f"Remote POST /api/auth (wrong password) -> {status}")
+    assert status == 401
+
+    # 5. リモートからの認証エンドポイント検証 (正しいパスワード -> 200)
+    status, res = make_request("POST", "/api/auth", {"password": "secret1234"}, headers=remote_headers)
+    print(f"Remote POST /api/auth (correct password) -> {status}")
+    assert status == 200
+
+    # 6. リモートから正しい X-Web-Password ヘッダー付きでアクセス -> 200
+    authed_headers = {"CF-Connecting-IP": "203.0.113.195", "X-Web-Password": "secret1234"}
+    status, res = make_request("GET", "/api/status", headers=authed_headers)
+    print(f"Remote GET /api/status with X-Web-Password -> {status}")
+    assert status == 200
+
+    status, res = make_request("POST", "/api/control", {"action": "skip"}, headers=authed_headers)
+    print(f"Remote POST /api/control with X-Web-Password -> {status}")
+    assert status == 200
+
+    # 7. パスワードを空文字にリセット（認証無効化）
+    make_request("POST", "/api/config", {"web_password": ""})
+    status, res = make_request("GET", "/api/status", headers=remote_headers)
+    print(f"Remote GET /api/status after clearing password -> {status}")
+    assert status == 200
+    assert res.get("has_web_password") is False
+
+    print("\n=== Security Test 5: Local Shutdown ===")
     status, res = make_request("POST", "/api/shutdown", {})
     print(f"Local POST /api/shutdown -> {status}")
     assert status == 200

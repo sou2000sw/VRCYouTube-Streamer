@@ -21,5 +21,8 @@
   "overlay_clock_video": false,
   "overlay_clock_position": "top-right",
   "radio_mode": true,
-  "radio_bg_source": "slideshow"
+  "radio_bg_source": "slideshow",
+  "standby_mode": "image",
+  "standby_image_path": "",
+  "web_password": ""
 }
