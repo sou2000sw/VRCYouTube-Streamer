@@ -843,6 +843,9 @@
                 authCooldownTimer = null;
                 if (btn) btn.disabled = false;
                 if (errEl) errEl.innerText = 'もう一度お試しください';
+                // ロックアウト中はポーリングを止めているので、明けたら自分で復帰しにいく。
+                // （PINを保持しているゲストは、待つだけで勝手に画面が戻る）
+                if (getStoredWebPassword()) checkServerHealth(true);
             }, 1000);
         }
 
@@ -1319,10 +1322,11 @@
                     if (!retryAfter) {
                         try { retryAfter = (await res.json()).retry_after || 30; } catch (e) { retryAfter = 30; }
                     }
+                    // サーバーは生きているので、オフラインバナーは出さずモーダルの
+                    // カウントダウンだけを見せる
                     isPasswordLocked = true;
                     showPasswordModal(false);
                     startAuthCooldown(retryAfter);
-                    updateUiOffline();
                     return;
                 }
                 if (res.ok) {

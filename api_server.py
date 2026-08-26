@@ -269,7 +269,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         キーにはCloudflareが上書きする CF-Connecting-IP か接続元IPのみを使う。
         X-Forwarded-For はクライアントが自由に詐称できるためキーに含めない。
         """
-        client_ip = self.headers.get("cf-connecting-ip") or self.client_address[0]
+        client_ip = self._client_rate_key()
         now = time.time()
         with RATE_LIMIT_LOCK:
             last_time = LAST_QUEUE_REQUESTS.get(client_ip, 0)
@@ -291,7 +291,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         「1枚しかアップロードできない」状態になる。そのため一定時間内の合計枚数で
         制限する方式にして、連投防止は維持しつつ一括アップロードを通す。
         """
-        client_ip = self.headers.get("cf-connecting-ip") or self.client_address[0]
+        client_ip = self._client_rate_key()
         now = time.time()
         with RATE_LIMIT_LOCK:
             times = [t for t in UPLOAD_REQUEST_TIMES.get(client_ip, [])
@@ -308,20 +308,49 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                         del UPLOAD_REQUEST_TIMES[k]
             return True
 
-    def _auth_client_key(self):
-        """認証試行のカウント単位。詐称可能な X-Forwarded-For は使わない（既存のレートリミットと同方針）。"""
-        return self.headers.get("cf-connecting-ip") or (self.client_address[0] if self.client_address else "")
+    def _client_rate_key(self):
+        """
+        レートリミット／ロックアウトのカウント単位。
+
+        CF-Connecting-IP は「Cloudflare が上書きするから信用できる」ヘッダだが、それが成り立つのは
+        リクエストが実際に cloudflared を通って来た場合だけ。cloudflared はホスト上で動き
+        127.0.0.1 に接続してくるので、ソケットの接続元がループバックのときに限り採用する。
+        LAN や直開放ポートから来た接続では接続元IPを使う。こうしないと、攻撃者が
+        CF-Connecting-IP を1回ごとに変えるだけでカウントを分散させ、ロックアウトを
+        完全に回避できてしまう（実測: 12回連続失敗でロック0件）。
+        """
+        client_ip = self.client_address[0] if self.client_address else ""
+        forwarded = self.headers.get("cf-connecting-ip")
+        if forwarded:
+            try:
+                if ipaddress.ip_address(client_ip).is_loopback:
+                    return f"cf:{forwarded.strip()}"
+            except ValueError:
+                pass
+        return client_ip
 
     def auth_block_remaining(self):
-        """認証がロックアウト中なら残り秒数（1秒以上に切り上げ）、解除済みなら 0 を返す。"""
+        """
+        認証がロックアウト中なら残り秒数（1秒以上に切り上げ）、解除済みなら 0 を返す。
+
+        全体スロットルだけが作動している場合、失敗履歴が無いクライアントは通す。
+        全員を一律で締め出すと、攻撃者が1分ごとに100回失敗させるだけで
+        Webリモコンを恒久的に使用不能にできてしまう（＝ゲストへのDoS）ため。
+        通してもロックは実質無効化されない：入力を間違えた時点で失敗履歴が付き、
+        以後は全体ロックの対象になるので「使い捨てIP1個につき1回」しか試せない
+        （通常時は1個につき5回）。
+        """
         now = time.time()
-        key = self._auth_client_key()
+        key = self._client_rate_key()
         with AUTH_FAIL_LOCK:
-            remain = GLOBAL_AUTH_BLOCKED_UNTIL - now
             entry = AUTH_FAILURES.get(key)
-            if entry:
-                remain = max(remain, entry.get("blocked_until", 0.0) - now)
-        return int(remain) + 1 if remain > 0 else 0
+            personal_remain = (entry.get("blocked_until", 0.0) - now) if entry else 0.0
+            if personal_remain > 0:
+                return int(personal_remain) + 1
+            global_remain = GLOBAL_AUTH_BLOCKED_UNTIL - now
+            if global_remain > 0 and entry:
+                return int(global_remain) + 1
+        return 0
 
     def register_auth_failure(self):
         """
@@ -331,7 +360,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         待ち時間の間は 401 ではなく 429 を返すため、攻撃側は「正解かどうか」の情報を得られない。
         """
         now = time.time()
-        key = self._auth_client_key()
+        key = self._client_rate_key()
         global GLOBAL_AUTH_BLOCKED_UNTIL
         with AUTH_FAIL_LOCK:
             entry = AUTH_FAILURES.get(key)
@@ -365,7 +394,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
 
     def register_auth_success(self):
         """認証に成功したらそのIPの失敗履歴を消す（正規利用者が巻き添えでロックされ続けないように）。"""
-        key = self._auth_client_key()
+        key = self._client_rate_key()
         with AUTH_FAIL_LOCK:
             AUTH_FAILURES.pop(key, None)
 
