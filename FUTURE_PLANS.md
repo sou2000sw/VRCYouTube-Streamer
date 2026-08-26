@@ -140,3 +140,57 @@ YouTube側のプレイヤー仕様変更や暗号化シグネチャ変更（n-si
 - **📂 ドラッグ＆ドロップ対応**:
   - 動画ファイルや画像ファイルをホストウィンドウにドラッグ＆ドロップするだけでキューに即追加。
 
+---
+
+## 5. 🎵 ラジオモード時のクロスフェード・滑らか切り替え (Smooth Crossfade in Radio Mode) 【実装予定 📝】
+
+### 概要
+ラジオモード（音声＋アルバムアートカード/スライドショー）再生時、曲の終了と次の曲の開始がブツ切り・無音にならず、設定した秒数（例: 2〜4秒）で前の曲をフェードアウトしながら次の曲をフェードインして滑らかにシームレス遷移する機能。
+
+### 仕様・実装設計
+1. **先読み（prefetch）との連携**:
+   - 既に実装されている `prefetch_item` により次曲のオーディオストリームURLは事前取得済み。
+   - 再生中の曲の終了残り \(N\) 秒（クロスフェード秒数）のタイミングで次曲のエンコード・音声結合処理を起動。
+2. **クロスフェード処理方式**:
+   - **方式A (FFmpeg `acrossfade` / `afade` フィルター)**:
+     - 曲末尾と曲頭のオーディオストリームを `acrossfade=d=3:c1=tri:c2=tri` 等でオーバーラップ合成し、HLS セグメントシーケンス番号（`sequence_offset`）の連続性を維持して送出。
+   - **方式B (セグメントレベル・ボリュームカーブ合成)**:
+     - 前曲末尾セグメントに `volume='1.0-t/d':eval=frame`、次曲頭セグメントに `volume='t/d':eval=frame` を適用してシームレスに結合。
+3. **設定とUI**:
+   - `config.json`: `"radio_crossfade_duration": 3`（0で無効、1〜5秒で調整可能）。
+   - Webリモコン / ホスト設定画面に「クロスフェード秒数」スライダーを追加。
+
+### 変更対象予定ファイル
+- `streamer_core.py`（クロスフェード用オーディオ合成ロジック、セグメント遷移ハンドリング）
+- `config.dist.json`（`radio_crossfade_duration: 3` 追加）
+- `gui_streamer.py` / `ui/index.html`（クロスフェード設定UI）
+
+---
+
+## 6. ⚡ FFmpeg ハードウェアエンコード（NVENC / QSV / AMF）対応 (Hardware-Accelerated Video Encoding) 【実装予定 📝】
+
+### 概要
+ホストPCで通常動画モード（1080p60 / 720p60）を高画質配信する際、CPU負荷を大幅に低減し、省電力かつ高フレームレート・低遅延を維持するため、GPUによるハードウェアエンコード（NVIDIA NVENC, Intel QSV, AMD AMF）を自動検出・選択可能にする機能。
+
+### 仕様・実装設計
+1. **対応エンコーダー**:
+   - `auto` (自動検出: NVENC → QSV → AMF → `libx264` ソフトウェアフォールバック)
+   - `h264_nvenc` (NVIDIA GeForce / Quadro / RTX)
+   - `h264_qsv` (Intel Core CPU 内蔵 Iris Xe / UHD Graphics / Arc)
+   - `h264_amf` (AMD Radeon)
+   - `libx264` (CPU ソフトウェアエンコード、高互換性)
+2. **自動検出（Probe）機構**:
+   - アプリ起動時に `ffmpeg -encoders` を実行し、ホスト環境で利用可能なエンコーダーを自動チェック・キャッシュ。
+   - GPUエンコーダーが使用不可・エラーを返した場合は、自動的に安全な `libx264` へフォールバック。
+3. **モード別の最適化**:
+   - **通常動画モード**: 指定された GPU エンコーダー（NVENC/QSV/AMF）を使用して高速・低負荷エンコード。
+   - **ラジオモード**: 静止画＋音声のため、従来通り極小帯域（2fps / 200kbps）の `libx264` で超軽量稼働。
+4. **設定とUI**:
+   - `config.json`: `"video_encoder": "auto"`
+   - Webリモコン設定モーダル / ホスト設定画面に「動画エンコーダー（自動 / CPU / NVENC / QSV / AMF）」選択セレクトボックスを追加。
+
+### 変更対象予定ファイル
+- `streamer_core.py`（エンコーダー自動プローブ関数、FFmpeg 引数生成ロジックの動的切替）
+- `config.dist.json`（`video_encoder: "auto"` 追加）
+- `gui_streamer.py` / `ui/index.html`（エンコーダー選択UI）
+

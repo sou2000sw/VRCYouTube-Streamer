@@ -497,7 +497,13 @@
                 <div class="bg-card border border-border rounded-lg p-4 flex flex-col md:flex-row gap-6 items-center md:items-start">
                     <!-- QR Code Card -->
                     <div class="flex flex-col items-center gap-2 bg-white p-3 rounded-lg border border-zinc-700 shadow shrink-0">
-                        <img id="shareQrImg" src="/api/qrcode" alt="Web Remote QR Code" class="w-40 h-40 object-contain rounded" onerror="this.src='https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(window.location.href)">
+                        <!-- 外部QRサービスへのフォールバックは持たない。
+                             未認証時 /api/qrcode は401になるため必ず発火し、PIN付きURLを第三者サーバーへ送ってしまうため。
+                             src は認証成功後に checkServerHealth() 側でセットする。 -->
+                        <img id="shareQrImg" alt="Web Remote QR Code" class="w-40 h-40 object-contain rounded" onerror="handleQrError()">
+                        <div id="shareQrError" style="display:none" class="w-40 h-40 items-center justify-center text-center text-[11px] text-zinc-600 leading-relaxed px-2">
+                            QRコードを生成できませんでした。<br>下のURLをコピーして共有してください。
+                        </div>
                         <span class="text-[11px] font-semibold text-zinc-800">スマホでスキャン</span>
                     </div>
 
@@ -560,14 +566,21 @@
 
             <form id="authForm" onsubmit="submitPasswordAuth(event)" class="flex flex-col gap-3">
                 <div class="relative">
-                    <input type="password" id="inputWebPassword" autocomplete="current-password" placeholder="PINコードまたはパスワード" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3.5 py-2.5 pr-10 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-primary transition font-mono tracking-widest text-center" autofocus required>
+                    <!-- inputmode="numeric" は Android Chrome / iOS Safari(12.2+) 双方でテンキーを出す。
+                         pattern は付けない（英数字パスワードのとき送信がブロックされるため）。
+                         text-base(16px) は iOS のフォーカス時自動ズームを防ぐ。 -->
+                    <input type="password" id="inputWebPassword" inputmode="numeric" autocomplete="current-password" placeholder="PINコードまたはパスワード" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3.5 py-2.5 pr-10 text-base text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-primary transition font-mono tracking-widest text-center" autofocus required>
                     <button type="button" onclick="togglePasswordVisibility('inputWebPassword', 'iconTogglePw')" class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200">
                         <i id="iconTogglePw" class="ri-eye-line text-base"></i>
                     </button>
                 </div>
 
+                <button type="button" id="btnAuthKeyboard" onclick="toggleAuthKeyboard()" class="self-center text-[11px] text-zinc-500 hover:text-primary underline underline-offset-2 transition">
+                    英数字パスワードを入力する
+                </button>
+
                 <div id="authErrorMsg" class="hidden text-xs text-red-400 text-center font-medium bg-red-950/40 border border-red-800/50 py-1.5 px-2 rounded">
-                    パスワードが違います
+                    PINコードが違います
                 </div>
 
                 <button type="submit" id="btnSubmitAuth" class="w-full bg-primary text-zinc-950 hover:bg-primary-hover font-semibold py-2.5 rounded-lg text-sm transition flex items-center justify-center gap-2 shadow">
@@ -742,6 +755,97 @@
             if (errEl) errEl.classList.add('hidden');
         }
 
+        // 数字キーパッド <-> 英数字キーボードの切り替え。
+        // ホスト側の設定値が数字PINか英数字パスワードかは（漏洩防止のため）クライアントに知らせないので、
+        // 既定を数字にしてゲスト自身に切り替えてもらう。
+        let authKeyboardNumeric = true;
+        function toggleAuthKeyboard() {
+            const input = document.getElementById('inputWebPassword');
+            const btn = document.getElementById('btnAuthKeyboard');
+            if (!input) return;
+            authKeyboardNumeric = !authKeyboardNumeric;
+            input.setAttribute('inputmode', authKeyboardNumeric ? 'numeric' : 'text');
+            if (btn) btn.innerText = authKeyboardNumeric ? '英数字パスワードを入力する' : '数字キーパッドに戻す';
+            // 開いているソフトキーボードを開き直させる
+            input.blur();
+            setTimeout(() => input.focus(), 30);
+        }
+
+        // QRコードの取得。
+        // <img src> は X-Web-Password ヘッダを付けられないため、PIN保護下のゲストでは 401 になる
+        // （これが従来 外部QRサービスへフォールバックしていた原因）。PINを持っている場合だけ
+        // fetch で取得して blob URL に変換し、認証を通したまま自前で表示する。
+        let lastQrKey = null;
+        async function refreshShareQr(key) {
+            const img = document.getElementById('shareQrImg');
+            const err = document.getElementById('shareQrError');
+            if (!img) return;
+            if (key !== undefined) {
+                if (lastQrKey === key) return; // 2秒ごとのポーリングで取り直さない
+                lastQrKey = key;
+            }
+            const showImg = () => {
+                img.style.display = '';
+                if (err) err.style.display = 'none';
+            };
+            const pw = getStoredWebPassword();
+            if (!pw) {
+                // 認証不要（ホスト / PIN未設定）はそのまま読み込めば良い
+                img.src = `${apiBase}/api/qrcode?t=${Date.now()}`;
+                showImg();
+                return;
+            }
+            try {
+                const res = await fetch(`${apiBase}/api/qrcode?t=${Date.now()}`, { cache: 'no-store' });
+                if (!res.ok) throw new Error(`qrcode ${res.status}`);
+                const blob = await res.blob();
+                if (!blob || !blob.size) throw new Error('empty qrcode');
+                if (img.dataset.blobUrl) URL.revokeObjectURL(img.dataset.blobUrl);
+                const objUrl = URL.createObjectURL(blob);
+                img.dataset.blobUrl = objUrl;
+                img.src = objUrl;
+                showImg();
+            } catch (e) {
+                handleQrError();
+            }
+        }
+
+        // QRコード生成に失敗したときは、外部サービスへ問い合わせず自前の案内に差し替える
+        function handleQrError() {
+            const img = document.getElementById('shareQrImg');
+            const err = document.getElementById('shareQrError');
+            if (img) img.style.display = 'none';
+            if (err) err.style.display = 'flex';
+        }
+
+        // 429（ロックアウト）を受けたときのカウントダウン表示
+        let authCooldownTimer = null;
+        function startAuthCooldown(seconds) {
+            const btn = document.getElementById('btnSubmitAuth');
+            const errEl = document.getElementById('authErrorMsg');
+            let remain = Math.max(1, parseInt(seconds, 10) || 1);
+            if (authCooldownTimer) clearInterval(authCooldownTimer);
+            const render = () => {
+                if (errEl) {
+                    errEl.innerText = `試行回数が多すぎます。あと ${remain} 秒お待ちください`;
+                    errEl.classList.remove('hidden');
+                }
+                if (btn) btn.disabled = true;
+            };
+            render();
+            authCooldownTimer = setInterval(() => {
+                remain -= 1;
+                if (remain > 0) {
+                    render();
+                    return;
+                }
+                clearInterval(authCooldownTimer);
+                authCooldownTimer = null;
+                if (btn) btn.disabled = false;
+                if (errEl) errEl.innerText = 'もう一度お試しください';
+            }, 1000);
+        }
+
         function togglePasswordVisibility(inputId, iconId) {
             const input = document.getElementById(inputId);
             const icon = document.getElementById(iconId);
@@ -779,20 +883,29 @@
                     },
                     body: JSON.stringify({ password: pw })
                 });
-                const data = await res.json();
+                let data = {};
+                try { data = await res.json(); } catch (e) {}
+
                 if (res.ok && data.success) {
                     setStoredWebPassword(pw);
                     isPasswordLocked = false;
                     hidePasswordModal();
                     showToast('認証に成功しました', 'success');
+                    lastQrKey = null; // 認証前に失敗したQRを取り直す
                     checkServerHealth(true);
+                } else if (res.status === 429) {
+                    // 総当たり対策のロックアウト中。残り秒数はヘッダと本文の両方で来る
+                    const retryAfter = data.retry_after || parseInt(res.headers.get('Retry-After'), 10) || 30;
+                    input.value = '';
+                    startAuthCooldown(retryAfter);
                 } else {
+                    // サーバー由来の英語メッセージは出さず、UI側で日本語に固定する
                     if (errEl) {
-                        errEl.innerText = data.message || "パスワードが違います";
+                        errEl.innerText = 'PINコードが違います';
                         errEl.classList.remove('hidden');
                     }
+                    input.value = '';
                     input.focus();
-                    input.select();
                 }
             } catch (e) {
                 if (errEl) {
@@ -801,7 +914,8 @@
                 }
             } finally {
                 if (btn) {
-                    btn.disabled = false;
+                    // クールダウン中は startAuthCooldown 側がボタンを制御する
+                    btn.disabled = !!authCooldownTimer;
                     btn.innerHTML = `<i class="ri-login-box-line"></i><span>ロック解除して入室</span>`;
                 }
             }
@@ -830,6 +944,14 @@
                 const pinParam = params.get('pin') || params.get('password');
                 if (pinParam) {
                     setStoredWebPassword(pinParam);
+                    // 受け取ったPINは sessionStorage に移し、URLからは消す。
+                    // ・履歴/共有/スクショ/外部サービスへの露出を防ぐ
+                    // ・URLに残っていると「ロック」しても再読込で自動解除されてしまう
+                    // 再読込でログイン状態が保たれるのは sessionStorage 側の役割なので、この除去では失われない。
+                    params.delete('pin');
+                    params.delete('password');
+                    const rest = params.toString();
+                    history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash);
                 }
             } catch (e) {}
 
@@ -1191,6 +1313,18 @@
                     updateUiOffline();
                     return;
                 }
+                if (res.status === 429) {
+                    // 総当たり対策のロックアウト中。「サーバー停止」と誤認させず、待ち時間を出す
+                    let retryAfter = parseInt(res.headers.get('Retry-After'), 10) || 0;
+                    if (!retryAfter) {
+                        try { retryAfter = (await res.json()).retry_after || 30; } catch (e) { retryAfter = 30; }
+                    }
+                    isPasswordLocked = true;
+                    showPasswordModal(false);
+                    startAuthCooldown(retryAfter);
+                    updateUiOffline();
+                    return;
+                }
                 if (res.ok) {
                     const data = await res.json();
                     currentStatusData = data;
@@ -1213,7 +1347,10 @@
             document.getElementById('statusText').innerText = '稼働中 (Active)';
             document.getElementById('statusText').className = 'text-emerald-400 font-medium truncate';
 
-            const isLocal = (data.permissions && data.permissions.is_local) !== false;
+            // 明示的に true のときだけホスト扱いにする（未指定なら安全側＝ゲスト）。
+            // 以前は `!== false` だったため、サーバーが is_local を返していない現状では
+            // 全員がホスト扱いになっていた。
+            const isLocal = data.is_local === true || !!(data.permissions && data.permissions.is_local === true);
             const permPlayback = !data.permissions || data.permissions.allow_web_playback_control !== false;
             const permAdd = !data.permissions || data.permissions.allow_web_queue_add !== false;
             const permEdit = !data.permissions || data.permissions.allow_web_queue_edit !== false;
@@ -1231,9 +1368,11 @@
             }
 
             // Logout / Lock button visibility
+            // ホスト（localhost）は常に認証不要なので、押しても何も守れず、
+            // どんな文字列でも解除できてしまい紛らわしい。ゲストにだけ見せる。
             const btnLogout = document.getElementById('btnHeaderLogout');
             if (btnLogout) {
-                if (data.has_web_password) {
+                if (data.has_web_password && !isLocal) {
                     btnLogout.classList.remove('hidden');
                 } else {
                     btnLogout.classList.add('hidden');
@@ -1274,7 +1413,7 @@
             if (quickUrl) quickUrl.value = streamUrl;
             if (infoStream) infoStream.value = streamUrl;
             if (infoTunnel) infoTunnel.value = tunnelUrl;
-            if (shareQr) shareQr.src = `${apiBase}/api/qrcode?t=${Date.now()}`;
+            if (shareQr) refreshShareQr(tunnelUrl);
 
             const labelTunnel = document.getElementById('labelTunnelState');
             if (labelTunnel) labelTunnel.innerText = data.tunnel_url ? 'Active' : 'Local Only';

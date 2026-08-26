@@ -7,6 +7,7 @@ import socketserver
 import threading
 import time
 import ipaddress
+import hmac
 from urllib.parse import urlparse
 from streamer_core import BASE_PATH, HLS_DIR, StreamerCore, log_print
 
@@ -117,6 +118,22 @@ QUEUE_RATE_LIMIT_SECONDS = 2.5
 UPLOAD_REQUEST_TIMES = {} # {ip: [timestamp, ...]} 写真アップロード用（時間枠内の合計枚数方式）
 UPLOAD_RATE_LIMIT_BURST = 20    # 一括アップロードで許可する枚数
 UPLOAD_RATE_LIMIT_WINDOW = 60.0 # 上記枚数を数える時間枠（秒）
+# --- Webリモコン認証（PIN/パスワード）のブルートフォース対策 ---
+# PIN は4桁で使われることが多く、対策がないと総当たりで数分〜十数分で破られる。
+# 「IP単位の指数バックオフ」で個別の連打を止め、「全体スロットル」でIPを
+# 使い捨てにする分散型の総当たりも頭打ちにする（片方だけでは防げない）。
+AUTH_FAIL_LOCK = threading.Lock()
+AUTH_FAILURES = {}                  # {ip: {"count": int, "blocked_until": float, "last": float}}
+AUTH_FAIL_THRESHOLD = 5             # 連続失敗がこの回数に達したらロックアウト開始
+AUTH_FAIL_BASE_LOCK_SECONDS = 30    # 初回ロック秒数（以降、失敗のたびに倍）
+AUTH_FAIL_MAX_LOCK_SECONDS = 900    # ロック上限（15分）
+AUTH_FAIL_FORGET_SECONDS = 900      # 最終失敗からこの時間が経てば失敗履歴を忘れる
+GLOBAL_AUTH_FAIL_WINDOW = 60.0      # 全体スロットルの集計窓（秒）
+GLOBAL_AUTH_FAIL_LIMIT = 100        # 集計窓内に許す全IP合計の失敗回数
+GLOBAL_AUTH_LOCK_SECONDS = 60       # 全体ロックの継続秒数
+GLOBAL_AUTH_FAILS = []              # 直近の失敗時刻（全IP合計）
+GLOBAL_AUTH_BLOCKED_UNTIL = 0.0
+
 MAX_REQUEST_BODY_BYTES = 64 * 1024
 MAX_UPLOAD_BODY_BYTES = 20 * 1024 * 1024 # 20MB
 
@@ -291,6 +308,96 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                         del UPLOAD_REQUEST_TIMES[k]
             return True
 
+    def _auth_client_key(self):
+        """認証試行のカウント単位。詐称可能な X-Forwarded-For は使わない（既存のレートリミットと同方針）。"""
+        return self.headers.get("cf-connecting-ip") or (self.client_address[0] if self.client_address else "")
+
+    def auth_block_remaining(self):
+        """認証がロックアウト中なら残り秒数（1秒以上に切り上げ）、解除済みなら 0 を返す。"""
+        now = time.time()
+        key = self._auth_client_key()
+        with AUTH_FAIL_LOCK:
+            remain = GLOBAL_AUTH_BLOCKED_UNTIL - now
+            entry = AUTH_FAILURES.get(key)
+            if entry:
+                remain = max(remain, entry.get("blocked_until", 0.0) - now)
+        return int(remain) + 1 if remain > 0 else 0
+
+    def register_auth_failure(self):
+        """
+        PIN/パスワードの入力ミスを記録し、必要ならロックアウトする。
+
+        しきい値到達後は失敗のたびにロック時間を倍にしていく（30→60→120…上限15分）。
+        待ち時間の間は 401 ではなく 429 を返すため、攻撃側は「正解かどうか」の情報を得られない。
+        """
+        now = time.time()
+        key = self._auth_client_key()
+        global GLOBAL_AUTH_BLOCKED_UNTIL
+        with AUTH_FAIL_LOCK:
+            entry = AUTH_FAILURES.get(key)
+            if not entry or now - entry.get("last", 0.0) > AUTH_FAIL_FORGET_SECONDS:
+                entry = {"count": 0, "blocked_until": 0.0, "last": now}
+            entry["count"] += 1
+            entry["last"] = now
+            if entry["count"] >= AUTH_FAIL_THRESHOLD:
+                over = entry["count"] - AUTH_FAIL_THRESHOLD
+                lock_seconds = min(AUTH_FAIL_BASE_LOCK_SECONDS * (2 ** over), AUTH_FAIL_MAX_LOCK_SECONDS)
+                entry["blocked_until"] = now + lock_seconds
+                log_print(f"[APIServer] Auth lockout: {key} failed {entry['count']} times -> blocked {lock_seconds}s")
+            AUTH_FAILURES[key] = entry
+
+            # 全体スロットル（IPを変えながらの総当たり対策）
+            GLOBAL_AUTH_FAILS.append(now)
+            while GLOBAL_AUTH_FAILS and now - GLOBAL_AUTH_FAILS[0] > GLOBAL_AUTH_FAIL_WINDOW:
+                GLOBAL_AUTH_FAILS.pop(0)
+            if len(GLOBAL_AUTH_FAILS) >= GLOBAL_AUTH_FAIL_LIMIT and GLOBAL_AUTH_BLOCKED_UNTIL < now:
+                GLOBAL_AUTH_BLOCKED_UNTIL = now + GLOBAL_AUTH_LOCK_SECONDS
+                log_print(
+                    f"[APIServer] Auth lockout (global): {len(GLOBAL_AUTH_FAILS)} failures in "
+                    f"{int(GLOBAL_AUTH_FAIL_WINDOW)}s -> all guests blocked {GLOBAL_AUTH_LOCK_SECONDS}s"
+                )
+
+            # 古いエントリの掃除
+            if len(AUTH_FAILURES) > 1000:
+                for k in list(AUTH_FAILURES.keys()):
+                    if now - AUTH_FAILURES[k].get("last", 0.0) > AUTH_FAIL_FORGET_SECONDS:
+                        del AUTH_FAILURES[k]
+
+    def register_auth_success(self):
+        """認証に成功したらそのIPの失敗履歴を消す（正規利用者が巻き添えでロックされ続けないように）。"""
+        key = self._auth_client_key()
+        with AUTH_FAIL_LOCK:
+            AUTH_FAILURES.pop(key, None)
+
+    def send_auth_throttled(self, retry_after):
+        """ロックアウト中の応答。Retry-After と本文の retry_after で残り秒数を伝える。"""
+        payload = {
+            "success": False,
+            "error": "Too Many Requests",
+            "message": f"認証の試行回数が多すぎます。{retry_after} 秒後にもう一度お試しください。",
+            "retry_after": retry_after,
+            "has_web_password": True
+        }
+        response_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Retry-After", str(retry_after))
+        self.send_header("Content-Length", str(len(response_bytes)))
+        self.end_headers()
+        self.wfile.write(response_bytes)
+
+    def reject_if_auth_blocked(self, path):
+        """/api/* へのゲストアクセスがロックアウト中なら 429 を返して True。ホストは対象外。"""
+        if not path.startswith("/api/"):
+            return False
+        remaining = self.auth_block_remaining()
+        if not remaining:
+            return False
+        if self.is_local_request():
+            return False
+        self.send_auth_throttled(remaining)
+        return True
+
     def check_web_password_auth(self, input_password=None):
         """
         Webリモコンのパスワード/PIN認証を検証。
@@ -319,12 +426,23 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             if auth_hdr.lower().startswith("bearer "):
                 candidate = auth_hdr[7:].strip()
 
-        return candidate == configured_password
+        # 比較は定数時間で行う（応答時間差から1文字ずつ絞り込まれるのを防ぐ）
+        ok = hmac.compare_digest(candidate or "", configured_password)
+
+        # 実際に何か入力された試行だけを数える。未入力（ヘッダなし）の 401 まで数えると、
+        # ページを開いただけの正規ゲストがロックアウトされてしまう。
+        if candidate:
+            if ok:
+                self.register_auth_success()
+            else:
+                self.register_auth_failure()
+        return ok
 
     def send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-Web-Password")
+        self.send_header("Access-Control-Expose-Headers", "Retry-After")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
@@ -345,6 +463,10 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         accept_header = self.headers.get("Accept", "")
+
+        # 認証ロックアウト中のゲストは API に触れない（総当たり対策）
+        if self.reject_if_auth_blocked(path):
+            return
 
         # 0. API: Auth Check
         if path == "/api/auth":
@@ -370,6 +492,12 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             if self.streamer_core:
                 data = self.streamer_core.get_status_data()
+                # ホスト本人かどうかはリクエスト単位でしか判定できないので、ここで載せる。
+                # これが無いと UI 側が「常にホスト」と誤認し、ゲストにサーバー終了/再起動ボタンを見せてしまう。
+                is_local = self.is_local_request()
+                data["is_local"] = is_local
+                if isinstance(data.get("permissions"), dict):
+                    data["permissions"]["is_local"] = is_local
             else:
                 data = {"status": "offline", "error": "Core not initialized"}
             self.send_json_response(200, data)
@@ -457,6 +585,10 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+
+        # 認証ロックアウト中のゲストは API に触れない（総当たり対策）
+        if self.reject_if_auth_blocked(path):
+            return
 
         # 1. API: Photo Upload (写真・画像アップロード)
         if path == "/api/upload":
@@ -760,6 +892,18 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
 
         else:
             self.send_json_response(404, {"error": "Not Found", "path": path})
+
+    def list_directory(self, path):
+        """
+        ディレクトリ一覧の生成を禁止する。
+
+        HLS配信（stream.m3u8 / *.ts）と写真は VRChat のプレイヤーが認証ヘッダを
+        付けられないため PIN の保護外に置かざるを得ない。一方 SimpleHTTPRequestHandler の
+        既定では /images/ を開くだけでアップロード済み写真が全部一覧できてしまい、
+        トンネルURLを知る全員に過去の共有写真まで晒される。再生には一覧生成は不要なので塞ぐ。
+        """
+        self.send_error(404, "Not Found")
+        return None
 
     def end_headers(self):
         self.send_cors_headers()
