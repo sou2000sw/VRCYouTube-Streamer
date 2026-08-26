@@ -158,6 +158,13 @@ class SettingsWindow(ctk.CTkToplevel):
             self.switch_qr_overlay.select()
         self.switch_qr_overlay.pack(anchor="w", padx=15, pady=(2, 6))
 
+        # 7.5. 時計オーバーレイ設定
+        is_clock_on = bool(cfg.get("overlay_clock_enabled", False) or cfg.get("overlay_clock_video", False))
+        self.switch_clock_overlay = ctk.CTkSwitch(form_frame, text="⏰ Clock Overlay (動画再生時にJST時刻をオーバーレイ表示)")
+        if is_clock_on:
+            self.switch_clock_overlay.select()
+        self.switch_clock_overlay.pack(anchor="w", padx=15, pady=(2, 6))
+
         self.lbl_qr_mode = ctk.CTkLabel(form_frame, text="📐 Overlay Layout (表示レイアウト):", anchor="w")
         self.lbl_qr_mode.pack(fill="x", padx=15, pady=(4, 2))
 
@@ -330,6 +337,7 @@ class SettingsWindow(ctk.CTkToplevel):
 
             qr_mode = "fullscreen" if "Fullscreen" in self.seg_qr_mode.get() else "bottom-right"
             qr_enabled = bool(self.switch_qr_overlay.get())
+            clock_enabled = bool(self.switch_clock_overlay.get())
 
             new_cfg = {
                 "port": port,
@@ -342,6 +350,8 @@ class SettingsWindow(ctk.CTkToplevel):
                 "overlay_qr_video": qr_enabled,
                 "overlay_qr_image": qr_enabled,
                 "overlay_qr_mode": qr_mode,
+                "overlay_clock_enabled": clock_enabled,
+                "overlay_clock_video": clock_enabled,
                 "enable_tunnel": bool(self.switch_tunnel.get()),
                 "video_transition_wait_seconds": wait_time,
                 "live_sync_duration_count": sync_count,

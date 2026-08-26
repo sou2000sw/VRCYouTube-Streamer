@@ -6,7 +6,10 @@ import threading
 import urllib.request
 from PIL import Image
 
-from streamer_core import StreamerCore, DEFAULT_CONFIG, RADIO_CACHE_DIR
+from streamer_core import (
+    StreamerCore, DEFAULT_CONFIG, RADIO_CACHE_DIR, STANDBY_IMAGE_PATH,
+    get_drawtext_font_path, get_live_clock_drawtext_filter, get_pil_font
+)
 from api_server import APIServer
 
 def test_radio_card_generation():
@@ -186,9 +189,56 @@ def test_radio_slideshow_advance():
     core.shutdown()
     print("[PASS] Radio Mode Slideshow Auto Advance Tests Passed!")
 
+def test_live_clock_and_resync_overlay():
+    print("\n=== Testing Live Clock & Resync Guide Helpers ===")
+    
+    # 1. Helper functions
+    font_path = get_drawtext_font_path(bold=True)
+    assert font_path is not None and len(font_path) > 0
+    print("Detected drawtext font path:", font_path)
+
+    clock_filter = get_live_clock_drawtext_filter(x="w-tw-45", y="26", font_size=28)
+    assert "drawtext=" in clock_filter
+    assert "text='● LIVE %{localtime\\:%H\\:%M\\:%S} JST'" in clock_filter
+    assert "boxcolor=0x0F172A@0.82" in clock_filter
+    assert "fontsize=28" in clock_filter
+    print("Generated live clock drawtext filter:", clock_filter)
+
+    pil_font = get_pil_font(24, bold=True)
+    assert pil_font is not None
+
+    # 2. Config defaults
+    assert "overlay_clock_enabled" in DEFAULT_CONFIG
+    assert "overlay_clock_video" in DEFAULT_CONFIG
+    assert "overlay_clock_position" in DEFAULT_CONFIG
+    assert DEFAULT_CONFIG["overlay_clock_position"] == "top-right"
+
+    core = StreamerCore(override_port=8996, override_enable_tunnel=False)
+    status = core.get_status_data()
+    assert "overlay_clock_enabled" in status
+    assert "overlay_clock_video" in status
+    assert "overlay_clock_position" in status
+
+    # 3. set_overlay_clock
+    core.set_overlay_clock(True, video=True, position="top-right")
+    assert core.config["overlay_clock_enabled"] is True
+    assert core.config["overlay_clock_video"] is True
+    assert core.config["overlay_clock_position"] == "top-right"
+
+    # 4. Standby image generation with resync guide footer
+    core.generate_standby_image()
+    assert os.path.exists(STANDBY_IMAGE_PATH)
+    with Image.open(STANDBY_IMAGE_PATH) as img:
+        assert img.size == (1920, 1080)
+        assert img.format == "PNG"
+
+    core.shutdown()
+    print("[PASS] Live Clock & Resync Guide Tests Passed!")
+
 if __name__ == "__main__":
     test_radio_card_generation()
     test_radio_core()
     test_radio_api()
     test_radio_slideshow_advance()
+    test_live_clock_and_resync_overlay()
 

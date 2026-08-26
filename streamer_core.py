@@ -97,6 +97,9 @@ DEFAULT_CONFIG = {
     "overlay_qr_video": False,
     "overlay_qr_image": False,
     "overlay_qr_mode": "bottom-right",
+    "overlay_clock_enabled": False,
+    "overlay_clock_video": False,
+    "overlay_clock_position": "top-right",
     "radio_mode": False,
     "radio_bg_source": "card"
 }
@@ -119,6 +122,58 @@ def kill_proc(proc):
         proc.kill()
     except Exception:
         pass
+
+def get_drawtext_font_path(bold=True):
+    """FFmpegのdrawtextフィルタ用にエスケープされたフォントパスを取得"""
+    candidates = [
+        "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/meiryob.ttc" if bold else "C:/Windows/Fonts/meiryo.ttc",
+        "C:/Windows/Fonts/YuGothB.ttc" if bold else "C:/Windows/Fonts/YuGothM.ttc",
+        "C:/Windows/Fonts/msgothic.ttc",
+        "C:/Windows/Fonts/seguisb.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    font_path = None
+    for p in candidates:
+        if os.path.exists(p):
+            font_path = p
+            break
+    if not font_path:
+        font_path = "arialbd.ttf" if bold else "arial.ttf"
+
+    # Windowsパスのバックスラッシュをスラッシュに変換し、コロンをエスケープ (e.g. C\:/Windows/Fonts/...)
+    font_path = font_path.replace("\\", "/")
+    font_path_escaped = font_path.replace(":", "\\:")
+    return font_path_escaped
+
+def get_live_clock_drawtext_filter(x="w-tw-45", y="26", font_size=28, bold=True):
+    """リアルタイムLIVE時計オーバーレイ用 drawtext フィルタ文字列を生成"""
+    font_path = get_drawtext_font_path(bold=bold)
+    return (
+        f"drawtext=fontfile='{font_path}':"
+        f"text='● LIVE %{{localtime\\:%H\\:%M\\:%S}} JST':"
+        f"fontsize={font_size}:fontcolor=white:"
+        f"box=1:boxcolor=0x0F172A@0.82:boxborderw=8:"
+        f"x={x}:y={y}"
+    )
+
+def get_pil_font(size=24, bold=False):
+    """PIL用の日本語対応フォントを安全に取得"""
+    candidates = [
+        "C:/Windows/Fonts/meiryob.ttc" if bold else "C:/Windows/Fonts/meiryo.ttc",
+        "C:/Windows/Fonts/YuGothB.ttc" if bold else "C:/Windows/Fonts/YuGothM.ttc",
+        "C:/Windows/Fonts/msgothic.ttc",
+        "meiryob.ttc" if bold else "meiryo.ttc",
+        "arialbd.ttf" if bold else "arial.ttf",
+        "arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    ]
+    for p in candidates:
+        try:
+            return ImageFont.truetype(p, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
 
 MAX_PLAYLIST_ITEMS = 50
 MAX_QUEUE_CAPACITY = 200
@@ -416,6 +471,9 @@ class StreamerCore:
             "overlay_qr_video": bool(self.config.get("overlay_qr_video", False)),
             "overlay_qr_image": bool(self.config.get("overlay_qr_image", False)),
             "overlay_qr_mode": str(self.config.get("overlay_qr_mode", "bottom-right")),
+            "overlay_clock_enabled": bool(self.config.get("overlay_clock_enabled", False) or self.config.get("overlay_clock_video", False)),
+            "overlay_clock_video": bool(self.config.get("overlay_clock_video", False)),
+            "overlay_clock_position": str(self.config.get("overlay_clock_position", "top-right")),
             "radio_mode": bool(self.config.get("radio_mode", False)),
             "radio_bg_source": str(self.config.get("radio_bg_source", "standby")),
             "has_prev": has_prev,
@@ -425,6 +483,16 @@ class StreamerCore:
                 "allow_web_playback_control": bool(self.config.get("allow_web_playback_control", True))
             }
         }
+
+    def set_overlay_clock(self, enabled: bool, video: bool = None, position: str = None):
+        self.config["overlay_clock_enabled"] = bool(enabled)
+        if video is not None:
+            self.config["overlay_clock_video"] = bool(video)
+        if position is not None and position in ("top-right", "top-left", "bottom-right", "bottom-left"):
+            self.config["overlay_clock_position"] = position
+        self.save_config()
+        log_print(f"[Core] Clock overlay config updated: enabled={self.config['overlay_clock_enabled']}, video={self.config.get('overlay_clock_video', False)}, pos={self.config.get('overlay_clock_position', 'top-right')}")
+        return self.config["overlay_clock_enabled"]
 
     def set_radio_mode(self, enabled: bool):
         self.config["radio_mode"] = bool(enabled)
@@ -906,24 +974,9 @@ class StreamerCore:
         info_x = art_x + art_w + 90
         max_text_w = width - info_x - 100
 
-        def _get_font(size, bold=False):
-            candidates = [
-                "C:/Windows/Fonts/meiryob.ttc" if bold else "C:/Windows/Fonts/meiryo.ttc",
-                "C:/Windows/Fonts/YuGothB.ttc" if bold else "C:/Windows/Fonts/YuGothM.ttc",
-                "C:/Windows/Fonts/msgothic.ttc",
-                "meiryob.ttc" if bold else "meiryo.ttc",
-                "arialbd.ttf" if bold else "arial.ttf",
-                "arial.ttf"
-            ]
-            for p in candidates:
-                try:
-                    return ImageFont.truetype(p, size)
-                except Exception:
-                    continue
-            return ImageFont.load_default()
-
-        font_title = _get_font(50, bold=True)
-        font_artist = _get_font(32, bold=False)
+        font_title = get_pil_font(50, bold=True)
+        font_artist = get_pil_font(32, bold=False)
+        font_resync = get_pil_font(22, bold=False)
 
         clean_title = title.replace("📻 ", "").strip()
         lines = []
@@ -966,6 +1019,17 @@ class StreamerCore:
         if artist:
             artist_y = start_y + title_total_h + 30
             draw.text((info_x, artist_y), artist, fill="#38BDF8", anchor="la", font=font_artist)
+
+        # 4. フッター: リシンク案内バー
+        footer_h = 60
+        draw.rectangle([(0, height - footer_h), (width, height)], fill="#0B1120")
+        draw.text(
+            (width // 2, height - footer_h // 2),
+            "🔄 映像が止まった・遅れた時は [Resync] を押してください / If lagging or frozen, please press Resync.",
+            fill="#94A3B8",
+            anchor="mm",
+            font=font_resync
+        )
 
         try:
             card_img.save(cache_path, "PNG")
@@ -1154,6 +1218,8 @@ class StreamerCore:
         if seek_seconds > 0:
             input_opts.extend(["-ss", str(int(seek_seconds))])
 
+        clock_filter = get_live_clock_drawtext_filter()
+
         cmd = [get_ffmpeg_cmd()]
         if self.accumulated_pts > 0:
             cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
@@ -1163,6 +1229,7 @@ class StreamerCore:
         cmd.extend([
             "-map", "0:v:0",
             "-map", "1:a:0",
+            "-vf", clock_filter,
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-tune", "zerolatency",
@@ -1272,6 +1339,19 @@ class StreamerCore:
         overlay_video = bool(self.config.get("overlay_qr_enabled", False) or self.config.get("overlay_qr_video", False))
         qr_overlay_file = self.generate_qr_overlay_image() if overlay_video else None
 
+        clock_video = bool(self.config.get("overlay_clock_enabled", False) or self.config.get("overlay_clock_video", False))
+        clock_pos = self.config.get("overlay_clock_position", "top-right")
+
+        if clock_pos == "top-left":
+            clock_x, clock_y = "45", "26"
+        elif clock_pos == "bottom-right":
+            clock_x, clock_y = "w-tw-45", "h-th-26"
+        elif clock_pos == "bottom-left":
+            clock_x, clock_y = "45", "h-th-26"
+        else: # "top-right" default
+            clock_x, clock_y = "w-tw-45", "26"
+        clock_filter = get_live_clock_drawtext_filter(x=clock_x, y=clock_y, font_size=28)
+
         cmd = [get_ffmpeg_cmd(), "-fflags", "+genpts"]
         if self.accumulated_pts > 0:
             cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
@@ -1280,16 +1360,27 @@ class StreamerCore:
         if audio_url:
             cmd.extend(input_opts)
             cmd.extend(["-i", audio_url])
-        
-        if overlay_video and qr_overlay_file and os.path.exists(qr_overlay_file):
-            qr_idx = 2 if audio_url else 1
-            cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])
-            mode = self.config.get("overlay_qr_mode", "bottom-right")
-            if mode == "fullscreen":
-                # scale2refで動画解像度に合わせてオーバーレイ画像を自動スケーリング（見切れ防止）
-                overlay_filter = f"[{qr_idx}:v][0:v]scale2ref[qr_scaled][vmain];[vmain][qr_scaled]overlay=0:0:shortest=1[vout]"
+
+        has_qr = bool(overlay_video and qr_overlay_file and os.path.exists(qr_overlay_file))
+        has_clock = bool(clock_video)
+
+        if has_qr or has_clock:
+            if has_qr:
+                qr_idx = 2 if audio_url else 1
+                cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])
+                mode = self.config.get("overlay_qr_mode", "bottom-right")
+                if mode == "fullscreen":
+                    if has_clock:
+                        overlay_filter = f"[{qr_idx}:v][0:v]scale2ref[qr_scaled][vmain];[vmain][qr_scaled]overlay=0:0:shortest=1[v_qr];[v_qr]{clock_filter}[vout]"
+                    else:
+                        overlay_filter = f"[{qr_idx}:v][0:v]scale2ref[qr_scaled][vmain];[vmain][qr_scaled]overlay=0:0:shortest=1[vout]"
+                else:
+                    if has_clock:
+                        overlay_filter = f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-25:main_h-overlay_h-25:shortest=1[v_qr];[v_qr]{clock_filter}[vout]"
+                    else:
+                        overlay_filter = f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-25:main_h-overlay_h-25:shortest=1[vout]"
             else:
-                overlay_filter = f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-25:main_h-overlay_h-25:shortest=1[vout]"
+                overlay_filter = f"[0:v]{clock_filter}[vout]"
 
             cmd.extend([
                 "-filter_complex", overlay_filter,
@@ -1346,6 +1437,8 @@ class StreamerCore:
         threading.Thread(target=self.watch_send_proc,
                          args=(proc, stop_event), daemon=True).start()
         return stop_event
+
+    _stream_video = play_video
 
     def optimize_image_to_cache(self, img_input, output_filename=None):
         """PIL画像、バイナリ、またはファイルパスから 1920x1080 黒帯付き最適化画像を生成して保存"""
@@ -1465,6 +1558,8 @@ class StreamerCore:
             self.status_detail = "FFmpeg Error"
             return None
 
+        clock_filter = get_live_clock_drawtext_filter()
+
         cmd = [
             get_ffmpeg_cmd(), "-re",
         ]
@@ -1473,6 +1568,7 @@ class StreamerCore:
         cmd.extend([
             "-loop", "1", "-i", os.path.abspath(playback_image_path),
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-vf", clock_filter,
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-tune", "zerolatency",
@@ -1740,15 +1836,13 @@ class StreamerCore:
         draw.rectangle([(0, 0), (width, 90)], fill="#1E293B")
         draw.rectangle([(0, height - 70), (width, height)], fill="#1E293B")
 
-        try:
-            font_title = ImageFont.truetype("arial.ttf", 52)
-            font_head = ImageFont.truetype("arial.ttf", 44)
-            font_sub = ImageFont.truetype("arial.ttf", 30)
-            font_url = ImageFont.truetype("arial.ttf", 34)
-            font_info = ImageFont.truetype("arial.ttf", 24)
-            font_card_url = ImageFont.truetype("arial.ttf", 16)
-        except Exception:
-            font_title = font_head = font_sub = font_url = font_info = font_card_url = ImageFont.load_default()
+        font_title = get_pil_font(52, bold=True)
+        font_head = get_pil_font(44, bold=True)
+        font_sub = get_pil_font(30, bold=False)
+        font_url = get_pil_font(34, bold=True)
+        font_info = get_pil_font(24, bold=False)
+        font_card_url = get_pil_font(16, bold=False)
+        font_footer = get_pil_font(22, bold=False)
 
         draw.text((width // 2, 45), "VRCYouTube Live Streamer", fill="#38BDF8", anchor="mm", font=font_title)
 
@@ -1843,7 +1937,13 @@ class StreamerCore:
             except Exception as e:
                 log_print(f"[Core] Error generating compact QR code on standby: {e}")
 
-        draw.text((width // 2, height - 35), "VRChat YouTube Streamer • Powered by yt-dlp & FFmpeg", fill="#475569", anchor="mm", font=font_info)
+        draw.text(
+            (width // 2, height - 35),
+            "🔄 映像が止まった・遅れた時は [Resync] を押してください / If lagging or frozen, please press Resync.",
+            fill="#94A3B8",
+            anchor="mm",
+            font=font_footer
+        )
 
         try:
             img.save(STANDBY_IMAGE_PATH, "PNG")
@@ -1869,6 +1969,8 @@ class StreamerCore:
                 time.sleep(1)
                 continue
 
+            clock_filter = get_live_clock_drawtext_filter()
+
             cmd = [
                 get_ffmpeg_cmd(), "-re",
             ]
@@ -1877,6 +1979,7 @@ class StreamerCore:
             cmd.extend([
                 "-loop", "1", "-i", os.path.abspath(STANDBY_IMAGE_PATH),
                 "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-vf", clock_filter,
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
                 "-tune", "zerolatency",

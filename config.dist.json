@@ -17,6 +17,8 @@
   "overlay_qr_video": false,
   "overlay_qr_image": false,
   "overlay_qr_mode": "bottom-right",
+  "overlay_clock_enabled": false,
+  "overlay_clock_video": false,
   "radio_mode": true,
   "radio_bg_source": "slideshow"
 }

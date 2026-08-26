@@ -85,22 +85,28 @@
             </div>
         </div>
 
-        <!-- Header Actions -->
+        <!-- Header Actions & Clock -->
         <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <!-- JST Clock & Live Status Badge -->
+            <div class="flex items-center gap-1.5 sm:gap-2 bg-zinc-900/90 border border-zinc-800 px-2 sm:px-2.5 py-1 rounded text-xs">
+                <span id="headerClock" class="font-mono font-medium text-zinc-300 text-[11px] sm:text-xs tracking-wider">--:--:-- JST</span>
+                <span id="headerLiveBadge" class="text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 uppercase">STANDBY</span>
+            </div>
+
             <!-- Launch Button (When Offline & Local) -->
-            <button id="btnHeaderLaunch" onclick="handleLaunchServer()" class="hidden flex items-center gap-1.5 px-2.5 sm:px-3 py-1 bg-primary text-zinc-950 hover:bg-primary-hover font-semibold rounded text-xs transition shadow-sm">
+            <button id="btnHeaderLaunch" onclick="handleLaunchServer()" class="hidden flex items-center gap-1.5 px-2.5 sm:px-3 py-1 bg-primary text-zinc-950 hover:bg-primary-hover font-semibold rounded text-xs transition shadow-sm" title="VRCYouTube サーバーを起動します">
                 <i class="ri-play-circle-fill text-sm"></i>
                 <span>起動</span>
             </button>
 
             <!-- Stop Button (When Online & Local) -->
-            <button id="btnHeaderStop" onclick="handleStopServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition">
-                <i class="ri-stop-circle-line text-sm"></i>
-                <span class="hidden sm:inline">停止</span>
+            <button id="btnHeaderStop" onclick="handleStopServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition" title="VRCYouTube サーバープロセスを終了します">
+                <i class="ri-shut-down-line text-sm"></i>
+                <span class="hidden sm:inline">サーバー終了</span>
             </button>
 
             <!-- Restart Button (When Online & Local) -->
-            <button id="btnHeaderRestart" onclick="handleRestartServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition">
+            <button id="btnHeaderRestart" onclick="handleRestartServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="VRCYouTube サーバーを再起動します">
                 <i class="ri-refresh-line text-sm"></i>
                 <span class="hidden sm:inline">再起動</span>
             </button>
@@ -152,13 +158,13 @@
                     <i class="ri-server-line"></i>
                 </div>
                 <div class="flex flex-col gap-1">
-                    <h2 class="text-base font-semibold text-zinc-100">VRCYouTube サーバーが停止しています</h2>
-                    <p class="text-xs text-zinc-400 max-w-md">
+                    <h2 id="offlineTitle" class="text-base font-semibold text-zinc-100">VRCYouTube サーバーが停止しています</h2>
+                    <p id="offlineDesc" class="text-xs text-zinc-400 max-w-md">
                         動画の再生やHLSストリーミングを開始するには、バックエンドの VRCYouTube サーバーを起動してください。
                     </p>
                 </div>
                 <div class="flex items-center gap-3 mt-2" id="offlineActionButtons">
-                    <button onclick="handleLaunchServer()" class="flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary-hover text-zinc-950 font-bold rounded text-xs transition shadow-md">
+                    <button id="btnOfflineLaunch" onclick="handleLaunchServer()" class="flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary-hover text-zinc-950 font-bold rounded text-xs transition shadow-md">
                         <i class="ri-play-fill text-base"></i>
                         <span>VRCYouTube を起動する</span>
                     </button>
@@ -423,6 +429,24 @@
 
                 <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-4">
                     <div class="flex items-center gap-2 pb-2 border-b border-border">
+                        <i class="ri-time-line text-primary text-base"></i>
+                        <h3 class="font-semibold text-xs text-zinc-200">時計オーバーレイ設定</h3>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">時計オーバーレイ (動画再生時)</label>
+                            <label class="flex items-center gap-2 cursor-pointer mt-1">
+                                <input type="checkbox" id="settingClockOverlay" onchange="updateSettings()" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                                <span class="text-xs text-zinc-200">動画再生時にJST現在時刻を画面上にオーバーレイ表示</span>
+                            </label>
+                            <p class="text-[11px] text-zinc-500">※有効時は動画配信ストリーム右上に現在時刻 (JST) がリアルタイム重畳されます。</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-4">
+                    <div class="flex items-center gap-2 pb-2 border-b border-border">
                         <i class="ri-slideshow-3-line text-emerald-400 text-base"></i>
                         <h3 class="font-semibold text-xs text-zinc-200">写真スライドショー設定</h3>
                     </div>
@@ -622,16 +646,55 @@
             const apiBaseInput = document.getElementById('settingApiBase');
             if (apiBaseInput) apiBaseInput.value = apiBase;
             updatePortLabel();
+            updateClock();
+            setInterval(updateClock, 1000);
             checkServerHealth(true);
             setInterval(() => checkServerHealth(false), 2000);
             setupDragAndDrop();
             initHlsPlayer();
         });
 
+        function updateClock() {
+            const el = document.getElementById('headerClock');
+            if (!el) return;
+            try {
+                const now = new Date();
+                const jstStr = now.toLocaleTimeString('ja-JP', {
+                    timeZone: 'Asia/Tokyo',
+                    hour12: false,
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+                el.innerText = `${jstStr} JST`;
+            } catch (e) {
+                const now = new Date();
+                const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+                const jstDate = new Date(utc + (3600000 * 9));
+                const hh = String(jstDate.getHours()).padStart(2, '0');
+                const mm = String(jstDate.getMinutes()).padStart(2, '0');
+                const ss = String(jstDate.getSeconds()).padStart(2, '0');
+                el.innerText = `${hh}:${mm}:${ss} JST`;
+            }
+        }
+
+        function isLocalEnvironment() {
+            if (window.electron && window.electron.ipcRenderer) return true;
+            try {
+                const host = window.location.hostname;
+                if (host === '127.0.0.1' || host === 'localhost' || host === '') return true;
+                const baseHost = new URL(apiBase).hostname;
+                if (baseHost === '127.0.0.1' || baseHost === 'localhost') return true;
+            } catch {}
+            if (currentStatusData && currentStatusData.permissions) {
+                return currentStatusData.permissions.is_local === true;
+            }
+            return false;
+        }
+
         function updatePortLabel() {
             try {
-                const url = new URL(apiBase);
-                const isLocal = (url.hostname === '127.0.0.1' || url.hostname === 'localhost');
+                const isLocal = isLocalEnvironment();
                 const labelAccess = document.getElementById('labelAccessType');
                 if (labelAccess) labelAccess.innerText = isLocal ? 'Local' : 'Remote';
             } catch {}
@@ -1058,6 +1121,21 @@
                 streamStateBadge.className = 'text-[10px] font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 uppercase';
             }
 
+            // Header Live / Buffering / Standby status badge
+            const headerLiveBadge = document.getElementById('headerLiveBadge');
+            if (headerLiveBadge) {
+                if (data.status === 'buffering') {
+                    headerLiveBadge.innerText = '読込中';
+                    headerLiveBadge.className = 'text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800';
+                } else if (data.status === 'streaming' && data.current_video) {
+                    headerLiveBadge.innerText = 'LIVE配信中';
+                    headerLiveBadge.className = 'text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-950 text-red-400 border border-red-800 animate-pulse';
+                } else {
+                    headerLiveBadge.innerText = 'STANDBY';
+                    headerLiveBadge.className = 'text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 uppercase';
+                }
+            }
+
             // Loop & Shuffle states
             updateToggleBtn('btnLoopQueue', data.loop_queue);
             updateToggleBtn('btnShufflePlay', data.shuffle);
@@ -1090,6 +1168,10 @@
                 const qrModeEl = document.getElementById('settingQrMode');
                 if (qrModeEl) qrModeEl.value = data.overlay_qr_mode;
             }
+            if (data.overlay_clock_enabled !== undefined || data.overlay_clock_video !== undefined) {
+                const clockEl = document.getElementById('settingClockOverlay');
+                if (clockEl) clockEl.checked = Boolean(data.overlay_clock_enabled || data.overlay_clock_video);
+            }
             if (data.image_display_duration) {
                 const durEl = document.getElementById('settingImageDuration');
                 if (durEl) durEl.value = data.image_display_duration;
@@ -1106,9 +1188,44 @@
             document.getElementById('statusText').innerText = '停止中 (Offline)';
             document.getElementById('statusText').className = 'text-red-400 font-medium truncate';
 
-            document.getElementById('btnHeaderLaunch').classList.remove('hidden');
+            const headerLiveBadge = document.getElementById('headerLiveBadge');
+            if (headerLiveBadge) {
+                headerLiveBadge.innerText = 'STANDBY';
+                headerLiveBadge.className = 'text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700 uppercase';
+            }
+
+            const isLocal = isLocalEnvironment();
+
+            if (isLocal) {
+                document.getElementById('btnHeaderLaunch').classList.remove('hidden');
+            } else {
+                document.getElementById('btnHeaderLaunch').classList.add('hidden');
+            }
             document.getElementById('btnHeaderStop').classList.add('hidden');
             document.getElementById('btnHeaderRestart').classList.add('hidden');
+
+            const offlineTitle = document.getElementById('offlineTitle');
+            const offlineDesc = document.getElementById('offlineDesc');
+            const btnOfflineLaunch = document.getElementById('btnOfflineLaunch');
+            const offlineManualHint = document.getElementById('offlineManualHint');
+
+            if (offlineTitle) {
+                offlineTitle.innerText = isLocal ? 'VRCYouTube サーバーが停止しています' : '配信サーバーに接続できません';
+            }
+            if (offlineDesc) {
+                offlineDesc.innerText = isLocal
+                    ? '動画の再生やHLSストリーミングを開始するには、バックエンドの VRCYouTube サーバーを起動してください。'
+                    : 'サーバーが停止しているか、ホストとの接続が切断されています。ホストが配信を再開するまでお待ちください。';
+            }
+            if (btnOfflineLaunch) {
+                if (isLocal) btnOfflineLaunch.classList.remove('hidden');
+                else btnOfflineLaunch.classList.add('hidden');
+            }
+            if (offlineManualHint) {
+                if (isLocal) offlineManualHint.classList.remove('hidden');
+                else offlineManualHint.classList.add('hidden');
+            }
+
             document.getElementById('offlineBanner').classList.remove('hidden');
             const labelTunnel = document.getElementById('labelTunnelState');
             if (labelTunnel) labelTunnel.innerText = 'Offline';
@@ -1537,6 +1654,7 @@
         async function updateSettings() {
             const qrEnabled = document.getElementById('settingQrEnabled').checked;
             const qrMode = document.getElementById('settingQrMode').value;
+            const clockOverlay = document.getElementById('settingClockOverlay') ? document.getElementById('settingClockOverlay').checked : false;
             const duration = parseInt(document.getElementById('settingImageDuration').value) || 15;
             const autoAdvance = document.getElementById('settingImageAutoAdvance').checked;
 
@@ -1549,6 +1667,8 @@
                         overlay_qr_video: qrEnabled,
                         overlay_qr_image: qrEnabled,
                         overlay_qr_mode: qrMode,
+                        overlay_clock_enabled: clockOverlay,
+                        overlay_clock_video: clockOverlay,
                         image_display_duration: duration,
                         image_auto_advance: autoAdvance
                     })
@@ -1584,19 +1704,19 @@
         }
 
         async function handleStopServer() {
-            if (!confirm('VRCYouTube サーバーを停止しますか？')) return;
+            if (!confirm('VRCYouTube サーバープロセスを完全に終了しますか？\n（配信およびWebアクセスが停止します）')) return;
             try {
                 await fetch(`${apiBase}/api/shutdown`, { method: 'POST' });
-                showToast('サーバー停止シグナルを送信しました', 'info');
+                showToast('サーバー終了シグナルを送信しました', 'info');
                 setTimeout(() => checkServerHealth(true), 1200);
             } catch (e) {
-                showToast('停止リクエストを送信しました', 'info');
+                showToast('終了リクエストを送信しました', 'info');
                 setTimeout(() => checkServerHealth(true), 1200);
             }
         }
 
         async function handleRestartServer() {
-            if (!confirm('VRCYouTube サーバーを再起動しますか？')) return;
+            if (!confirm('VRCYouTube サーバーを再起動しますか？\n（一時的に配信が中断されます）')) return;
             showToast('再起動シグナル送信中...', 'info');
             try {
                 await fetch(`${apiBase}/api/shutdown`, { method: 'POST' });
