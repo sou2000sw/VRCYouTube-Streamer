@@ -401,3 +401,22 @@ python -m pytest test_security.py test_radio_unit.py -q
 #### 4. Web UI / 操作側での補助
 - Web UIヘッダーや操作パネル付近にも「現在の配信時刻（リアルタイム）」を表示し、ホスト側からも「参加者にリシンクを促す案内」がしやすいようにする。
 
+---
+
+## 9. ⚠️ 今後の重要課題・タスク: 設定オーバーライド機構の総点検と再設計
+
+### 課題の概要
+- **CLI引数 / 初期化時オーバーライドの一貫性欠如と設定焼き付き**:
+  - `StreamerCore` の `override_*` 引数や CLI オプション（`--port`, `--host`, `--no-tunnel` 等）と設定ファイル（`config.json`）、および GUI / Web API からの設定更新（`/api/config`）の優先度調停において、一時的な CLI 指定値が `config.json` に上書き保存されたり、逆に設定リロード時に CLI 指定が消滅する問題が依然として存在する。
+  - GUI（`gui_streamer.py`）の設定画面で「保存」を押した際、フォームの全項目が送信されるため `_cli_override_baseline` が破棄され、CLI 引数（例: `--port 8995`）が `config.json` に焼き付いてしまう。
+  - 解像度・ビットレート・FPS・ラジオ背景・QRオーバーレイなど、他の主要な設定項目に対する CLI オーバーライド引数が未実装。
+
+### 次期対応タスク
+1. **設定優先順位の厳格化 (`CLI args > config.json > defaults`)**:
+   - `_cli_overrides` 辞書を新設し、セッション中の一時指定値を永続設定（`self.config`）から完全に分離。
+   - `save_config()` は常に `config.json` 本来の設定のみを更新・保存し、CLI 引数はセッション内限定で最優先適用する。
+2. **全設定項目に対する CLI 引数オーバーライドの拡充**:
+   - `--resolution`, `--video-bitrate`, `--audio-bitrate`, `--radio-bg`, `--qr-overlay`, `--clock-overlay` 等の網羅的サポート。
+3. **単体テストの作成**:
+   - `test_config_overrides.py` で CLI オーバーライドと `config.json` 保存の独立性を保証するテストを追加。
+
