@@ -15,7 +15,7 @@ if sys.platform == "win32" and sys.stdout is not None:
     except Exception:
         pass
 
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.7.0"
 
 # 配布物に含めてはいけない実行時生成物・作業ファイル。
 # hls_output/ には利用者がアップロードした写真が溜まるため、同梱するとプライバシー漏洩になる。

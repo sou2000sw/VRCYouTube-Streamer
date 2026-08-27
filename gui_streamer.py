@@ -415,6 +415,7 @@ class SettingsWindow(ctk.CTkToplevel):
                 "hls_segment_time": seg_time,
                 "image_display_duration": photo_dur,
                 "image_auto_advance": photo_advance,
+                "playback_mode": "radio" if radio_mode else "video",
                 "radio_mode": radio_mode,
                 "radio_bg_source": radio_bg,
                 "standby_mode": standby_mode,
@@ -516,16 +517,17 @@ class App(ctk.CTk):
         self.settings_btn = ctk.CTkButton(self.header_frame, text="⚙ Settings", width=90, fg_color="#34495E", hover_color="#2C3E50", command=self.open_settings)
         self.settings_btn.pack(side="right")
 
-        self.radio_switch = ctk.CTkSwitch(
+        current_pm = self.streamer_core.get_playback_mode()
+        initial_seg = "📻 Radio" if current_pm == "radio" else ("🖼️ Slideshow" if current_pm == "slideshow" else "🎬 Video")
+        self.mode_seg = ctk.CTkSegmentedButton(
             self.header_frame,
-            text="📻 Radio/BGM",
-            width=110,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            command=self.toggle_radio_mode
+            values=["🎬 Video", "📻 Radio", "🖼️ Slideshow"],
+            width=230,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self.on_mode_seg_changed
         )
-        if self.streamer_core.config.get("radio_mode", False):
-            self.radio_switch.select()
-        self.radio_switch.pack(side="right", padx=(0, 12))
+        self.mode_seg.set(initial_seg)
+        self.mode_seg.pack(side="right", padx=(0, 12))
 
         # 2. Status Frame (Stream Status, Now Playing & Tunnel URL)
         self.status_frame = ctk.CTkFrame(self)
@@ -585,40 +587,16 @@ class App(ctk.CTk):
         self.exit_btn = ctk.CTkButton(self.control_frame, text="Exit", fg_color="#34495E", hover_color="#2C3E50", command=self.on_closing)
         self.exit_btn.pack(side="right")
 
-        # 4.5. Photo Slideshow Control Bar (メイン画面で直接操作可能)
-        self.photo_bar = ctk.CTkFrame(self, fg_color="transparent")
-        self.photo_bar.pack(side="bottom", fill="x", padx=20, pady=(2, 2))
+        # 4. Main Tabview (Video Queue & Photo Pool)
+        self.main_tabview = ctk.CTkTabview(self)
+        self.main_tabview.pack(fill="both", expand=True, padx=20, pady=(2, 5))
 
-        self.lbl_photo_bar = ctk.CTkLabel(self.photo_bar, text="🖼 Photo Slideshow:", font=ctk.CTkFont(size=12, weight="bold"), text_color="gray")
-        self.lbl_photo_bar.pack(side="left", padx=(0, 8))
+        self.tab_video = self.main_tabview.add("🎬 Video Queue")
+        self.tab_photo = self.main_tabview.add("📷 Photo Pool")
 
-        self.photo_advance_switch = ctk.CTkSwitch(self.photo_bar, text="⏱ Auto Advance", font=ctk.CTkFont(size=11), command=self.toggle_photo_advance)
-        if self.streamer_core.config.get("image_auto_advance", False):
-            self.photo_advance_switch.select()
-        self.photo_advance_switch.pack(side="left", padx=(0, 12))
-
-        self.lbl_duration = ctk.CTkLabel(self.photo_bar, text="Duration:", font=ctk.CTkFont(size=11), text_color="gray")
-        self.lbl_duration.pack(side="left", padx=(0, 4))
-
-        self.duration_combo = ctk.CTkOptionMenu(
-            self.photo_bar,
-            values=["5s", "10s", "15s", "20s", "30s", "60s", "120s"],
-            width=75,
-            height=22,
-            font=ctk.CTkFont(size=11),
-            command=self.on_change_photo_duration
-        )
-        curr_dur = str(self.streamer_core.config.get("image_display_duration", 15)) + "s"
-        self.duration_combo.set(curr_dur if curr_dur in ["5s", "10s", "15s", "20s", "30s", "60s", "120s"] else "15s")
-        self.duration_combo.pack(side="left")
-
-        # 4. Queue List Frame
-        self.queue_frame = ctk.CTkFrame(self)
-        self.queue_frame.pack(fill="both", expand=True, padx=20, pady=5)
-
-        # Queue List Header (Title + Shuffle & Loop Controls)
-        self.queue_header = ctk.CTkFrame(self.queue_frame, fg_color="transparent")
-        self.queue_header.pack(fill="x", padx=15, pady=(5, 2))
+        # ==================== TAB 1: Video Queue ====================
+        self.queue_header = ctk.CTkFrame(self.tab_video, fg_color="transparent")
+        self.queue_header.pack(fill="x", padx=10, pady=(0, 4))
 
         self.queue_title = ctk.CTkLabel(self.queue_header, text="Play Queue (0 items)", font=ctk.CTkFont(size=12, weight="bold"), text_color="gray")
         self.queue_title.pack(side="left")
@@ -636,9 +614,43 @@ class App(ctk.CTk):
         self.shuffle_btn = ctk.CTkButton(self.queue_header, text="🔀 Shuffle List", width=85, height=22, font=ctk.CTkFont(size=11), fg_color="#34495E", hover_color="#2C3E50", command=self.shuffle_now)
         self.shuffle_btn.pack(side="right", padx=(0, 6))
 
-        self.queue_scroll = ctk.CTkScrollableFrame(self.queue_frame, fg_color="transparent")
-        self.queue_scroll.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.queue_scroll = ctk.CTkScrollableFrame(self.tab_video, fg_color="transparent")
+        self.queue_scroll.pack(fill="both", expand=True, padx=5, pady=(0, 5))
         self.last_queue_titles = None
+
+        # ==================== TAB 2: Photo Pool ====================
+        self.photo_header = ctk.CTkFrame(self.tab_photo, fg_color="transparent")
+        self.photo_header.pack(fill="x", padx=10, pady=(0, 4))
+
+        self.photo_title = ctk.CTkLabel(self.photo_header, text="Photo Pool (0 photos)", font=ctk.CTkFont(size=12, weight="bold"), text_color="gray")
+        self.photo_title.pack(side="left")
+
+        self.clear_photos_btn = ctk.CTkButton(self.photo_header, text="🗑 Clear Photos", width=95, height=22, font=ctk.CTkFont(size=11), fg_color="#7F8C8D", hover_color="#C0392B", command=self.clear_photos_gui)
+        self.clear_photos_btn.pack(side="right", padx=(6, 0))
+
+        self.photo_advance_switch = ctk.CTkSwitch(self.photo_header, text="⏱ Auto Advance", font=ctk.CTkFont(size=11), command=self.toggle_photo_advance)
+        if self.streamer_core.config.get("image_auto_advance", True):
+            self.photo_advance_switch.select()
+        self.photo_advance_switch.pack(side="right", padx=(6, 10))
+
+        self.lbl_duration = ctk.CTkLabel(self.photo_header, text="Duration:", font=ctk.CTkFont(size=11), text_color="gray")
+        self.lbl_duration.pack(side="right", padx=(0, 4))
+
+        self.duration_combo = ctk.CTkOptionMenu(
+            self.photo_header,
+            values=["5s", "10s", "15s", "20s", "30s", "60s", "120s"],
+            width=75,
+            height=22,
+            font=ctk.CTkFont(size=11),
+            command=self.on_change_photo_duration
+        )
+        curr_dur = str(self.streamer_core.config.get("image_display_duration", 15)) + "s"
+        self.duration_combo.set(curr_dur if curr_dur in ["5s", "10s", "15s", "20s", "30s", "60s", "120s"] else "15s")
+        self.duration_combo.pack(side="right", padx=(0, 4))
+
+        self.photo_scroll = ctk.CTkScrollableFrame(self.tab_photo, fg_color="transparent")
+        self.photo_scroll.pack(fill="both", expand=True, padx=5, pady=(0, 5))
+        self.last_photo_ids = None
 
         # ドラッグ＆ドロップおよび自動スクロール状態管理
         self.dragged_idx = None
@@ -753,9 +765,13 @@ class App(ctk.CTk):
         self.last_queue_titles = None
         self.update_ui_loop()
 
-    def toggle_radio_mode(self):
-        val = bool(self.radio_switch.get())
-        self.streamer_core.set_radio_mode(val)
+    def on_mode_seg_changed(self, value):
+        if "Radio" in value:
+            self.streamer_core.set_playback_mode("radio")
+        elif "Slideshow" in value:
+            self.streamer_core.set_playback_mode("slideshow")
+        else:
+            self.streamer_core.set_playback_mode("video")
 
     def toggle_loop(self):
         val = bool(self.loop_switch.get())
@@ -825,11 +841,32 @@ class App(ctk.CTk):
                 item = self.streamer_core.add_image_file(fp)
                 if item:
                     added_count += 1
-            log_print(f"[GUI] Added {added_count}/{total} photo(s) to queue.")
-            self.last_queue_titles = None
+            log_print(f"[GUI] Added {added_count}/{total} photo(s) to photo pool.")
+            self.last_photo_ids = None
             self.after(0, lambda: self.add_photo_btn.configure(state="normal", text="🖼 Add Photo"))
 
         threading.Thread(target=bg_add, daemon=True).start()
+
+    def delete_photo_item(self, photo_id):
+        self.streamer_core.remove_photo(photo_id)
+        self.last_photo_ids = None
+        self.update_ui_loop()
+
+    def move_photo_item_up(self, idx):
+        self.streamer_core.move_photo(idx, idx - 1)
+        self.last_photo_ids = None
+        self.update_ui_loop()
+
+    def move_photo_item_down(self, idx):
+        self.streamer_core.move_photo(idx, idx + 1)
+        self.last_photo_ids = None
+        self.update_ui_loop()
+
+    def clear_photos_gui(self):
+        if messagebox.askyesno("Confirm", "Are you sure you want to clear all photos from Photo Pool?"):
+            self.streamer_core.clear_photos()
+            self.last_photo_ids = None
+            self.update_ui_loop()
 
     def add_to_queue(self):
         url = self.url_entry.get().strip()
@@ -890,12 +927,10 @@ class App(ctk.CTk):
             else:
                 self.shuffle_switch.deselect()
 
-        core_radio = bool(self.streamer_core.config.get("radio_mode", False))
-        if bool(self.radio_switch.get()) != core_radio:
-            if core_radio:
-                self.radio_switch.select()
-            else:
-                self.radio_switch.deselect()
+        core_mode = self.streamer_core.get_playback_mode()
+        target_seg = "📻 Radio" if core_mode == "radio" else ("🖼️ Slideshow" if core_mode == "slideshow" else "🎬 Video")
+        if self.mode_seg.get() != target_seg:
+            self.mode_seg.set(target_seg)
 
         # 写真自動送りスイッチ & 表示秒数コンボの状態同期
         core_advance = bool(self.streamer_core.config.get("image_auto_advance", False))
@@ -1030,6 +1065,59 @@ class App(ctk.CTk):
                         del_btn = ctk.CTkButton(item_frame, text="Delete", width=50, height=20, fg_color="#C0392B", hover_color="#962D22",
                                                 command=lambda idx=idx: self.delete_queue_item(idx))
                         del_btn.pack(side="right", padx=(5, 5))
+
+        # 4. Photo Pool List
+        photos = self.streamer_core.get_photos()
+        p_len = len(photos)
+        self.photo_title.configure(text=f"Photo Pool ({p_len} photos)")
+
+        current_photo_ids = [p.get("id", str(i)) for i, p in enumerate(photos)]
+        if getattr(self, "last_photo_ids", None) != current_photo_ids:
+            self.last_photo_ids = current_photo_ids.copy()
+            for widget in self.photo_scroll.winfo_children():
+                widget.destroy()
+
+            if p_len == 0:
+                empty_p_frame = ctk.CTkFrame(self.photo_scroll, fg_color="transparent")
+                empty_p_frame.pack(fill="both", expand=True, pady=20)
+
+                p_hint = ctk.CTkLabel(
+                    empty_p_frame,
+                    text="📷 写真プールは空です。\n上の「🖼 Add Photo」ボタンまたはWebリモコンから写真を追加してください。",
+                    font=ctk.CTkFont(size=12),
+                    text_color="gray"
+                )
+                p_hint.pack(pady=10)
+            else:
+                for idx, photo in enumerate(photos):
+                    p_id = photo.get("id", str(idx))
+                    title = photo.get("title", f"Photo {idx+1}")
+                    p_frame = ctk.CTkFrame(self.photo_scroll, fg_color="transparent", corner_radius=6)
+                    p_frame.pack(fill="x", pady=2)
+
+                    # アイコン & タイトル
+                    icon_lbl = ctk.CTkLabel(p_frame, text="🖼", width=24, font=ctk.CTkFont(size=13))
+                    icon_lbl.pack(side="left", padx=(4, 2))
+
+                    p_title_lbl = ctk.CTkLabel(p_frame, text=f"{idx+1}. {title}", font=ctk.CTkFont(size=12), anchor="w")
+                    p_title_lbl.pack(side="left", fill="x", expand=True, padx=(2, 5))
+
+                    # 前へ (Up) ボタン
+                    up_state = "normal" if idx > 0 else "disabled"
+                    up_btn = ctk.CTkButton(p_frame, text="▲", width=25, height=20, fg_color="#34495E", hover_color="#2C3E50", state=up_state,
+                                           command=lambda idx=idx: self.move_photo_item_up(idx))
+                    up_btn.pack(side="left", padx=2)
+
+                    # 次へ (Down) ボタン
+                    down_state = "normal" if idx < p_len - 1 else "disabled"
+                    down_btn = ctk.CTkButton(p_frame, text="▼", width=25, height=20, fg_color="#34495E", hover_color="#2C3E50", state=down_state,
+                                             command=lambda idx=idx: self.move_photo_item_down(idx))
+                    down_btn.pack(side="left", padx=2)
+
+                    # 個別削除ボタン
+                    del_btn = ctk.CTkButton(p_frame, text="Delete", width=50, height=20, fg_color="#C0392B", hover_color="#962D22",
+                                            command=lambda pid=p_id: self.delete_photo_item(pid))
+                    del_btn.pack(side="right", padx=(5, 5))
 
         if self.streamer_core.is_running:
             self.after(500, self.update_ui_loop)

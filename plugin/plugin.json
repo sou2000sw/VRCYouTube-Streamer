@@ -1,7 +1,7 @@
 {
   "id": "vrcyoutube-streamer",
   "name": "VRCYouTube Streamer",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "YouTube動画・プレイリスト・写真のHLS低遅延ストリーミング配信＆操作UI",
   "author": "VRCYouTube",
   "category": "Media",

@@ -814,24 +814,24 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             is_local = self.is_local_request()
 
             # 破壊的・全消去操作は常にローカルホスト限定
-            if action in ("clear_queue", "stop") and not is_local:
+            if action in ("clear_queue", "clear_photos", "stop") and not is_local:
                 self.send_json_response(403, {
                     "success": False,
                     "message": f"Forbidden: Action '{action}' is restricted to localhost."
                 })
                 return
 
-            # キュー編集操作（削除・並び替え）の権限チェック
-            if action in ("delete_item", "move_item") and not is_local:
+            # キュー・写真編集操作（削除・並び替え）の権限チェック
+            if action in ("delete_item", "move_item", "remove_photo", "delete_photo", "move_photo") and not is_local:
                 if not self.streamer_core.config.get("allow_web_queue_edit", True):
                     self.send_json_response(403, {
                         "success": False,
-                        "message": "Forbidden: Queue editing from Web is disabled by the host."
+                        "message": "Forbidden: Queue/Photo editing from Web is disabled by the host."
                     })
                     return
 
             # 再生制御操作の権限チェック
-            if action in ("skip", "prev", "set_loop", "set_shuffle", "shuffle", "toggle_image_pause", "set_image_pause", "set_image_duration", "set_image_auto_advance", "set_radio_mode", "set_radio_bg_source") and not is_local:
+            if action in ("skip", "prev", "set_loop", "set_shuffle", "shuffle", "toggle_image_pause", "set_image_pause", "set_image_duration", "set_image_auto_advance", "set_radio_mode", "set_radio_bg_source", "set_playback_mode") and not is_local:
                 if not self.streamer_core.config.get("allow_web_playback_control", True):
                     self.send_json_response(403, {
                         "success": False,
@@ -848,10 +848,40 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_json_response(200, {"success": True, "message": "Action 'prev' processed."})
                 else:
                     self.send_json_response(400, {"success": False, "message": "No previous item in history."})
+            elif action == "set_playback_mode":
+                mode = str(body_json.get("mode", "video")).strip().lower()
+                res = self.streamer_core.set_playback_mode(mode)
+                self.send_json_response(200, {"success": True, "playback_mode": res, "message": f"Playback mode set to {res}."})
             elif action == "set_radio_mode":
                 enabled = bool(body_json.get("enabled", True))
                 res = self.streamer_core.set_radio_mode(enabled)
                 self.send_json_response(200, {"success": True, "radio_mode": res, "message": f"Radio mode set to {res}."})
+            elif action == "remove_photo" or action == "delete_photo":
+                photo_id = body_json.get("id")
+                idx = body_json.get("index")
+                target = photo_id if photo_id is not None else idx
+                if target is not None:
+                    ok = self.streamer_core.remove_photo(target)
+                    if ok:
+                        self.send_json_response(200, {"success": True, "message": "Photo removed from pool."})
+                    else:
+                        self.send_json_response(400, {"success": False, "message": "Photo not found or invalid index."})
+                else:
+                    self.send_json_response(400, {"success": False, "message": "Missing 'id' or 'index' parameter"})
+            elif action == "move_photo":
+                from_idx = body_json.get("from_index")
+                to_idx = body_json.get("to_index")
+                if from_idx is not None and to_idx is not None:
+                    ok = self.streamer_core.move_photo(int(from_idx), int(to_idx))
+                    if ok:
+                        self.send_json_response(200, {"success": True, "message": "Photo moved successfully in pool."})
+                    else:
+                        self.send_json_response(400, {"success": False, "message": "Invalid photo index range."})
+                else:
+                    self.send_json_response(400, {"success": False, "message": "Missing 'from_index' or 'to_index'"})
+            elif action == "clear_photos":
+                self.streamer_core.clear_photos()
+                self.send_json_response(200, {"success": True, "message": "All photos cleared from pool."})
             elif action == "set_radio_bg_source":
                 source = str(body_json.get("source", "card")).strip().lower()
                 res = self.streamer_core.set_radio_bg_source(source)

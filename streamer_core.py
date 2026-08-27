@@ -16,6 +16,7 @@ import urllib.parse
 import hashlib
 import yt_dlp
 import qrcode
+import uuid
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -95,6 +96,7 @@ DEFAULT_CONFIG = {
     "overlay_clock_enabled": False,
     "overlay_clock_video": False,
     "overlay_clock_position": "top-right",
+    "playback_mode": "video",
     "radio_mode": False,
     "radio_bg_source": "card",
     "standby_mode": "image",
@@ -179,6 +181,7 @@ def get_pil_font(size=24, bold=False):
 
 MAX_PLAYLIST_ITEMS = 50
 MAX_QUEUE_CAPACITY = 200
+MAX_PHOTO_CAPACITY = 200
 
 def is_safe_url(url):
     """URLが安全か（http/https、SSRF・ローカルアドレス拒否）を検証"""
@@ -315,10 +318,13 @@ class StreamerCore:
         self.tunnel_proc = None
         self.current_stdin = None
 
-        self.play_queue = [] # list of dict: [{"title": "...", "url": "...", "duration": ..., "type": "video"|"image"}]
+        self.play_queue = [] # list of dict: [{"title": "...", "url": "...", "duration": ..., "type": "video"}]
+        self.photo_pool = [] # list of dict: [{"id": "...", "type": "image", "title": "...", "url": "...", "path": "...", "duration": ...}]
         self.history_stack = [] # 履歴管理用 (最大20件)
         self.queue_lock = threading.Lock()
+        self.photo_lock = threading.Lock()
         self.process_lock = threading.Lock()
+        self.slideshow_index = 0
 
         # 累積PTSとシームレス遷移管理
         self.accumulated_pts = 0.0
@@ -477,7 +483,10 @@ class StreamerCore:
             "overlay_clock_enabled": bool(self.config.get("overlay_clock_enabled", False) or self.config.get("overlay_clock_video", False)),
             "overlay_clock_video": bool(self.config.get("overlay_clock_video", False)),
             "overlay_clock_position": str(self.config.get("overlay_clock_position", "top-right")),
-            "radio_mode": bool(self.config.get("radio_mode", False)),
+            "playback_mode": self.get_playback_mode(),
+            "photos": self.get_photos(),
+            "photo_count": len(self.get_photos()),
+            "radio_mode": (self.get_playback_mode() == "radio"),
             "radio_bg_source": str(self.config.get("radio_bg_source", "standby")),
             "standby_mode": str(self.config.get("standby_mode", "image")),
             "standby_image_path": str(self.config.get("standby_image_path", "")),
@@ -489,6 +498,28 @@ class StreamerCore:
                 "allow_web_playback_control": bool(self.config.get("allow_web_playback_control", True))
             }
         }
+
+    def get_playback_mode(self):
+        """現在の再生モード ('video' | 'radio' | 'slideshow') を取得"""
+        mode = self.config.get("playback_mode")
+        if mode in ("video", "radio", "slideshow"):
+            return mode
+        if self.config.get("radio_mode", False):
+            return "radio"
+        return "video"
+
+    def set_playback_mode(self, mode: str):
+        """再生モードを設定 ('video' | 'radio' | 'slideshow')"""
+        if mode not in ("video", "radio", "slideshow"):
+            log_print(f"[Core] Invalid playback mode: {mode}")
+            return self.get_playback_mode()
+
+        self.config["playback_mode"] = mode
+        self.config["radio_mode"] = (mode == "radio")
+        self.save_config()
+        self.reload_stream_event.set()
+        log_print(f"[Core] Playback mode set to: {mode}")
+        return mode
 
     def set_standby_config(self, mode: str = None, image_path: str = None):
         if mode in ("image", "qr"):
@@ -511,10 +542,8 @@ class StreamerCore:
         return self.config["overlay_clock_enabled"]
 
     def set_radio_mode(self, enabled: bool):
-        self.config["radio_mode"] = bool(enabled)
-        self.save_config()
-        log_print(f"[Core] Radio mode set to: {self.config['radio_mode']}")
-        return self.config["radio_mode"]
+        mode = "radio" if enabled else "video"
+        return (self.set_playback_mode(mode) == "radio")
 
     def set_radio_bg_source(self, source: str):
         if source in ("card", "standby", "slideshow"):
@@ -1055,40 +1084,21 @@ class StreamerCore:
             return None
 
     def get_slideshow_images(self):
-        """スライドショーで利用可能な画像パス一覧を取得（キュー画像 + キャッシュ画像）"""
-        images = []
-        # 1. キュー内の画像
-        with self.queue_lock:
-            for item in self.play_queue:
-                if item.get("type") == "image" and item.get("path") and os.path.exists(item["path"]):
-                    images.append(os.path.abspath(item["path"]))
-
-        # 2. キャッシュディレクトリの画像（一時ファイル除外）
-        if os.path.exists(IMAGE_CACHE_DIR):
-            cached = [
-                os.path.abspath(os.path.join(IMAGE_CACHE_DIR, f))
-                for f in os.listdir(IMAGE_CACHE_DIR)
-                if f.lower().endswith((".png", ".jpg", ".jpeg"))
-                and not f.startswith("playback_overlay_")
-                and not f.startswith("playback_prep")
-                and not f.startswith("temp_")
+        """スライドショーで利用可能な画像パス一覧を取得（写真プール photo_pool から取得）"""
+        with self.photo_lock:
+            images = [
+                os.path.abspath(p["path"])
+                for p in self.photo_pool
+                if p.get("path") and os.path.exists(p["path"])
             ]
-            images.extend(cached)
-
-        # 重複を排除（順序保持）
-        seen = set()
-        unique_images = []
-        for img in images:
-            norm = os.path.normcase(img)
-            if norm not in seen and os.path.exists(img):
-                seen.add(norm)
-                unique_images.append(img)
 
         # シャッフル設定が有効ならシャッフル
-        if self.config.get("shuffle", False) and len(unique_images) > 1:
-            random.shuffle(unique_images)
+        if self.config.get("shuffle", False) and len(images) > 1:
+            images_copy = list(images)
+            random.shuffle(images_copy)
+            return images_copy
 
-        return unique_images
+        return images
 
     def get_radio_background_path(self, video_info=None, metadata=None):
         """BGM/ラジオモード用の背景画像パスを取得（カード画面、待機画面、または写真）"""
@@ -1535,10 +1545,10 @@ class StreamerCore:
             return None
 
     def add_image_file(self, file_path, title=None):
-        """ローカル画像ファイルを最適化してキューに追加"""
-        with self.queue_lock:
-            if len(self.play_queue) >= MAX_QUEUE_CAPACITY:
-                log_print(f"[Core] Queue capacity reached ({MAX_QUEUE_CAPACITY}).")
+        """ローカル画像ファイルを最適化して写真プールに追加"""
+        with self.photo_lock:
+            if len(self.photo_pool) >= MAX_PHOTO_CAPACITY:
+                log_print(f"[Core] Photo pool capacity reached ({MAX_PHOTO_CAPACITY}).")
                 return None
 
         cached_path = self.optimize_image_to_cache(file_path)
@@ -1549,23 +1559,27 @@ class StreamerCore:
             title = os.path.splitext(os.path.basename(file_path))[0]
 
         duration = int(self.config.get("image_display_duration", 15))
+        photo_id = f"p_{uuid.uuid4().hex[:8]}"
         item = {
+            "id": photo_id,
             "type": "image",
             "title": f"🖼 {title}",
-            "url": os.path.basename(file_path),
+            "url": os.path.basename(cached_path),
             "path": cached_path,
+            "original_filename": os.path.basename(file_path),
             "duration": duration
         }
-        with self.queue_lock:
-            self.play_queue.append(item)
-        log_print(f"[Core] Added photo to queue: {title} ({duration}s)")
+        with self.photo_lock:
+            self.photo_pool.append(item)
+        log_print(f"[Core] Added photo to pool: {title} (id: {photo_id}, {duration}s)")
+        self.reload_stream_event.set()
         return item
 
     def add_image_bytes(self, image_bytes, original_filename="photo.jpg"):
-        """アップロードされた画像バイナリを最適化してキューに追加"""
-        with self.queue_lock:
-            if len(self.play_queue) >= MAX_QUEUE_CAPACITY:
-                log_print(f"[Core] Queue capacity reached ({MAX_QUEUE_CAPACITY}).")
+        """アップロードされた画像バイナリを最適化して写真プールに追加"""
+        with self.photo_lock:
+            if len(self.photo_pool) >= MAX_PHOTO_CAPACITY:
+                log_print(f"[Core] Photo pool capacity reached ({MAX_PHOTO_CAPACITY}).")
                 return None
 
         cached_path = self.optimize_image_to_cache(image_bytes)
@@ -1574,17 +1588,79 @@ class StreamerCore:
 
         title = os.path.splitext(os.path.basename(original_filename))[0] or "Uploaded Photo"
         duration = int(self.config.get("image_display_duration", 15))
+        photo_id = f"p_{uuid.uuid4().hex[:8]}"
         item = {
+            "id": photo_id,
             "type": "image",
             "title": f"🖼 {title}",
-            "url": original_filename,
+            "url": os.path.basename(cached_path),
             "path": cached_path,
+            "original_filename": original_filename,
             "duration": duration
         }
-        with self.queue_lock:
-            self.play_queue.append(item)
-        log_print(f"[Core] Added uploaded photo to queue: {title} ({duration}s)")
+        with self.photo_lock:
+            self.photo_pool.append(item)
+        log_print(f"[Core] Added uploaded photo to pool: {title} (id: {photo_id}, {duration}s)")
+        self.reload_stream_event.set()
         return item
+
+    def get_photos(self):
+        """写真プール内の有効な写真一覧を取得"""
+        with self.photo_lock:
+            valid = []
+            for p in self.photo_pool:
+                if p.get("path") and os.path.exists(p["path"]):
+                    valid.append(dict(p))
+            return valid
+
+    def remove_photo(self, photo_id_or_idx):
+        """写真プールから特定の写真を削除（キャッシュファイルも削除）"""
+        with self.photo_lock:
+            target_idx = None
+            if isinstance(photo_id_or_idx, int):
+                if 0 <= photo_id_or_idx < len(self.photo_pool):
+                    target_idx = photo_id_or_idx
+            elif isinstance(photo_id_or_idx, str):
+                for idx, p in enumerate(self.photo_pool):
+                    if p.get("id") == photo_id_or_idx or p.get("url") == photo_id_or_idx or p.get("path") == photo_id_or_idx:
+                        target_idx = idx
+                        break
+            if target_idx is not None:
+                removed = self.photo_pool.pop(target_idx)
+                if removed.get("path") and os.path.exists(removed["path"]):
+                    try:
+                        os.remove(removed["path"])
+                    except Exception:
+                        pass
+                log_print(f"[Core] Removed photo from pool: {removed.get('title')}")
+                self.reload_stream_event.set()
+                return True
+            return False
+
+    def move_photo(self, from_idx: int, to_idx: int):
+        """写真プール内の写真の順序を入れ替え"""
+        with self.photo_lock:
+            if 0 <= from_idx < len(self.photo_pool) and 0 <= to_idx < len(self.photo_pool):
+                item = self.photo_pool.pop(from_idx)
+                self.photo_pool.insert(to_idx, item)
+                log_print(f"[Core] Moved photo in pool from {from_idx} to {to_idx}")
+                return True
+            return False
+
+    def clear_photos(self):
+        """写真プール内の全写真を削除"""
+        with self.photo_lock:
+            for p in self.photo_pool:
+                if p.get("path") and os.path.exists(p["path"]):
+                    try:
+                        os.remove(p["path"])
+                    except Exception:
+                        pass
+            self.photo_pool.clear()
+            self.slideshow_index = 0
+            log_print("[Core] Cleared all photos from photo pool.")
+            self.reload_stream_event.set()
+            return True
 
     def play_image(self, image_info):
         """最適化済み静止画像をFFmpegネイティブでHLS配信（安全・低遅延）"""
@@ -1892,7 +1968,32 @@ class StreamerCore:
             log_print(f"[Core] Failed to prepare playback image ({image_path}): {e}")
             return image_path
 
-    def generate_standby_image(self):
+    def _draw_notice_banner(self, img, text):
+        """画像の下部に案内バー（半透明ダーク帯＋スカイブルー枠＋テキスト）を合成"""
+        try:
+            overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(overlay)
+            w, h = img.size
+            bar_y1 = h - 130
+            bar_y2 = h - 50
+            draw.rounded_rectangle(
+                [(60, bar_y1), (w - 60, bar_y2)],
+                radius=14,
+                fill=(15, 23, 42, 230),
+                outline=(56, 189, 248, 220),
+                width=2
+            )
+            font_notice = get_pil_font(28, bold=True)
+            draw.text((w // 2, (bar_y1 + bar_y2) // 2), text, fill="#F8FAFC", anchor="mm", font=font_notice)
+
+            canvas = img.convert("RGBA")
+            combined = Image.alpha_composite(canvas, overlay)
+            return combined.convert("RGB")
+        except Exception as e:
+            log_print(f"[Core] Error drawing notice banner: {e}")
+            return img
+
+    def generate_standby_image(self, notice_text=None):
         """待機用画面（固定画像またはQRコード & URL付き 1920x1080）を生成して保存"""
         standby_mode = self.config.get("standby_mode", "image")
 
@@ -1945,6 +2046,9 @@ class StreamerCore:
                             except Exception as e:
                                 log_print(f"[Core] Error compositing QR overlay on standby image: {e}")
 
+                    if notice_text:
+                        final_img = self._draw_notice_banner(final_img, notice_text)
+
                     final_img.save(STANDBY_IMAGE_PATH, "PNG")
                     return
                 except Exception as e:
@@ -1975,6 +2079,9 @@ class StreamerCore:
                         img = canvas.convert("RGB")
                     except Exception as e:
                         log_print(f"[Core] Error compositing QR overlay on fallback standby: {e}")
+
+            if notice_text:
+                img = self._draw_notice_banner(img, notice_text)
 
             try:
                 img.save(STANDBY_IMAGE_PATH, "PNG")
@@ -2106,22 +2213,39 @@ class StreamerCore:
             font=font_footer
         )
 
+        if notice_text:
+            img = self._draw_notice_banner(img, notice_text)
+
         try:
             img.save(STANDBY_IMAGE_PATH, "PNG")
         except Exception as e:
             log_print(f"[Core] Failed to save standby image: {e}")
 
-    def play_standby_loop(self):
-        """キューが空のときに待機画面（QRコード・URL付き静止画）をHLS配信"""
+    def play_standby_loop(self, empty_slideshow=False):
+        """キューが空、またはスライドショー写真未登録時に待機画面（QRコード・URL付き静止画）をHLS配信"""
         last_tunnel_url = self.tunnel_raw_url
+        notice_text = "📷 スライドショー写真が未登録です（Webリモコンから写真をアップロードできます）" if empty_slideshow else None
 
         while self.is_running and not self.skip_event.is_set():
-            with self.queue_lock:
-                if len(self.play_queue) > 0:
+            if empty_slideshow:
+                if self.get_playback_mode() != "slideshow":
                     break
+                with self.photo_lock:
+                    if len(self.photo_pool) > 0:
+                        break
+                self.status = "offline"
+                self.status_detail = "Slideshow (No Photos — Standby Notice)"
+            else:
+                if self.get_playback_mode() == "slideshow":
+                    break
+                with self.queue_lock:
+                    if len(self.play_queue) > 0:
+                        break
+                self.status = "offline"
+                self.status_detail = "Standby (Waiting for Videos)"
 
-            # 待機画像を生成（最新のトンネルURLを反映）
-            self.generate_standby_image()
+            # 待機画像を生成（最新のトンネルURLと案内テキストを反映）
+            self.generate_standby_image(notice_text=notice_text)
             if not os.path.exists(STANDBY_IMAGE_PATH):
                 time.sleep(0.5)
                 continue
@@ -2183,14 +2307,25 @@ class StreamerCore:
             threading.Thread(target=self.watch_send_proc,
                              args=(proc, stop_event), daemon=True).start()
 
-            # キューに動画が入るか、またはトンネルURLが更新されるまでループ
             url_updated = False
             while self.is_running and not self.skip_event.is_set():
-                with self.queue_lock:
-                    if len(self.play_queue) > 0:
-                        break
+                if self.reload_stream_event.is_set():
+                    self.reload_stream_event.clear()
+                    break
 
-                # トンネルURLが後から確定・変化した場合、新しいQRコードで待機ストリームを再起動
+                if empty_slideshow:
+                    if self.get_playback_mode() != "slideshow":
+                        break
+                    with self.photo_lock:
+                        if len(self.photo_pool) > 0:
+                            break
+                else:
+                    if self.get_playback_mode() == "slideshow":
+                        break
+                    with self.queue_lock:
+                        if len(self.play_queue) > 0:
+                            break
+
                 if self.tunnel_raw_url != last_tunnel_url:
                     last_tunnel_url = self.tunnel_raw_url
                     url_updated = True
@@ -2199,18 +2334,15 @@ class StreamerCore:
 
                 time.sleep(0.5)
 
-            # 送信プロセスを停止
             stop_event.set()
             with self.process_lock:
                 if self.send_proc:
                     kill_proc(self.send_proc)
                 self.send_proc = None
 
-            # 待機画面の再生時間を累積PTSに加算
             self.accumulated_pts += self.last_stream_duration + 0.1
             log_print(f"[Player] Standby exited. Updated accumulated_pts: {self.accumulated_pts:.2f}s")
 
-            # トンネルURL更新による再起動の場合は、キューが空のまま再度ループして新しい画像で配信開始
             if url_updated:
                 time.sleep(0.3)
                 continue
@@ -2221,40 +2353,34 @@ class StreamerCore:
         log_print("[Monitor] Queue monitor started.")
         while self.is_running:
             try:
-                next_item = None
-                with self.queue_lock:
-                    if self.play_queue:
+                current_mode = self.get_playback_mode()
+
+                # ==================== モード1: 写真スライドショー ====================
+                if current_mode == "slideshow":
+                    photos = self.get_photos()
+                    if not photos:
+                        self.current_video = None
+                        self.play_standby_loop(empty_slideshow=True)
+                        time.sleep(0.3)
+                        continue
+
+                    # 写真を順番（またはシャッフル）に取得
+                    with self.photo_lock:
                         if self.config.get("shuffle", False):
-                            idx = random.randrange(len(self.play_queue))
-                            next_item = self.play_queue.pop(idx)
+                            next_photo = random.choice(self.photo_pool)
                         else:
-                            next_item = self.play_queue.pop(0)
+                            self.slideshow_index %= len(self.photo_pool)
+                            next_photo = self.photo_pool[self.slideshow_index]
+                            self.slideshow_index = (self.slideshow_index + 1) % len(self.photo_pool)
 
-                if not next_item:
-                    self.current_video = None
-                    self.status = "offline"
-                    self.status_detail = "Standby (Waiting for Videos)"
-                    # 待機画面（QRコード & URL）を配信しながら待機
-                    self.play_standby_loop()
-                    time.sleep(0.5)
-                    continue
-
-                # 履歴に追加 (最大20件)
-                with self.queue_lock:
-                    self.history_stack.append(next_item)
-                    if len(self.history_stack) > 20:
-                        self.history_stack.pop(0)
-
-                is_img = (next_item.get("type") == "image")
-                log_print(f"[Monitor] Loading: {next_item.get('title')} (is_image: {is_img})")
-                self.current_video = next_item
-                self.skip_event.clear()
-                self.video_done_event.clear()
-
-                if is_img:
+                    log_print(f"[Monitor] Showing Photo in slideshow: {next_photo.get('title')}")
+                    self.current_video = next_photo
+                    self.skip_event.clear()
+                    self.video_done_event.clear()
                     self.status = "streaming"
-                    self.status_detail = f"Showing Photo: {next_item.get('title')}"
-                    stop_event = self.play_image(next_item)
+                    self.status_detail = f"Showing Photo: {next_photo.get('title')}"
+
+                    stop_event = self.play_image(next_photo)
                     if stop_event is None:
                         log_print("[Monitor] Failed to display photo. Skipping to next.")
                         self.status = "error"
@@ -2262,49 +2388,43 @@ class StreamerCore:
                         time.sleep(1)
                         continue
 
-                    # 次の曲/アイテムのバックグラウンド先読み（プリフェッチ）
-                    with self.queue_lock:
-                        next_queued = self.play_queue[0] if self.play_queue else None
-                    if next_queued:
-                        threading.Thread(target=self.prefetch_item, args=(next_queued,), daemon=True).start()
-
-                    # 写真スライドショーのタイマー監視（一時停止対応 & ホットリロード対応）
                     elapsed = 0.0
                     duration_for_log = float(self.config.get("image_display_duration", 15))
                     while self.is_running and not self.skip_event.is_set():
-                        # 設定変更による即時ホットリロード要求
+                        # モード切替検知
+                        if self.get_playback_mode() != "slideshow":
+                            break
+
+                        # 設定変更・写真更新ホットリロード要求
                         if self.reload_stream_event.is_set():
                             self.reload_stream_event.clear()
-                            log_print("[Monitor] Hot-reloading active photo stream with updated QR settings...")
+                            log_print("[Monitor] Hot-reloading slideshow photo stream...")
                             stop_event.set()
                             with self.process_lock:
                                 if self.send_proc:
                                     kill_proc(self.send_proc)
                                 self.send_proc = None
-                            time.sleep(0.3)
-                            stop_event = self.play_image(next_item)
-                            if stop_event is None:
-                                break
+                            time.sleep(0.2)
+                            break
 
-                        auto_advance = bool(self.config.get("image_auto_advance", False))
+                        auto_advance = bool(self.config.get("image_auto_advance", True))
                         if not self.image_paused and auto_advance:
                             elapsed += 0.2
                             duration = float(self.config.get("image_display_duration", 15))
                             if elapsed >= duration:
                                 log_print(f"[Monitor] Photo display time elapsed ({duration}s).")
                                 break
+
                         time.sleep(0.2)
                         with self.process_lock:
                             proc = self.send_proc
                             h_proc = self.hls_proc
                         if proc and proc.poll() is not None:
-                            # stderr は DEVNULL のため、ここで落ちると写真が無言でスキップされる。
-                            # 表示時間を待たずに終了した場合は原因追跡できるよう警告を残す。
                             if elapsed < duration_for_log:
                                 log_print(
                                     f"[Monitor] WARNING: Photo sender exited after {elapsed:.1f}s "
                                     f"(expected {duration_for_log}s, exit={proc.returncode}). "
-                                    f"Photo may have been skipped: {next_item.get('title')}"
+                                    f"Photo: {next_photo.get('title')}"
                                 )
                             break
                         if h_proc and h_proc.poll() is not None:
@@ -2320,14 +2440,8 @@ class StreamerCore:
                             kill_proc(proc)
                         self.send_proc = None
 
-                    # 写真再生時間を累積PTSに加算
                     self.accumulated_pts += self.last_stream_duration + 0.1
                     log_print(f"[Monitor] Photo finished. Updated accumulated_pts: {self.accumulated_pts:.2f}s")
-
-                    if self.config.get("loop_queue", False) and next_item:
-                        with self.queue_lock:
-                            self.play_queue.append(next_item)
-                        log_print(f"[Monitor] Loop queue: re-added photo '{next_item.get('title')}' to end of queue.")
 
                     if self.skip_event.is_set():
                         log_print("[Monitor] Photo skipped.")
@@ -2336,8 +2450,36 @@ class StreamerCore:
                     time.sleep(0.1)
                     continue
 
-                # 動画 / BGM・ラジオ再生フロー
-                is_radio = bool(self.config.get("radio_mode", False))
+                # ==================== モード2 & 3: 通常動画 / ラジオBGM ====================
+                next_item = None
+                with self.queue_lock:
+                    if self.play_queue:
+                        if self.config.get("shuffle", False):
+                            idx = random.randrange(len(self.play_queue))
+                            next_item = self.play_queue.pop(idx)
+                        else:
+                            next_item = self.play_queue.pop(0)
+
+                if not next_item:
+                    self.current_video = None
+                    self.status = "offline"
+                    self.status_detail = "Standby (Waiting for Videos)"
+                    self.play_standby_loop(empty_slideshow=False)
+                    time.sleep(0.3)
+                    continue
+
+                # 履歴に追加 (最大20件)
+                with self.queue_lock:
+                    self.history_stack.append(next_item)
+                    if len(self.history_stack) > 20:
+                        self.history_stack.pop(0)
+
+                is_radio = (current_mode == "radio")
+                log_print(f"[Monitor] Loading: {next_item.get('title')} (is_radio: {is_radio})")
+                self.current_video = next_item
+                self.skip_event.clear()
+                self.video_done_event.clear()
+
                 self.status = "buffering"
                 self.status_detail = f"Loading {'[Radio]' if is_radio else ''}: {next_item.get('title')}..."
 
@@ -2356,7 +2498,7 @@ class StreamerCore:
                 self.status = "streaming"
                 self.status_detail = "Active (Radio BGM)" if is_radio else "Active (Streaming)"
 
-                # 次の曲のバックグラウンド先読み（プリフェッチ）を開始！
+                # 次の曲のバックグラウンド先読み（プリフェッチ）を開始
                 with self.queue_lock:
                     next_queued = self.play_queue[0] if self.play_queue else None
                 if next_queued:
@@ -2364,11 +2506,16 @@ class StreamerCore:
 
                 # 終了 or スキップを待つ (ホットリロード対応)
                 while self.is_running and not self.skip_event.is_set():
+                    # 再生モードがスライドショーへ切り替わった場合
+                    if self.get_playback_mode() == "slideshow":
+                        log_print("[Monitor] Switched to slideshow mode during video playback. Transitioning...")
+                        break
+
                     # 設定変更による即時ホットリロード要求
                     if self.reload_stream_event.is_set():
                         self.reload_stream_event.clear()
                         seek = max(0, time.time() - (self.current_video_start_time or time.time()))
-                        is_radio_now = bool(self.config.get("radio_mode", False))
+                        is_radio_now = (self.get_playback_mode() == "radio")
                         log_print(f"[Monitor] Hot-reloading active stream (radio={is_radio_now}) with updated settings at seek={int(seek)}s...")
                         stop_event.set()
                         with self.process_lock:

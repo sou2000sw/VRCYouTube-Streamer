@@ -1,5 +1,6 @@
 import os
 import sys
+import io
 import time
 import json
 import threading
@@ -157,11 +158,15 @@ def test_radio_slideshow_advance():
     test_img1 = Image.new("RGB", (800, 600), color=(255, 0, 0))
     test_img2 = Image.new("RGB", (800, 600), color=(0, 255, 0))
     
-    p1 = core.optimize_image_to_cache(test_img1, "test_photo_1.png")
-    p2 = core.optimize_image_to_cache(test_img2, "test_photo_2.png")
+    buf1 = io.BytesIO()
+    test_img1.save(buf1, format="PNG")
+    p1 = core.add_image_bytes(buf1.getvalue(), "test_photo_1.png")
+    buf2 = io.BytesIO()
+    test_img2.save(buf2, format="PNG")
+    p2 = core.add_image_bytes(buf2.getvalue(), "test_photo_2.png")
     
-    assert p1 is not None and os.path.exists(p1)
-    assert p2 is not None and os.path.exists(p2)
+    assert p1 is not None and os.path.exists(p1["path"])
+    assert p2 is not None and os.path.exists(p2["path"])
     
     # 1. get_slideshow_images で画像が取得できるか
     images = core.get_slideshow_images()
@@ -179,12 +184,13 @@ def test_radio_slideshow_advance():
     assert core.config["image_display_duration"] == 10
     
     # 一時画像ファイルのクリーンアップ
-    for p in (p1, p2):
+    for p in (p1["path"], p2["path"]):
         if os.path.exists(p):
             try:
                 os.remove(p)
             except Exception:
                 pass
+    core.clear_photos()
 
     core.shutdown()
     print("[PASS] Radio Mode Slideshow Auto Advance Tests Passed!")

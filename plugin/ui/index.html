@@ -76,7 +76,7 @@
             <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
                 <i class="ri-youtube-fill text-red-500 text-xl"></i>
                 <span class="font-bold text-sm tracking-wide text-zinc-100 hidden xs:inline">VRCYouTube</span>
-                <span class="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700 font-mono">v2.6.0</span>
+                <span class="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700 font-mono">v2.7.0</span>
             </div>
             <!-- Server Status Indicator -->
             <div id="serverStatusBadge" class="flex items-center gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full text-[11px] sm:text-xs font-medium bg-zinc-800/80 text-zinc-400 border border-zinc-700/60 truncate">
@@ -280,12 +280,19 @@
                                 <i class="ri-video-add-line text-primary text-base"></i>
                                 <span class="font-semibold text-xs text-zinc-200">YouTube 動画 / プレイリスト追加</span>
                             </div>
-                            <!-- Mode Toggle Pill -->
+                            <!-- Mode Toggle Pill (3 Playback Modes) -->
                             <div class="flex items-center bg-zinc-900 p-0.5 rounded border border-border text-[11px]">
-                                <button id="modeVideoBtn" onclick="selectAddMode('video')" class="px-2 py-0.5 rounded bg-zinc-800 text-primary font-medium transition">通常動画</button>
+                                <button id="modeVideoBtn" onclick="selectAddMode('video')" class="px-2 py-0.5 rounded bg-zinc-800 text-primary font-medium transition flex items-center gap-1">
+                                    <i class="ri-movie-line text-xs"></i>
+                                    <span>動画</span>
+                                </button>
                                 <button id="modeRadioBtn" onclick="selectAddMode('radio')" class="px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1">
                                     <i class="ri-radio-line text-xs"></i>
-                                    <span>📻 BGMラジオ</span>
+                                    <span>ラジオ</span>
+                                </button>
+                                <button id="modeSlideshowBtn" onclick="selectAddMode('slideshow')" class="px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1">
+                                    <i class="ri-slideshow-line text-xs"></i>
+                                    <span>スライドショー</span>
                                 </button>
                             </div>
                         </div>
@@ -402,7 +409,32 @@
                         <!-- Dynamic items will be injected here -->
                         <div class="p-8 text-center text-zinc-500 text-xs flex flex-col items-center gap-2">
                             <i class="ri-inbox-line text-2xl"></i>
-                            <span>キューは空です。URLまたは写真を追加してください。</span>
+                            <span>キューは空です。URLを追加してください。</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 7. Photo Pool (Album) Card -->
+                <div class="bg-card border border-border rounded-lg flex flex-col overflow-hidden">
+                    <div class="p-3 border-b border-border flex items-center justify-between bg-card-muted">
+                        <div class="flex items-center gap-2">
+                            <i class="ri-gallery-line text-emerald-400"></i>
+                            <span class="font-semibold text-xs text-zinc-200">写真プール（共有アルバム）</span>
+                            <span id="photoCountBadge" class="text-[10px] bg-zinc-800 text-emerald-400 px-2 py-0.5 rounded border border-zinc-700 font-mono">0 枚</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button id="btnClearPhotos" onclick="clearPhotoPool()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition" title="写真プールを全消去">
+                                <i class="ri-delete-bin-line"></i>
+                                <span>写真全消去</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Photo Pool Items Grid -->
+                    <div id="photoPoolContainer" class="p-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 max-h-80 overflow-y-auto">
+                        <div class="col-span-full p-6 text-center text-zinc-500 text-xs flex flex-col items-center gap-1.5">
+                            <i class="ri-image-line text-2xl text-zinc-600"></i>
+                            <span>写真プールは空です。上の「写真を選択」から追加してください。</span>
                         </div>
                     </div>
                 </div>
@@ -1281,11 +1313,7 @@
             }
         }
 
-        // Add Mode Toggle (Normal Video vs BGM Radio)
-        // 利用者のクリックはこちら。見た目を変えるだけでなく、その場でサーバーへ反映する。
-        // 反映しないままだと、2秒ごとの /api/status ポーリングが下の setAddMode() を通じて
-        // 選択をサーバーの値へ巻き戻してしまい、「通常動画を選んだのにラジオで再生される」
-        // という元の不具合が形を変えて再発する。
+        // Add Mode Toggle (Normal Video vs BGM Radio vs Slideshow)
         async function selectAddMode(mode) {
             addModeUserChangedAt = Date.now();
             setAddMode(mode);
@@ -1293,7 +1321,7 @@
                 await fetch(`${apiBase}/api/control`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: 'set_radio_mode', enabled: mode === 'radio' })
+                    body: JSON.stringify({ action: 'set_playback_mode', mode: mode })
                 });
             } catch (e) {
                 showToast('再生モードの切り替えに失敗しました', 'danger');
@@ -1305,16 +1333,24 @@
             currentAddMode = mode;
             const vBtn = document.getElementById('modeVideoBtn');
             const rBtn = document.getElementById('modeRadioBtn');
+            const sBtn = document.getElementById('modeSlideshowBtn');
             const desc = document.getElementById('modeDescription');
 
-            if (mode === 'video') {
-                vBtn.className = "px-2 py-0.5 rounded bg-zinc-800 text-primary font-medium transition";
-                rBtn.className = "px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1";
-                desc.innerText = "通常モード: 高画質・低遅延HLS動画ストリーミング";
-            } else {
-                rBtn.className = "px-2 py-0.5 rounded bg-zinc-800 text-primary font-medium transition flex items-center gap-1";
-                vBtn.className = "px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 transition";
-                desc.innerText = "📻 BGMラジオ: 音声のみ抽出しアルバムアートカード画面と合成（帯域約300kbps・超軽量）";
+            const inactiveCls = "px-2 py-0.5 rounded text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1";
+            const activeCls = "px-2 py-0.5 rounded bg-zinc-800 text-primary font-medium transition flex items-center gap-1";
+
+            if (vBtn) vBtn.className = (mode === 'video') ? activeCls : inactiveCls;
+            if (rBtn) rBtn.className = (mode === 'radio') ? activeCls : inactiveCls;
+            if (sBtn) sBtn.className = (mode === 'slideshow') ? activeCls : inactiveCls;
+
+            if (desc) {
+                if (mode === 'video') {
+                    desc.innerText = "🎬 通常動画モード: 高画質・低遅延HLS動画ストリーミング（キューの動画を再生）";
+                } else if (mode === 'radio') {
+                    desc.innerText = "📻 BGMラジオ: 音声のみ抽出しアルバムアート/スライドショーと合成（帯域約300kbps・超軽量）";
+                } else if (mode === 'slideshow') {
+                    desc.innerText = "🖼️ スライドショーモード: 写真プール内の写真を自動巡回配信（動画キューとは完全分離）";
+                }
             }
         }
 
@@ -1526,15 +1562,12 @@
             updateToggleBtn('btnShufflePlay', data.shuffle);
 
             // Controls sync
-            // /api/status が返すキーは radio_bg_source。以前は存在しない data.radio_background を
-            // 参照していたため、ラジオ背景セレクトがサーバーの実状態を一切反映していなかった。
             if (data.radio_bg_source && selectRadioBg) {
                 selectRadioBg.value = data.radio_bg_source;
             }
-            // 追加モード（通常動画 / BGMラジオ）もサーバーの radio_mode に追従させる
-            // 利用者が操作した直後は、切り替えPOSTの往復が終わるまで上書きしない
-            if (typeof data.radio_mode === 'boolean' && Date.now() - addModeUserChangedAt > 3000) {
-                const serverMode = data.radio_mode ? 'radio' : 'video';
+            // 再生モード（通常動画 / BGMラジオ / スライドショー）の同期
+            const serverMode = data.playback_mode || (data.radio_mode ? 'radio' : 'video');
+            if (serverMode && Date.now() - addModeUserChangedAt > 3000) {
                 if (serverMode !== currentAddMode) setAddMode(serverMode);
             }
             if (data.image_display_duration && selectDuration) {
@@ -1543,6 +1576,9 @@
 
             // Queue List
             renderQueue(data.queue || [], permEdit);
+
+            // Photo Pool List
+            renderPhotoPool(data.photos || [], permEdit);
 
             // Settings tab sync
             if (data.overlay_qr_enabled !== undefined) {
@@ -1751,6 +1787,106 @@
             }).join('');
 
             if (canReorder) bindDragEvents();
+        }
+
+        // Photo Pool (Shared Album) Rendering & Management
+        function renderPhotoPool(photos, canEdit) {
+            const container = document.getElementById('photoPoolContainer');
+            const countBadge = document.getElementById('photoCountBadge');
+            if (countBadge) countBadge.innerText = `${photos.length} 枚`;
+            if (!container) return;
+
+            if (photos.length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-full p-6 text-center text-zinc-500 text-xs flex flex-col items-center gap-1.5">
+                        <i class="ri-image-line text-2xl text-zinc-600"></i>
+                        <span>写真プールは空です。上の「写真を選択」から追加してください。</span>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = photos.map((item, idx) => {
+                const photoId = item.id || idx;
+                const title = escapeHtml(item.title || item.original_filename || '写真');
+                const url = item.url ? `${apiBase}/images/${item.url}` : '';
+                return `
+                    <div class="relative group bg-zinc-900 border border-zinc-700/80 rounded-lg overflow-hidden flex flex-col">
+                        <div class="aspect-video bg-zinc-950 flex items-center justify-center overflow-hidden relative">
+                            ${url ? `<img src="${url}" alt="${title}" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" loading="lazy">` : `<i class="ri-image-line text-zinc-600 text-2xl"></i>`}
+                            <span class="absolute top-1 left-1 bg-black/70 text-white font-mono text-[9px] px-1.5 py-0.5 rounded backdrop-blur-sm">#${idx + 1}</span>
+                            ${canEdit ? `
+                            <button onclick="removePhoto('${photoId}')" class="absolute top-1 right-1 bg-red-600/80 hover:bg-red-600 text-white p-1 rounded-full opacity-80 sm:opacity-0 group-hover:opacity-100 transition shadow" title="写真を削除">
+                                <i class="ri-close-line text-xs"></i>
+                            </button>` : ''}
+                        </div>
+                        <div class="p-1.5 px-2 flex items-center justify-between gap-1 text-[11px] bg-card">
+                            <span class="text-zinc-300 truncate font-medium flex-1" title="${title}">${title}</span>
+                            ${canEdit ? `
+                            <div class="flex items-center shrink-0">
+                                <button onclick="movePhoto(${idx}, ${idx - 1})" ${idx === 0 ? 'disabled' : ''} class="p-0.5 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 transition" title="前へ">
+                                    <i class="ri-arrow-left-s-line text-xs"></i>
+                                </button>
+                                <button onclick="movePhoto(${idx}, ${idx + 1})" ${idx === photos.length - 1 ? 'disabled' : ''} class="p-0.5 text-zinc-400 hover:text-zinc-200 disabled:opacity-20 transition" title="次へ">
+                                    <i class="ri-arrow-right-s-line text-xs"></i>
+                                </button>
+                            </div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function removePhoto(photoId) {
+            try {
+                const res = await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'remove_photo', id: photoId })
+                });
+                if (res.ok) {
+                    showToast('写真を削除しました', 'success');
+                    checkServerHealth(true);
+                } else {
+                    const d = await res.json();
+                    showToast(d.message || '写真の削除に失敗しました', 'danger');
+                }
+            } catch (e) {
+                showToast('写真の削除に失敗しました', 'danger');
+            }
+        }
+
+        async function movePhoto(fromIdx, toIdx) {
+            try {
+                const res = await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'move_photo', from_index: fromIdx, to_index: toIdx })
+                });
+                if (res.ok) {
+                    checkServerHealth(true);
+                }
+            } catch (e) {}
+        }
+
+        async function clearPhotoPool() {
+            if (!confirm('写真プール内のすべての写真を消去しますか？')) return;
+            try {
+                const res = await fetch(`${apiBase}/api/control`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'clear_photos' })
+                });
+                if (res.ok) {
+                    showToast('写真プールをクリアしました', 'success');
+                    checkServerHealth(true);
+                } else {
+                    const d = await res.json();
+                    showToast(d.message || '写真プールのクリアに失敗しました', 'danger');
+                }
+            } catch (e) {
+                showToast('写真プールのクリアに失敗しました', 'danger');
+            }
         }
 
         // Drag & Drop Queue Reordering
