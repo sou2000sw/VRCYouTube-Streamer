@@ -997,8 +997,12 @@
             }
         }
 
+        function isIpcAvailable() {
+            return Boolean(window.electron && window.electron.ipcRenderer);
+        }
+
         function isLocalEnvironment() {
-            if (window.electron && window.electron.ipcRenderer) return true;
+            if (isIpcAvailable()) return true;
             try {
                 const host = window.location.hostname;
                 if (host === '127.0.0.1' || host === 'localhost' || host === '') return true;
@@ -1383,11 +1387,18 @@
             const permEdit = !data.permissions || data.permissions.allow_web_queue_edit !== false;
             const permConfig = !data.permissions || data.permissions.allow_web_config !== false;
 
-            // Header Action buttons visibility (Only local or host privileged can stop/launch/restart)
+            // Header Action buttons visibility
+            // - サーバー終了: ホスト(isLocal)であれば通常ブラウザでも利用可能
+            // - 再起動 / 起動: Electron IPC が利用可能な環境(VRCBeacon)のみ表示（通常ブラウザではプロセス再起動不可のため非表示）
+            const ipcAvailable = isIpcAvailable();
             if (isLocal) {
                 document.getElementById('btnHeaderLaunch').classList.add('hidden');
                 document.getElementById('btnHeaderStop').classList.remove('hidden');
-                document.getElementById('btnHeaderRestart').classList.remove('hidden');
+                if (ipcAvailable) {
+                    document.getElementById('btnHeaderRestart').classList.remove('hidden');
+                } else {
+                    document.getElementById('btnHeaderRestart').classList.add('hidden');
+                }
             } else {
                 document.getElementById('btnHeaderLaunch').classList.add('hidden');
                 document.getElementById('btnHeaderStop').classList.add('hidden');
@@ -1570,8 +1581,10 @@
             }
 
             const isLocal = isLocalEnvironment();
+            const ipcAvailable = isIpcAvailable();
 
-            if (isLocal) {
+            // オフライン時、起動ボタンは IPC利用可能環境 (VRCBeacon) かつ isLocal の時のみ表示
+            if (isLocal && ipcAvailable) {
                 document.getElementById('btnHeaderLaunch').classList.remove('hidden');
             } else {
                 document.getElementById('btnHeaderLaunch').classList.add('hidden');
@@ -1589,11 +1602,13 @@
             }
             if (offlineDesc) {
                 offlineDesc.innerText = isLocal
-                    ? '動画の再生やHLSストリーミングを開始するには、バックエンドの VRCYouTube サーバーを起動してください。'
+                    ? (ipcAvailable
+                        ? '動画の再生やHLSストリーミングを開始するには、バックエンドの VRCYouTube サーバーを起動してください。'
+                        : '動画の再生やHLSストリーミングを開始するには、ホストPCで VRCYouTubeStreamer.exe を起動してください。')
                     : 'サーバーが停止しているか、ホストとの接続が切断されています。ホストが配信を再開するまでお待ちください。';
             }
             if (btnOfflineLaunch) {
-                if (isLocal) btnOfflineLaunch.classList.remove('hidden');
+                if (isLocal && ipcAvailable) btnOfflineLaunch.classList.remove('hidden');
                 else btnOfflineLaunch.classList.add('hidden');
             }
             if (offlineManualHint) {
