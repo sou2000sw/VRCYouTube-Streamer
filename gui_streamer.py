@@ -379,6 +379,11 @@ class SettingsWindow(ctk.CTkToplevel):
     "status_detail": "Active (Streaming)",
     "tunnel_url": "https://xxxx.trycloudflare.com",
     "stream_url": "https://xxxx.trycloudflare.com/stream.m3u8",
+    "video_url": "rtspt://topaz.chat/live/<KEY>",  // ワールドの動画プレイヤーに貼るURL(配信先に追従)
+    "remote_url": "https://xxxx.trycloudflare.com", // Webリモコンを開くURL(QRが焼くのはこちら)
+    "output_mode": "topaz",         // 設定上の配信先 (hls / topaz / generic_rtmp)
+    "active_output_mode": "topaz",  // 実際に動いている出口 (退避中は hls)
+    "destination": { ... },         // 配信先の詳細(ストリームキーはホスト以外にはマスク)
     "current_video": { "title": "...", "url": "...", "duration": 213 },
     "queue": [ { "title": "...", "url": "..." } ],
     "loop_queue": true,

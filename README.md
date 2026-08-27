@@ -154,6 +154,10 @@ python gui_streamer.py --headless --port 8080
   "status_detail": "Active (Streaming)",
   "tunnel_url": "https://xxxx.trycloudflare.com",
   "stream_url": "https://xxxx.trycloudflare.com/stream.m3u8",
+  "video_url": "rtspt://topaz.chat/live/<KEY>",
+  "remote_url": "https://xxxx.trycloudflare.com",
+  "output_mode": "topaz",
+  "active_output_mode": "topaz",
   "current_video": {
     "title": "Rick Astley - Never Gonna Give You Up",
     "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -226,9 +230,38 @@ python gui_streamer.py --headless --port 8080
 * **GET `/api/config`**: 現在の設定JSONを取得
 * **POST `/api/config`**: 設定JSONを更新して保存（`config.json` に永続化）
 
-### 7. サーバー終了
+### 7. 配信先の操作（ローカルホスト限定）
+* **Method**: `POST`
+* **Path**: `/api/destination`
+* **Body**:
+  * `{"action": "generate_key"}` … TopazChat のストリームキーを新規生成
+  * `{"action": "reveal_key"}` … 生のストリームキーを取得（ホスト本人のみ）
+  * `{"action": "retry"}` … HLSへ退避中の状態から本来の配信先へ即時復帰を試みる
+
+### 8. サーバー終了
 * **Method**: `POST`
 * **Path**: `/api/shutdown`
+
+---
+
+## 📡 配信先（ストリーミング出力先）の切り替え
+
+`config.json` の `output_mode`、またはWebリモコン「配信・QR設定」タブ／ホストGUIの設定画面から切り替えます。
+
+| モード | 位置付け | VRChat側の遅延 | 備考 |
+| :--- | :--- | :---: | :--- |
+| `hls`（既定） | 外部サービス不要。他経路が失敗したときの退避先 | 約9〜12秒 | 従来どおりの動作 |
+| `topaz` | TopazChat（VRChat向けRTMP→RTSP中継） | 約1〜2秒 | AVProプレイヤーで `rtspt://topaz.chat/live/<KEY>` を再生 |
+| `generic_rtmp` | 自前の nginx-rtmp / MediaMTX 等（上級者向け） | 任意 | URLとキーを手入力。規約・著作権の順守は利用者の責任 |
+
+- **接続できないときは自動的に `hls` へ退避**し、配信自体は途切れません（復帰は指数バックオフで再試行）。
+- **ストリームキー**は32文字以上のランダム値を自動生成します。短いキーは第三者に配信を乗っ取られます。
+  キーは `/api/status` や設定画面ではマスク表示され、生の値はホスト本人のみが取得できます。
+- **TopazChat について**: 本ソフトは TopazChat の公式ツールではありません。TopazChat は個人運営の
+  無償サービスであり、**法人が運営主体のイベント・番組制作等での利用には別途 TopazChat への問い合わせが
+  必要**です。映像は最大2Mbps・音声は最大320kbpsで、超過すると配信が強制切断されます（本ソフトは
+  この上限を超える設定値を保存時に自動で丸めます）。
+  参考: [TopazChat 公式サイト](https://topaz.chat/) / [GitHub](https://github.com/TopazChat/TopazChat)
 
 ---
 
