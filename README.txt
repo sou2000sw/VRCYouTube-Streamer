@@ -8,7 +8,7 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 【ツール概要】
-『VRCYouTube Streamer』は、YouTubeの動画・プレイリストを自分専用のHLSライブストリーム（.m3u8）に変換し、VRChat内の各種動画プレイヤー（iwaSync3, YPlay, ProTV, YamaPlayer 等）でシームレスに再生するためのWindowsアプリケーションです。
+『VRC_Media_Streamer』は、YouTubeの動画・プレイリストを自分専用のHLSライブストリーム（.m3u8）に変換し、VRChat内の各種動画プレイヤー（iwaSync3, YPlay, ProTV, YamaPlayer 等）でシームレスに再生するためのWindowsアプリケーションです。
 
 もともと作者が自分で使うために個人的に作成したものです。
 AIバイブコーディング製のため手厚いサポートはできませんが、「動いたらラッキー」くらいの気持ちで気軽にご利用ください。
@@ -95,7 +95,7 @@ https://github.com/sou2000sw/VRCYouTube-Streamer
    （例: デスクトップ、ドキュメント、D:\Tools\ など）
    ※「C:\Program Files」直下など管理者権限が必要な場所では正常に動作しません。
 
-2. 「VRCYouTubeStreamer.exe」（または同梱のバッチファイル）を起動する。
+2. 「VRC_Media_Streamer.exe」（または同梱のバッチファイル）を起動する。
 
 3. VRChat側の設定を確認する
    VRChat内のメニューで「信頼されていないURLを許可 (Allow Untrusted URLs)」を有効にしてください。
@@ -107,11 +107,11 @@ https://github.com/sou2000sw/VRCYouTube-Streamer
 ==================================================
 📦 【内容物】
 ==================================================
-・ VRCYouTubeStreamer.exe（本体）
+・ VRC_Media_Streamer.exe（本体）
 ・ ffmpeg.exe（動画変換エンジン／同梱必須・同じフォルダに置いてください）
-・ VRCYouTubeStreamer (Normal).bat（通常起動バッチ）
-・ VRCYouTubeStreamer (Local Test).bat（ローカル検証用バッチ）
-・ VRCYouTubeStreamer (Headless Test).bat（ヘッドレスAPIサーバー用バッチ）
+・ VRC_Media_Streamer (Normal).bat（通常起動バッチ）
+・ VRC_Media_Streamer (Local Test).bat（ローカル検証用バッチ）
+・ VRC_Media_Streamer (Headless Test).bat（ヘッドレスAPIサーバー用バッチ）
 ・ README.txt（本説明書）
 ・ FFmpeg_LICENSE.txt / THIRD_PARTY_LICENSES.txt（ライセンス表記）
 
@@ -126,15 +126,15 @@ https://github.com/sou2000sw/VRCYouTube-Streamer
 ==================================================
 🚀 【起動方法・バッチ一覧】
 ==================================================
-- VRCYouTubeStreamer (Normal).bat
+- VRC_Media_Streamer (Normal).bat
     Cloudflareトンネルを有効にして起動します。VRChat内で再生する場合はこちらです。
     サーバーはループバック（127.0.0.1）のみで待ち受け、公開はトンネル経由に限定されます。
 
-- VRCYouTubeStreamer (Local Test).bat
+- VRC_Media_Streamer (Local Test).bat
     トンネルなしのローカルテスト用。同一Wi-Fi内のスマホからも開けるよう
     全インターフェース（--host 0.0.0.0）で待ち受けます。QR共有の動作確認向けです。
 
-- VRCYouTubeStreamer (Headless Test).bat
+- VRC_Media_Streamer (Headless Test).bat
     GUIを出さずAPIサーバーとしてのみ起動します（トンネルなし・LANアクセス可）。
 
 【コマンドライン起動オプション】

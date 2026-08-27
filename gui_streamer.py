@@ -495,7 +495,7 @@ class App(ctk.CTk):
         self.streamer_core = streamer_core
         self.api_server = api_server
 
-        self.title("VRChat YouTube HLS Streamer")
+        self.title("VRC_Media_Streamer")
         self.geometry("680x620")
         self.minsize(540, 480)
 
@@ -511,7 +511,7 @@ class App(ctk.CTk):
         self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.header_frame.pack(fill="x", padx=20, pady=(10, 5))
 
-        self.title_label = ctk.CTkLabel(self.header_frame, text="VRC YouTube Streamer", font=ctk.CTkFont(size=20, weight="bold"))
+        self.title_label = ctk.CTkLabel(self.header_frame, text="VRC_Media_Streamer", font=ctk.CTkFont(size=20, weight="bold"))
         self.title_label.pack(side="left")
 
         self.settings_btn = ctk.CTkButton(self.header_frame, text="⚙ Settings", width=90, fg_color="#34495E", hover_color="#2C3E50", command=self.open_settings)
@@ -1164,7 +1164,7 @@ class App(ctk.CTk):
 
 def run_headless_mode(streamer_core, api_server):
     log_print("==================================================")
-    log_print(f"VRCYouTube Headless API Server Mode Started")
+    log_print(f"VRC_Media_Streamer Headless API Server Mode Started")
     log_print(f"API Endpoints available on http://{streamer_core.config.get('host')}:{streamer_core.config.get('port')}/api/")
     log_print("Press Ctrl+C to terminate.")
     log_print("==================================================")
@@ -1188,7 +1188,7 @@ def run_headless_mode(streamer_core, api_server):
         api_server.stop()
 
 def main():
-    parser = argparse.ArgumentParser(description="VRCYouTube Streamer and API Server")
+    parser = argparse.ArgumentParser(description="VRC_Media_Streamer and API Server")
     parser.add_argument("--headless", "-hl", action="store_true", help="Run in headless API server mode without GUI")
     parser.add_argument("--tunnel", action="store_true", help="Explicitly enable Cloudflare tunnel")
     parser.add_argument("--no-tunnel", "-nt", action="store_true", help="Disable Cloudflare tunnel (run in local test mode)")

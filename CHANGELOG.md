@@ -96,7 +96,7 @@
 ### 🧩 Webリモコン ＆ VRCBeacon プラグインUIの完全統合 ＆ UI正本配置の整理 (Integrated Web Remote & Plugin UI)
 - **WebリモコンとプラグインUIの一本化**:
   - 従来別々に存在していた `api_server.py` のWebリモコンHTMLとプラグインUIを1つの洗練されたモダンUI（Tailwind CSS + Remix Icon）に統合。
-  - ルート直下に `ui/index.html` を正本として配置し、VRCYouTube本体のUI資産として責務を明確化。
+  - ルート直下に `ui/index.html` を正本として配置し、VRC_Media_Streamer本体のUI資産として責務を明確化。
   - `build_exe.py` のパッケージング処理により、プラグイン配布フォルダ `plugin/ui/index.html` への自動同期を実現。
   - `api_server.py` の `GET /` 配信で `ui/index.html` を配信するよう一本化。
 - **インライン HLS ライブストリームプレイヤー (`hls.js`) の統合**:

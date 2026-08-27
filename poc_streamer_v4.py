@@ -27,7 +27,7 @@ HTML_PLAYER = """<!DOCTYPE html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>VRCYouTube Stream Web Player</title>
+    <title>VRC_Media_Streamer Web Player</title>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <style>
         body {
@@ -105,7 +105,7 @@ HTML_PLAYER = """<!DOCTYPE html>
 </head>
 <body>
     <div class="container">
-        <h1>VRCYouTube Web Player</h1>
+        <h1>VRC_Media_Streamer Web Player</h1>
         <div class="video-wrapper">
             <video id="video" controls autoplay playsinline></video>
         </div>

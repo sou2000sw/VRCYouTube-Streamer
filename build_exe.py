@@ -58,39 +58,39 @@ def generate_startup_shortcuts(target_dir):
     os.makedirs(target_dir, exist_ok=True)
     
     # 1. ローカルテスト起動バッチ (トンネルなし)
-    bat_local = os.path.join(target_dir, "VRCYouTubeStreamer (Local Test).bat")
+    bat_local = os.path.join(target_dir, "VRC_Media_Streamer (Local Test).bat")
     with open(bat_local, "w", encoding="cp932", errors="replace") as f:
         f.write('@echo off\r\n'
                 'echo ======================================================\r\n'
-                'echo Starting VRCYouTube Streamer in Local Test Mode\r\n'
+                'echo Starting VRC_Media_Streamer in Local Test Mode\r\n'
                 'echo (Cloudflare Tunnel: DISABLED / LAN access: ENABLED)\r\n'
                 'echo Local URL: http://localhost:8000/  (or the "port" in config.json)\r\n'
                 'echo Phone/QR sharing works over the same Wi-Fi.\r\n'
                 'echo ======================================================\r\n'
-                'start "" "%~dp0VRCYouTubeStreamer.exe" --no-tunnel --host 0.0.0.0\r\n')
+                'start "" "%~dp0VRC_Media_Streamer.exe" --no-tunnel --host 0.0.0.0\r\n')
     print(f"Created startup shortcut: {bat_local}", flush=True)
 
     # 2. 通常起動バッチ (トンネルあり)
-    bat_normal = os.path.join(target_dir, "VRCYouTubeStreamer (Normal).bat")
+    bat_normal = os.path.join(target_dir, "VRC_Media_Streamer (Normal).bat")
     with open(bat_normal, "w", encoding="cp932", errors="replace") as f:
         f.write('@echo off\r\n'
                 'echo ======================================================\r\n'
-                'echo Starting VRCYouTube Streamer in Normal Mode\r\n'
+                'echo Starting VRC_Media_Streamer in Normal Mode\r\n'
                 'echo (Cloudflare Tunnel: ENABLED)\r\n'
                 'echo ======================================================\r\n'
-                'start "" "%~dp0VRCYouTubeStreamer.exe" --tunnel\r\n')
+                'start "" "%~dp0VRC_Media_Streamer.exe" --tunnel\r\n')
     print(f"Created startup shortcut: {bat_normal}", flush=True)
 
     # 3. ヘッドレスローカル起動バッチ
-    bat_headless = os.path.join(target_dir, "VRCYouTubeStreamer (Headless Test).bat")
+    bat_headless = os.path.join(target_dir, "VRC_Media_Streamer (Headless Test).bat")
     with open(bat_headless, "w", encoding="cp932", errors="replace") as f:
         f.write('@echo off\r\n'
                 'echo ======================================================\r\n'
-                'echo Starting VRCYouTube Streamer in Headless Local Mode\r\n'
+                'echo Starting VRC_Media_Streamer in Headless Local Mode\r\n'
                 'echo (Cloudflare Tunnel: DISABLED, GUI: DISABLED / LAN access: ENABLED)\r\n'
                 'echo Local URL: http://localhost:8000/  (or the "port" in config.json)\r\n'
                 'echo ======================================================\r\n'
-                '"%~dp0VRCYouTubeStreamer.exe" --headless --no-tunnel --host 0.0.0.0\r\n'
+                '"%~dp0VRC_Media_Streamer.exe" --headless --no-tunnel --host 0.0.0.0\r\n'
                 'pause\r\n')
     print(f"Created startup shortcut: {bat_headless}", flush=True)
 
@@ -100,7 +100,7 @@ def generate_root_shortcuts():
     with open(bat_root_local, "w", encoding="cp932", errors="replace") as f:
         f.write('@echo off\r\n'
                 'cd /d "%~dp0"\r\n'
-                'echo Starting VRCYouTube Streamer in Local Test Mode (No Tunnel)...\r\n'
+                'echo Starting VRC_Media_Streamer in Local Test Mode (No Tunnel)...\r\n'
                 'python gui_streamer.py --no-tunnel\r\n'
                 'pause\r\n')
 
@@ -108,7 +108,7 @@ def generate_root_shortcuts():
     with open(bat_root_normal, "w", encoding="cp932", errors="replace") as f:
         f.write('@echo off\r\n'
                 'cd /d "%~dp0"\r\n'
-                'echo Starting VRCYouTube Streamer (Normal Mode - Tunnel Enabled)...\r\n'
+                'echo Starting VRC_Media_Streamer (Normal Mode - Tunnel Enabled)...\r\n'
                 'python gui_streamer.py --tunnel\r\n'
                 'pause\r\n')
 
@@ -151,10 +151,10 @@ def package_plugin(version=APP_VERSION):
         print("[OK] Copied ui/index.html -> plugin/ui/index.html", flush=True)
 
     # 2. dist/ から plugin/bin/ へバイナリを同期
-    src_exe = os.path.abspath("dist/VRCYouTubeStreamer.exe")
+    src_exe = os.path.abspath("dist/VRC_Media_Streamer.exe")
     if os.path.exists(src_exe):
-        shutil.copy2(src_exe, os.path.join(plugin_bin, "VRCYouTubeStreamer.exe"))
-        print("[OK] Copied VRCYouTubeStreamer.exe -> plugin/bin/", flush=True)
+        shutil.copy2(src_exe, os.path.join(plugin_bin, "VRC_Media_Streamer.exe"))
+        print("[OK] Copied VRC_Media_Streamer.exe -> plugin/bin/", flush=True)
 
     ffmpeg_src = get_ffmpeg_source()
     if ffmpeg_src and os.path.exists(ffmpeg_src):
@@ -173,7 +173,7 @@ def package_plugin(version=APP_VERSION):
         print("[OK] Removed runtime artifacts: plugin/bin/hls_output/", flush=True)
 
     # 3. プラグインZIPアーカイブ作成
-    zip_path = os.path.join(releases_root, f"vrcbeacon-plugin-vrcyoutube-v{version}.zip")
+    zip_path = os.path.join(releases_root, f"vrcbeacon-plugin-vrc-media-streamer-v{version}.zip")
     print(f"Creating Plugin ZIP archive: {zip_path} ...", flush=True)
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -185,8 +185,8 @@ def package_plugin(version=APP_VERSION):
         print(f"[WARN] Failed to create Plugin ZIP: {e}", flush=True)
 
 def create_versioned_release(version=APP_VERSION):
-    """releases/VRCYouTubeStreamer_v{version}/ 配布用パッケージおよび ZIP を生成"""
-    release_dir_name = f"VRCYouTubeStreamer_v{version}"
+    """releases/VRC_Media_Streamer_v{version}/ 配布用パッケージおよび ZIP を生成"""
+    release_dir_name = f"VRC_Media_Streamer_v{version}"
     releases_root = os.path.abspath("releases")
     target_dir = os.path.join(releases_root, release_dir_name)
     os.makedirs(target_dir, exist_ok=True)
@@ -197,12 +197,12 @@ def create_versioned_release(version=APP_VERSION):
     print(f"==================================================", flush=True)
 
     # 1. EXE のコピー
-    src_exe = os.path.abspath("dist/VRCYouTubeStreamer.exe")
+    src_exe = os.path.abspath("dist/VRC_Media_Streamer.exe")
     if os.path.exists(src_exe):
-        shutil.copy2(src_exe, os.path.join(target_dir, "VRCYouTubeStreamer.exe"))
-        print("[OK] Copied VRCYouTubeStreamer.exe", flush=True)
+        shutil.copy2(src_exe, os.path.join(target_dir, "VRC_Media_Streamer.exe"))
+        print("[OK] Copied VRC_Media_Streamer.exe", flush=True)
     else:
-        print("[WARN] dist/VRCYouTubeStreamer.exe not found!", flush=True)
+        print("[WARN] dist/VRC_Media_Streamer.exe not found!", flush=True)
 
     # 2. ffmpeg.exe のコピー
     ffmpeg_src = get_ffmpeg_source()
@@ -273,7 +273,7 @@ def verify_release(target_dir, port=8991, timeout=45):
     """
     import urllib.request
 
-    exe_path = os.path.join(target_dir, "VRCYouTubeStreamer.exe")
+    exe_path = os.path.join(target_dir, "VRC_Media_Streamer.exe")
     ui_path = os.path.abspath(os.path.join("ui", "index.html"))
 
     print(f"\n==================================================", flush=True)
@@ -407,7 +407,7 @@ def build(version=APP_VERSION):
         "pyinstaller",
         "--onefile",
         "--noconsole",
-        "--name", "VRCYouTubeStreamer",
+        "--name", "VRC_Media_Streamer",
         "--add-data", "cloudflared.exe;.",
         "--add-data", "ui;ui",
         "--add-data", "assets;assets",
@@ -437,11 +437,11 @@ def build(version=APP_VERSION):
         except Exception:
             pass
 
-    # バージョン別配布用パッケージ (releases/VRCYouTubeStreamer_v<version>/) の生成
+    # バージョン別配布用パッケージ (releases/VRC_Media_Streamer_v<version>/) の生成
     create_versioned_release(version)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build and Package VRCYouTubeStreamer")
+    parser = argparse.ArgumentParser(description="Build and Package VRC_Media_Streamer")
     parser.add_argument("--version", "-v", type=str, default=APP_VERSION, help=f"Release version string (default: {APP_VERSION})")
     parser.add_argument("--package-only", action="store_true", help="Skip PyInstaller build and only package existing dist/ files")
     parser.add_argument("--plugin-only", action="store_true", help="Package only the VRCBeacon plugin")

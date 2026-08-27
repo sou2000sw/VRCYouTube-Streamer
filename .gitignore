@@ -1,5 +1,5 @@
 # ==============================================================================
-# Git Ignore Configuration for VRCYouTube
+# Git Ignore Configuration for VRC_Media_Streamer
 # ==============================================================================
 
 # === Python キャッシュ & 仮想環境 ===
@@ -59,7 +59,7 @@ releases/
 releases - */
 releases - コピー/
 plugin/bin/
-VRCYouTubeStreamer/
+VRC_Media_Streamer/
 *.manifest
 *.spec
 *.toc

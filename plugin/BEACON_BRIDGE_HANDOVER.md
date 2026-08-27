@@ -21,9 +21,9 @@ VRCBeacon 側の受付口（`src-electron/plugins/`）と画面（`src/views/Bea
 
 `ui/index.html`（この repo の `plugin/ui/index.html`）は現状 `postMessage` を **1 箇所も使っておらず**、
 `fetch(`${apiBase}/api/...`)` で `http://127.0.0.1:8000` を直接叩く
-（`apiBase` は 437 行目、`localStorage` の `vrcyoutube_api_base` 既定 `http://127.0.0.1:8000`）。
+（`apiBase` は 437 行目、`localStorage` の `vrc_media_streamer_api_base` 既定 `http://127.0.0.1:8000`）。
 
-Beacon の中では iframe のオリジンが **`beacon-plugin://vrcyoutube-streamer`** になる。
+Beacon の中では iframe のオリジンが **`beacon-plugin://vrc-media-streamer`** になる。
 `../api_server.py` の `is_local_request()` は「ループバックの IP」かつ「`_origin_is_self()`」を
 要求し、`_origin_is_self()` は **Origin が無いとき True**、あるときは `_self_origins()`
 （`http://127.0.0.1:8000` 等）に含まれることを要求する。**`beacon-plugin://` は含まれない。**
@@ -69,7 +69,7 @@ Beacon の中のパネルも一緒に死ぬ**。`allow_web_playback_control` を
 ### 2-1. Beacon → プラグイン（読み込み完了時に 1 回）
 
 ```js
-{ __beaconPlugin: 'hello', id: 'vrcyoutube-streamer', version: '2.5.0',
+{ __beaconPlugin: 'hello', id: 'vrc-media-streamer', version: '2.5.0',
   allowedOrigins: ['http://127.0.0.1:8000'] }
 ```
 
@@ -87,7 +87,7 @@ parent.postMessage({
     method,             // GET / POST / PUT / PATCH / DELETE
     headers,            // accept と content-type だけ通る。他は捨てられる
     body                // 文字列、または Uint8Array / ArrayBuffer（上限 20MB。後述の 4）
-}, 'beacon-plugin://vrcyoutube-streamer');
+}, 'beacon-plugin://vrc-media-streamer');
 ```
 
 ### 2-3. Beacon → プラグイン（応答）
@@ -282,9 +282,9 @@ if (typeof body !== 'undefined' && body !== null && typeof body !== 'string') {
 **完了報告ではなく成果物で確かめること。**
 
 1. ジャンクションを貼る（フォルダ名は `plugin.json` の `id` に合わせる。
-   `vrcyoutube` にすると「フォルダ名と id が一致しません」の警告が出る）
+   `vrc_media_streamer` にすると「フォルダ名と id が一致しません」の警告が出る）
    ```
-   cmd /c mklink /J "E:\Projects\VRCBeacon\plugins\vrcyoutube-streamer" "E:\Projects\VRCYouTube\plugin"
+   cmd /c mklink /J "E:\Projects\VRCBeacon\plugins\vrc-media-streamer" "E:\Projects\VRCYouTube\plugin"
    ```
 2. VRCBeacon を起動 → ナビの「プラグイン」→ 管理タブでスイッチを入れる
 3. プラグインのタブが増えるので開く
@@ -299,7 +299,7 @@ if (typeof body !== 'undefined' && body !== null && typeof body !== 'string') {
 
 ## 6. VRCBeacon 側を変える必要が出る条件
 
-以下に当たったら、VRCYouTube 側で回避せず VRCBeacon 側へ戻すこと。
+以下に当たったら、VRC_Media_Streamer 側で回避せず VRCBeacon 側へ戻すこと。
 
 - バイナリの送受信が要る（上の 4-B、`/api/qrcode` を UI に出す等）
 - 応答が 4MB を超える、または 15 秒で終わらない
@@ -319,7 +319,7 @@ if (typeof body !== 'undefined' && body !== null && typeof body !== 'string') {
 |---|---|
 | VRCBeacon 受付口 `src-electron/plugins/` | 実装・コミット済み（`7430dc04`）。vitest 61 件 |
 | VRCBeacon 画面 `src/views/Beacon/BeaconPlugin*.vue` | 実装・コミット済み（`028877b5`）。vitest 9 件 |
-| VRCYouTube 橋渡し `plugin/ui/index.html` | **実装済み・未コミット**（`master` に 73 行の追加のみ、削除ゼロ） |
+| VRC_Media_Streamer 橋渡し `plugin/ui/index.html` | **実装済み・未コミット**（`master` に 73 行の追加のみ、削除ゼロ） |
 
 橋渡しは 3 の雛形どおりで、加えて **`response` の `event.origin` 確認**と
 **ヘッダの正規化**（`Headers` インスタンス／配列／オブジェクトの 3 形態）が入っている。
@@ -327,7 +327,7 @@ if (typeof body !== 'undefined' && body !== null && typeof body !== 'string') {
 ## 通し確認の結果（実物の exe まで）
 
 プラグイン側の橋渡しと VRCBeacon 側の `proxyRequest` を繋ぎ、実物の
-`VRCYouTubeStreamer.exe` を起動して叩いた。
+`VRC_Media_Streamer.exe` を起動して叩いた。
 
 ```
 GET  /api/status          -> ok=true 200
@@ -448,7 +448,7 @@ const replyTarget = beacon.origin && beacon.origin !== 'null' ? beacon.origin : 
 上限 20MB）。**残りはこの repo** —— `handleImageFiles()` の `FormData` を multipart の
 バイト列に組み替え、雛形の除外条件を「バイト列も通す」形にする。**C は採らない。**
 
-## 3. 【未決定】VRCYouTube 側のコミット方針
+## 3. 【未決定】VRC_Media_Streamer 側のコミット方針
 
 `master` に直接コミットするか、ブランチを切るか。未決。
 
@@ -462,7 +462,7 @@ IIFE を直接動かした）。**まだ一度も本物のアプリで動かし�
 - `postMessage` の実際の往復（上の確認は偽の `window`/`parent` で行った）
 - `before-quit` の実発火（子プロセスが本当に片付くか）
 
-手順は 5 のとおり。**フォルダ名は `vrcyoutube-streamer`**（`plugin.json` の `id`）にすること。
+手順は 5 のとおり。**フォルダ名は `vrc-media-streamer`**（`plugin.json` の `id`）にすること。
 
 ## 5. 【任意】`plugin/README.md` への 1 行
 

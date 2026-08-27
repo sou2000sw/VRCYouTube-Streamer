@@ -2036,7 +2036,7 @@ class StreamerCore:
                 except Exception:
                     font_title = font_sub = font_url = font_info = ImageFont.load_default()
 
-                draw.text((width // 2, 45), "VRCYouTube Live Streamer", fill=(56, 189, 248, 255), anchor="mm", font=font_title)
+                draw.text((width // 2, 45), "VRC_Media_Streamer", fill=(56, 189, 248, 255), anchor="mm", font=font_title)
                 draw.text((width // 2, 140), "Scan QR code or visit URL below to request YouTube videos!", fill=(226, 232, 240, 255), anchor="mm", font=font_sub)
 
                 qr = qrcode.QRCode(
@@ -2297,7 +2297,7 @@ class StreamerCore:
             draw = ImageDraw.Draw(img)
             font_title = get_pil_font(52, bold=True)
             font_sub = get_pil_font(30, bold=False)
-            draw.text((960, 480), "VRCYouTube Live Streamer", fill="#38BDF8", anchor="mm", font=font_title)
+            draw.text((960, 480), "VRC_Media_Streamer", fill="#38BDF8", anchor="mm", font=font_title)
             draw.text((960, 560), "Standby — Queue is Empty", fill="#94A3B8", anchor="mm", font=font_sub)
             # overlay_qr_enabled なら QR オーバーレイを合成
             if bool(self.config.get("overlay_qr_enabled", False)):
@@ -2350,7 +2350,7 @@ class StreamerCore:
         font_card_url = get_pil_font(16, bold=False)
         font_footer = get_pil_font(22, bold=False)
 
-        draw.text((width // 2, 45), "VRCYouTube Live Streamer", fill="#38BDF8", anchor="mm", font=font_title)
+        draw.text((width // 2, 45), "VRC_Media_Streamer", fill="#38BDF8", anchor="mm", font=font_title)
 
         if mode == "fullscreen":
             # ==================== フル画面モード (中央大画面QR) ====================

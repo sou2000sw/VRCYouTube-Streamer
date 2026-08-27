@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VRCYouTube Streamer & Web Remote</title>
+    <title>VRC_Media_Streamer & Web Remote</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Remix Icon CDN -->
@@ -75,7 +75,7 @@
         <div class="flex items-center gap-2 sm:gap-3 min-w-0">
             <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
                 <i class="ri-youtube-fill text-red-500 text-xl"></i>
-                <span class="font-bold text-sm tracking-wide text-zinc-100 hidden xs:inline">VRCYouTube</span>
+                <span class="font-bold text-sm tracking-wide text-zinc-100 hidden xs:inline">VRC_Media_Streamer</span>
                 <span class="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700 font-mono">v2.7.0</span>
             </div>
             <!-- Server Status Indicator -->
@@ -94,19 +94,19 @@
             </div>
 
             <!-- Launch Button (When Offline & Local) -->
-            <button id="btnHeaderLaunch" onclick="handleLaunchServer()" class="hidden flex items-center gap-1.5 px-2.5 sm:px-3 py-1 bg-primary text-zinc-950 hover:bg-primary-hover font-semibold rounded text-xs transition shadow-sm" title="VRCYouTube サーバーを起動します">
+            <button id="btnHeaderLaunch" onclick="handleLaunchServer()" class="hidden flex items-center gap-1.5 px-2.5 sm:px-3 py-1 bg-primary text-zinc-950 hover:bg-primary-hover font-semibold rounded text-xs transition shadow-sm" title="VRC_Media_Streamer サーバーを起動します">
                 <i class="ri-play-circle-fill text-sm"></i>
                 <span>起動</span>
             </button>
 
             <!-- Stop Button (When Online & Local) -->
-            <button id="btnHeaderStop" onclick="handleStopServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition" title="VRCYouTube サーバープロセスを終了します">
+            <button id="btnHeaderStop" onclick="handleStopServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition" title="VRC_Media_Streamer サーバープロセスを終了します">
                 <i class="ri-shut-down-line text-sm"></i>
                 <span class="hidden sm:inline">サーバー終了</span>
             </button>
 
             <!-- Restart Button (When Online & Local) -->
-            <button id="btnHeaderRestart" onclick="handleRestartServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="VRCYouTube サーバーを再起動します">
+            <button id="btnHeaderRestart" onclick="handleRestartServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="VRC_Media_Streamer サーバーを再起動します">
                 <i class="ri-refresh-line text-sm"></i>
                 <span class="hidden sm:inline">再起動</span>
             </button>
@@ -164,15 +164,15 @@
                     <i class="ri-server-line"></i>
                 </div>
                 <div class="flex flex-col gap-1">
-                    <h2 id="offlineTitle" class="text-base font-semibold text-zinc-100">VRCYouTube サーバーが停止しています</h2>
+                    <h2 id="offlineTitle" class="text-base font-semibold text-zinc-100">VRC_Media_Streamer サーバーが停止しています</h2>
                     <p id="offlineDesc" class="text-xs text-zinc-400 max-w-md">
-                        動画の再生やHLSストリーミングを開始するには、バックエンドの VRCYouTube サーバーを起動してください。
+                        動画の再生やHLSストリーミングを開始するには、バックエンドの VRC_Media_Streamer サーバーを起動してください。
                     </p>
                 </div>
                 <div class="flex items-center gap-3 mt-2" id="offlineActionButtons">
                     <button id="btnOfflineLaunch" onclick="handleLaunchServer()" class="flex items-center gap-2 px-5 py-2.5 bg-primary hover:bg-primary-hover text-zinc-950 font-bold rounded text-xs transition shadow-md">
                         <i class="ri-play-fill text-base"></i>
-                        <span>VRCYouTube を起動する</span>
+                        <span>VRC_Media_Streamer を起動する</span>
                     </button>
                     <button onclick="checkServerHealth(true)" class="flex items-center gap-1.5 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition">
                         <i class="ri-refresh-line"></i>
@@ -180,7 +180,7 @@
                     </button>
                 </div>
                 <div class="mt-2 text-[11px] text-zinc-500" id="offlineManualHint">
-                    手動起動: <code class="bg-zinc-900 px-1.5 py-0.5 rounded text-zinc-400">VRCYouTubeStreamer.exe</code>
+                    手動起動: <code class="bg-zinc-900 px-1.5 py-0.5 rounded text-zinc-400">VRC_Media_Streamer.exe</code>
                 </div>
             </div>
 
@@ -640,13 +640,13 @@
             if (typeof location !== 'undefined' && (location.protocol === 'http:' || location.protocol === 'https:')) {
                 return location.origin;
             }
-            return localStorage.getItem('vrcyoutube_api_base') || 'http://127.0.0.1:8000';
+            return localStorage.getItem('vrc_media_streamer_api_base') || 'http://127.0.0.1:8000';
         })();
 
         // Web Password / PIN Auth helpers
         function getStoredWebPassword() {
             try {
-                return sessionStorage.getItem('vrcyoutube_web_password') || '';
+                return sessionStorage.getItem('vrc_media_streamer_web_password') || '';
             } catch (e) {
                 return '';
             }
@@ -655,9 +655,9 @@
         function setStoredWebPassword(pw) {
             try {
                 if (pw) {
-                    sessionStorage.setItem('vrcyoutube_web_password', pw);
+                    sessionStorage.setItem('vrc_media_streamer_web_password', pw);
                 } else {
-                    sessionStorage.removeItem('vrcyoutube_web_password');
+                    sessionStorage.removeItem('vrc_media_streamer_web_password');
                 }
             } catch (e) {}
         }
@@ -1061,7 +1061,7 @@
                 val = 'http://' + val;
             }
             apiBase = val;
-            localStorage.setItem('vrcyoutube_api_base', apiBase);
+            localStorage.setItem('vrc_media_streamer_api_base', apiBase);
             updatePortLabel();
             showToast('API接続先を保存しました', 'success');
             checkServerHealth(true);
@@ -1634,13 +1634,13 @@
             const offlineManualHint = document.getElementById('offlineManualHint');
 
             if (offlineTitle) {
-                offlineTitle.innerText = isLocal ? 'VRCYouTube サーバーが停止しています' : '配信サーバーに接続できません';
+                offlineTitle.innerText = isLocal ? 'VRC_Media_Streamer サーバーが停止しています' : '配信サーバーに接続できません';
             }
             if (offlineDesc) {
                 offlineDesc.innerText = isLocal
                     ? (ipcAvailable
-                        ? '動画の再生やHLSストリーミングを開始するには、バックエンドの VRCYouTube サーバーを起動してください。'
-                        : '動画の再生やHLSストリーミングを開始するには、ホストPCで VRCYouTubeStreamer.exe を起動してください。')
+                        ? '動画の再生やHLSストリーミングを開始するには、バックエンドの VRC_Media_Streamer サーバーを起動してください。'
+                        : '動画の再生やHLSストリーミングを開始するには、ホストPCで VRC_Media_Streamer.exe を起動してください。')
                     : 'サーバーが停止しているか、ホストとの接続が切断されています。ホストが配信を再開するまでお待ちください。';
             }
             if (btnOfflineLaunch) {
@@ -2217,7 +2217,7 @@
             // 1. Check if running inside VRCBeacon / Electron with IPC
             if (window.electron && window.electron.ipcRenderer) {
                 try {
-                    await window.electron.ipcRenderer.invoke('plugin:launch', 'vrcyoutube-streamer');
+                    await window.electron.ipcRenderer.invoke('plugin:launch', 'vrc-media-streamer');
                     setTimeout(() => checkServerHealth(true), 2000);
                     return;
                 } catch (e) {
@@ -2231,7 +2231,7 @@
         }
 
         async function handleStopServer() {
-            if (!confirm('VRCYouTube サーバープロセスを完全に終了しますか？\n（配信およびWebアクセスが停止します）')) return;
+            if (!confirm('VRC_Media_Streamer サーバープロセスを完全に終了しますか？\n（配信およびWebアクセスが停止します）')) return;
             try {
                 await fetch(`${apiBase}/api/shutdown`, { method: 'POST' });
                 showToast('サーバー終了シグナルを送信しました', 'info');
@@ -2243,7 +2243,7 @@
         }
 
         async function handleRestartServer() {
-            if (!confirm('VRCYouTube サーバーを再起動しますか？\n（一時的に配信が中断されます）')) return;
+            if (!confirm('VRC_Media_Streamer サーバーを再起動しますか？\n（一時的に配信が中断されます）')) return;
             showToast('再起動シグナル送信中...', 'info');
             try {
                 await fetch(`${apiBase}/api/shutdown`, { method: 'POST' });

@@ -41,7 +41,7 @@ class PlaylistHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>VRCYouTube Test Playlist Server</title>
+    <title>VRC_Media_Streamer Test Playlist Server</title>
     <style>
         body {{
             background-color: #121212;
@@ -104,7 +104,7 @@ class PlaylistHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
 </head>
 <body>
     <div class="container">
-        <h1>VRCYouTube Test Playlist Server</h1>
+        <h1>VRC_Media_Streamer Test Playlist Server</h1>
         <p>以下のURLをコピーしてVRChat等の動画プレイヤーに設定してください：</p>
         <ul>
             <li>
@@ -155,7 +155,7 @@ class PlaylistHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
                 # ProTV JSON形式の場合は application/json とするが、テキストダウンロードなら text/plain の方が安全な場合もある
                 content_type = "application/json; charset=utf-8"
                 protv_data = {
-                    "header": "VRCYouTube Test Playlist",
+                    "header": "VRC_Media_Streamer Test Playlist",
                     "items": [{"title": f"Video {i+1}", "url": url} for i, url in enumerate(playlist_urls)]
                 }
                 import json

@@ -63,7 +63,7 @@ UI_MISSING_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VRCYouTube Streamer - UI アセット未検出</title>
+<title>VRC_Media_Streamer - UI アセット未検出</title>
 <style>
   :root { color-scheme: dark; }
   body { margin:0; padding:2rem 1.25rem; background:#121214; color:#e4e4e7;
@@ -95,7 +95,7 @@ UI_MISSING_TEMPLATE = """<!DOCTYPE html>
   <div class="card">
     <strong>復旧手順</strong>
     <ol>
-      <li><code>ui/index.html</code> を <code>VRCYouTubeStreamer.exe</code> と同じフォルダの
+      <li><code>ui/index.html</code> を <code>VRC_Media_Streamer.exe</code> と同じフォルダの
           <code>ui/</code> に配置する（フォルダごと）。</li>
       <li>ソースからビルドした場合は
           <code>python build_exe.py</code> で再ビルドする（UI は EXE に同梱されます）。</li>

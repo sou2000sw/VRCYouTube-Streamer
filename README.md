@@ -1,4 +1,4 @@
-# VRCYouTube Streamer
+# VRC_Media_Streamer
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 **面倒なサーバー構築やエンコード知識は不要。**
@@ -9,7 +9,7 @@
 
 ## 【ツール概要】
 
-『**VRCYouTube Streamer**』は、YouTubeの動画・プレイリストを自分専用のHLSライブストリーム（`.m3u8`）に変換し、VRChat内の各種動画プレイヤー（iwaSync3, YPlay, ProTV, YamaPlayer 等）でシームレスに再生するためのWindowsアプリケーションです。
+『**VRC_Media_Streamer**』は、YouTubeの動画・プレイリストを自分専用のHLSライブストリーム（`.m3u8`）に変換し、VRChat内の各種動画プレイヤー（iwaSync3, YPlay, ProTV, YamaPlayer 等）でシームレスに再生するためのWindowsアプリケーションです。
 
 もともと作者が自分で使うために個人的に作成したものです。
 AIバイブコーディング製のため手厚いサポートはできませんが、「動いたらラッキー」くらいの気持ちで気軽にご利用ください。
@@ -73,7 +73,7 @@ AIバイブコーディング製のため手厚いサポートはできません
    > [!WARNING]
    > `C:\Program Files` や `C:\Program Files (x86)` 直下では権限の都合上、正常に動作しません。必ずユーザー権限で書き込み可能なフォルダに配置してください。
 
-2. **「`VRCYouTubeStreamer.exe`」（または同梱のバッチファイル）を起動する。**
+2. **「`VRC_Media_Streamer.exe`」（または同梱のバッチファイル）を起動する。**
 
 3. **VRChat側の設定を確認する**
    VRChat内のメニューで「信頼されていないURLを許可 (Allow Untrusted URLs)」を有効にしてください。
@@ -86,11 +86,11 @@ AIバイブコーディング製のため手厚いサポートはできません
 
 ## 📦 内容物
 
-- `VRCYouTubeStreamer.exe`（本体アプリケーション）
+- `VRC_Media_Streamer.exe`（本体アプリケーション）
 - `ffmpeg.exe`（動画変換エンジン／同梱必須・同じフォルダに置いてください）
-- `VRCYouTubeStreamer (Normal).bat`（通常起動バッチ）
-- `VRCYouTubeStreamer (Local Test).bat`（ローカル検証用バッチ）
-- `VRCYouTubeStreamer (Headless Test).bat`（ヘッドレスAPIサーバー用バッチ）
+- `VRC_Media_Streamer (Normal).bat`（通常起動バッチ）
+- `VRC_Media_Streamer (Local Test).bat`（ローカル検証用バッチ）
+- `VRC_Media_Streamer (Headless Test).bat`（ヘッドレスAPIサーバー用バッチ）
 - `README.txt` / `README.md`（説明書）
 - `FFmpeg_LICENSE.txt` / `THIRD_PARTY_LICENSES.txt`（ライセンス表記）
 
@@ -109,14 +109,14 @@ AIバイブコーディング製のため手厚いサポートはできません
 
 ### 1. GUIモードで起動
 ```bash
-VRCYouTubeStreamer.exe
+VRC_Media_Streamer.exe
 # または開発時:
 python gui_streamer.py
 ```
 
 ### 2. ヘッドレス / APIサーバーモードで起動
 ```bash
-VRCYouTubeStreamer.exe --headless --port 8080
+VRC_Media_Streamer.exe --headless --port 8080
 # または開発時:
 python gui_streamer.py --headless --port 8080
 ```
