@@ -1386,7 +1386,15 @@
                     currentStatusData = data;
                     isPasswordLocked = false;
                     hidePasswordModal();
-                    updateUiOnline(data);
+                    // 描画中の例外を外側の catch に落とさない。
+                    // 落とすと「サーバー停止」と表示されてしまい、実際は通信できているのに
+                    // 原因が描画バグだと気づけなくなる（実際 renderQueue の ReferenceError が
+                    // オフライン表示として一日隠れていた）。
+                    try {
+                        updateUiOnline(data);
+                    } catch (renderErr) {
+                        console.error('[UI] Failed to render status:', renderErr);
+                    }
                 } else {
                     updateUiOffline();
                 }
@@ -1745,6 +1753,7 @@
 
             container.innerHTML = entries.map(({ item, realIndex }) => {
                 const index = realIndex;
+                const duration = formatDuration(item.duration);
                 const isLocalVideo = Boolean(item.is_local || item.type === 'local_video');
                 const typeLabel = item.is_radio ? 'RADIO' : (isLocalVideo ? 'LOCAL' : ((item.is_image || item.type === 'image') ? 'PHOTO' : 'VIDEO'));
                 const typeBadgeColor = item.is_radio ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : (isLocalVideo ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : ((item.is_image || item.type === 'image') ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-sky-500/10 text-sky-400 border-sky-500/20'));
