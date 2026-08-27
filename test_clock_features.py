@@ -96,12 +96,136 @@ def test_config_dist():
 
     print("PASS: config.dist.json contains clock overlay settings.")
 
+def test_clock_filter_helpers():
+    print("\n--- 6. Testing Clock Filter Helpers & Position Coordinates ---")
+    from streamer_core import get_drawtext_font_path, get_live_clock_drawtext_filter, get_clock_filter_for_config
+
+    # Font path
+    font_path = get_drawtext_font_path(bold=True)
+    assert font_path, "Font path must not be empty"
+
+    # Default filter
+    filter_str = get_live_clock_drawtext_filter()
+    assert "drawtext=" in filter_str, "Must contain drawtext="
+    assert "LIVE" in filter_str, "Must contain LIVE indicator"
+    assert "localtime" in filter_str, "Must contain localtime macro"
+    assert "JST" in filter_str, "Must contain JST label"
+    assert "x=w-tw-45:y=26" in filter_str, "Default position must be top-right"
+
+    # Positions
+    f_tr = get_clock_filter_for_config({"overlay_clock_position": "top-right"})
+    assert "x=w-tw-45:y=26" in f_tr
+
+    f_tl = get_clock_filter_for_config({"overlay_clock_position": "top-left"})
+    assert "x=45:y=26" in f_tl
+
+    f_br = get_clock_filter_for_config({"overlay_clock_position": "bottom-right"})
+    assert "x=w-tw-45:y=h-th-26" in f_br
+
+    f_bl = get_clock_filter_for_config({"overlay_clock_position": "bottom-left"})
+    assert "x=45:y=h-th-26" in f_bl
+
+    print("PASS: Clock filter helpers and position coordinates verified.")
+
+def test_filter_complex_clock_combinations():
+    print("\n--- 7. Testing Filter Complex Builder Clock Combinations ---")
+    core = StreamerCore(override_port=8998, override_enable_tunnel=False)
+    try:
+        clock_filter = "drawtext=test_clock"
+
+        # 1. QR + Clock
+        fc_both = core._build_video_filter_complex(has_qr=True, has_clock=True, qr_idx=2, qr_mode="bottom-right", clock_filter=clock_filter)
+        assert "[v_qr];[v_qr]drawtext=test_clock[vout]" in fc_both
+
+        # 2. QR only (No Clock)
+        fc_qr_only = core._build_video_filter_complex(has_qr=True, has_clock=False, qr_idx=2, qr_mode="bottom-right", clock_filter=clock_filter)
+        assert "[vout]" in fc_qr_only
+        assert "drawtext" not in fc_qr_only
+
+        # 3. Clock only (No QR)
+        fc_clock_only = core._build_video_filter_complex(has_qr=False, has_clock=True, qr_idx=0, qr_mode="bottom-right", clock_filter=clock_filter)
+        assert fc_clock_only == "[0:v]drawtext=test_clock[vout]"
+
+        # 4. None
+        fc_none = core._build_video_filter_complex(has_qr=False, has_clock=False, qr_idx=0, qr_mode="bottom-right", clock_filter=clock_filter)
+        assert fc_none is None
+    finally:
+        core.shutdown()
+
+    print("PASS: Filter complex builder clock combinations verified.")
+
+def test_pipeline_clock_flag_respect():
+    print("\n--- 8. Testing Pipeline Flag Respect (play_radio / play_image / play_standby_loop) ---")
+    from unittest.mock import patch
+    core = StreamerCore(override_port=8998, override_enable_tunnel=False)
+    try:
+        # Mock ensure_hls_receiver to True
+        core.ensure_hls_receiver = lambda: True
+
+        import tempfile
+        from PIL import Image
+        tmp_img = os.path.join(tempfile.gettempdir(), "test_clock_dummy.png")
+        Image.new("RGB", (100, 100)).save(tmp_img)
+
+        # 1. Test play_image with clock OFF
+        core.config["overlay_clock_enabled"] = False
+        core.config["overlay_clock_video"] = False
+        captured_cmds = []
+
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.side_effect = lambda cmd, *args, **kwargs: captured_cmds.append(cmd)
+
+            core.play_image({"path": tmp_img, "duration": 5})
+            assert len(captured_cmds) > 0
+            img_cmd_off = captured_cmds[-1]
+            assert "-vf" not in img_cmd_off, "play_image with clock OFF must NOT contain -vf"
+
+            # Test play_image with clock ON
+            core.config["overlay_clock_enabled"] = True
+            core.play_image({"path": tmp_img, "duration": 5})
+            img_cmd_on = captured_cmds[-1]
+            assert "-vf" in img_cmd_on, "play_image with clock ON must contain -vf"
+            assert any("drawtext=" in arg for arg in img_cmd_on), "play_image with clock ON must contain drawtext"
+
+        # 2. Test play_radio with clock OFF vs ON (without QR)
+        core.config["overlay_qr_enabled"] = False
+        core.get_audio_only_stream_urls = lambda url: ("http://example.com/audio.mp3", "Test Audio", 100, {}, {})
+        core.generate_radio_card_image = lambda meta, video_id: tmp_img
+
+        captured_radio_cmds = []
+        with patch("subprocess.Popen") as mock_popen:
+            mock_popen.side_effect = lambda cmd, *args, **kwargs: captured_radio_cmds.append(cmd)
+
+            core.config["overlay_clock_enabled"] = False
+            core.play_radio({"url": "https://www.youtube.com/watch?v=test12345", "video_id": "test12345", "title": "Test Audio"})
+            assert len(captured_radio_cmds) > 0
+            radio_cmd_off = captured_radio_cmds[-1]
+            assert "-vf" not in radio_cmd_off, "play_radio with clock OFF must NOT contain -vf"
+            assert "-filter_complex" not in radio_cmd_off, "play_radio with clock OFF & QR OFF must NOT contain -filter_complex"
+
+            core.config["overlay_clock_enabled"] = True
+            core.play_radio({"url": "https://www.youtube.com/watch?v=test12345", "video_id": "test12345", "title": "Test Audio"})
+            radio_cmd_on = captured_radio_cmds[-1]
+            assert "-vf" in radio_cmd_on, "play_radio with clock ON & QR OFF must contain -vf"
+            assert any("drawtext=" in arg for arg in radio_cmd_on), "play_radio with clock ON must contain drawtext"
+
+        if os.path.exists(tmp_img):
+            os.remove(tmp_img)
+    finally:
+        core.shutdown()
+
+    print("PASS: Pipeline clock flag respect verified successfully.")
+
 if __name__ == "__main__":
     test_html_sync()
     test_html_clock_elements()
     test_streamer_core_clock_config()
     test_gui_clock_switch()
     test_config_dist()
+    test_clock_filter_helpers()
+    test_filter_complex_clock_combinations()
+    test_pipeline_clock_flag_respect()
     print("\n==============================================")
     print("ALL CLOCK FEATURE UNIT TESTS PASSED!")
     print("==============================================")
+

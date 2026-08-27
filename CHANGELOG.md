@@ -1,6 +1,17 @@
 # 更新履歴 (CHANGELOG)
 
-## [2.7.0] - 2026-08-26
+## [2.7.0] - 2026-08-27
+
+### ⏰ 配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化 (Live Clock Overlay Fix)
+- **設定フラグ（`overlay_clock_enabled` / `overlay_clock_video`）の厳格チェック**:
+  - `play_radio`（ラジオ）、`play_image`（静止画/スライドショー）、`play_standby_loop`（待機画面）において、設定フラグが無効な場合は FFmpeg に一切の `-vf`（`drawtext`）を付与せずバイパスするよう修正。
+  - 時計無効時の不要なエンコード負荷およびフォント不備による FFmpeg クラッシュを完全に排除。
+- **位置設定共通ヘルパーの導入 (`get_clock_filter_for_config`)**:
+  - `overlay_clock_position`（`top-right`, `top-left`, `bottom-right`, `bottom-left`）から最適な描画座標を計算し、`drawtext` フィルタ文字列を生成する処理を一元化。
+- **フォント探索とエスケープの強化 (`get_drawtext_font_path`)**:
+  - Windows・Linux・macOSのフォント探索候補を拡充し、パス区切り文字およびコロンのエスケープ（`C\:/...`）を安全に処理。
+- **包括的な単体テスト整備**:
+  - `test_clock_features.py` に時計フィルタヘルパー、位置座標計算、`-filter_complex` ビルダー組み合わせ、および各配信パイプラインでのフラグチェック検証（計8項目）を追加。
 
 ### 📱 待機画面・通常動画・ラジオ全画面でのQRコード表示モード統括・修正 (QR Code Overlay & Standby Modes Fix)
 - **待機画面固定画像モード (`standby_mode: "image"`) での QR 合成対応**:

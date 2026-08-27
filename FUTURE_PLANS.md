@@ -18,7 +18,7 @@
 | **8** | 🧩 プラグイン | **Webリモコン＆VRCBeaconプラグインUIの完全統合＆UI正本配置整理** (Integrated UI) | v2.6.0 | 🟢 **実装完了 ✅** |
 | **9** | 📻 モード分離 | **再生モード3分岐 ＆ 写真・動画キュー完全分離 ＆ スライドショー安定化** (Playback Modes) | **v2.7.0** | 🟢 **実装完了 ✅** |
 | **10** | 📱 QRオーバーレイ | **待機画面・通常動画・ラジオ全画面でのQRコード表示モード統括・修正** (QR Overlay) | **v2.7.0** | 🟢 **実装完了 ✅** |
-| **11** | ⏰ 時計表示 | **配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化** (Live Clock Overlay) | 次期予定 | 🟡 **要対応 ⚠️** |
+| **11** | ⏰ 時計表示 | **配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化** (Live Clock Overlay) | **v2.7.0** | 🟢 **実装完了 ✅** |
 
 ---
 
@@ -315,31 +315,25 @@ WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge �
 
 ---
 
-## 11. ⏰ 配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化 (Live Clock Overlay & Sync Marker) 【要対応 ⚠️】
+## 11. ⏰ 配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化 (Live Clock Overlay & Sync Marker) 【実装完了 ✅】
 
 ### 概要
-配信映像（待機画面・通常動画・ラジオ画面）上にリアルタイムの配信時刻（JST）をオーバーレイ表示し、VRChat内プレイヤーとの遅延可視化とリシンク判断を可能にする機能において、FFmpeg の `drawtext` フィルタによるクラッシュやフォント不備を解消し、安全に動作させる修正。
+配信映像（通常動画・ラジオ画面・静止画/スライドショー・待機画面）において、配信実時刻（JST）をオーバーレイ表示し、VRChat内プレイヤーとの遅延可視化とリシンク判断を可能にする機能において、設定フラグを厳格に尊重するパイプライン制御を実装し、無効時の不要なフィルタ負荷やフォント起因のFFmpegエラーを解消。
 
-### 現状と原因
-1. **無条件適用によるクラッシュ**:
-   - `play_radio`、`play_image`、`play_standby_loop` において、`overlay_clock_enabled` の設定状態を確認せず無条件に `-vf drawtext=...` を付与している。
-2. **フォントパス / エスケープ不備による FFmpeg エラー**:
-   - Windows 環境のフォントパス（`C\:/Windows/Fonts/...`）のコロンやバックスラッシュのエスケープが環境によって FFmpeg に正しく解釈されず、`Font file not found` で配信プロセスが即死する。
-3. **FFmpeg の `libfreetype` 依存性**:
-   - 使用中の FFmpeg バイナリに `drawtext` フィルタが含まれていない場合、またはフォント取得に失敗した場合のフォールバックがなく配信不能に陥る。
+### 実装内容
+1. **設定フラグ（`overlay_clock_enabled` / `overlay_clock_video`）の厳格な尊重**:
+   - `play_radio`、`play_image`、`play_standby_loop` において、設定が無効な場合は FFmpeg に一切の `-vf`（`drawtext`）を付与せずバイパス。
+   - 設定が有効な場合のみ、リアルタイム時刻を描画する `drawtext` フィルタを適用。
+2. **位置設定共通ヘルパーの導入 (`get_clock_filter_for_config`)**:
+   - `overlay_clock_position`（`top-right`, `top-left`, `bottom-right`, `bottom-left`）に応じた座標計算と `drawtext` 文字列生成を共通関数化し、全配信パイプラインで一元管理。
+3. **フォントパス解決とエスケープの堅牢化 (`get_drawtext_font_path`)**:
+   - Windows・Linux・macOSのフォント探索候補を拡充し、パス区切り文字およびコロンのエスケープ（`C\:/...`）を安全に処理。
+4. **包括的な単体テスト整備**:
+   - `test_clock_features.py` に時計フィルタヘルパー、位置座標計算、`-filter_complex` ビルダー組み合わせ、および各配信パイプラインでのフラグチェック検証（計8項目）を追加し、全テストパスを確認。
 
-### 仕様・修正設計
-1. **設定フラグの厳格な尊重**:
-   - `overlay_clock_enabled`（または `overlay_clock_video`）が有効な場合のみ時計オーバーレイを適用し、無効時はフィルタをバイパス。
-2. **静止画（PIL合成）と動画（FFmpeg drawtext）の使い分け**:
-   - 待機画面・ラジオカード・静止画配信では、FFmpegの `drawtext` ではなく **Pillow (PIL) による画像生成時オーバーレイ** を優先し、FFmpeg依存と負荷を完全排除。
-   - 通常動画再生時のみ FFmpeg の `drawtext` フィルタを適用し、フォント解決とエスケープ（`libfreetype` 互換パス形式）を堅牢化。
-3. **エラー検出と安全なフォールバック**:
-   - FFmpeg 起動時に `drawtext` フィルタでエラーが発生した場合、時計なしの通常パイプラインへ自動フォールバックして配信停止を防止。
-
-### 変更対象予定ファイル
-- `streamer_core.py`（`get_live_clock_drawtext_filter`, `generate_standby_image`, `generate_radio_card_image`, 各配信メソッド）
-- `gui_streamer.py` / `ui/index.html`（時計オーバーレイ設定UI）
-- `tests/test_clock_features.py`
+### 変更ファイル
+- `streamer_core.py`（`get_clock_filter_for_config`, `get_drawtext_font_path`, `play_radio`, `play_image`, `play_standby_loop`, `play_video`）
+- `test_clock_features.py`（位置座標・ビルダー組み合わせ・パイプラインフラグ検証テスト拡充）
+- `FUTURE_PLANS.md`（タスク11完了記録）
 
 

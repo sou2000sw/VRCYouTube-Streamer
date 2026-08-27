@@ -161,6 +161,21 @@ def get_live_clock_drawtext_filter(x="w-tw-45", y="26", font_size=28, bold=True)
         f"x={x}:y={y}"
     )
 
+def get_clock_filter_for_config(config=None):
+    """configの設定（overlay_clock_position）に基づいて drawtext フィルタ文字列を生成"""
+    if config is None:
+        config = {}
+    clock_pos = config.get("overlay_clock_position", "top-right") if isinstance(config, dict) else "top-right"
+    if clock_pos == "top-left":
+        clock_x, clock_y = "45", "26"
+    elif clock_pos == "bottom-right":
+        clock_x, clock_y = "w-tw-45", "h-th-26"
+    elif clock_pos == "bottom-left":
+        clock_x, clock_y = "45", "h-th-26"
+    else:  # "top-right" default
+        clock_x, clock_y = "w-tw-45", "26"
+    return get_live_clock_drawtext_filter(x=clock_x, y=clock_y, font_size=28)
+
 def get_pil_font(size=24, bold=False):
     """PIL用の日本語対応フォントを安全に取得"""
     candidates = [
@@ -1245,7 +1260,9 @@ class StreamerCore:
         if seek_seconds > 0:
             input_opts.extend(["-ss", str(int(seek_seconds))])
 
-        clock_filter = get_live_clock_drawtext_filter()
+        clock_video = bool(self.config.get("overlay_clock_enabled", False) or self.config.get("overlay_clock_video", False))
+        has_clock = bool(clock_video)
+        clock_filter = get_clock_filter_for_config(self.config) if has_clock else None
 
         # QRオーバーレイ判定（スライドショーは get_image_for_playback で合成済みのため除外）
         is_slideshow = bool(slideshow_manifest_path and os.path.exists(slideshow_manifest_path))
@@ -1264,18 +1281,23 @@ class StreamerCore:
             cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])  # [2] = QRオーバーレイ
             qr_mode = self.config.get("overlay_qr_mode", "bottom-right")
             overlay_filter = self._build_video_filter_complex(
-                has_qr=True, has_clock=True, qr_idx=2, qr_mode=qr_mode, clock_filter=clock_filter
+                has_qr=True, has_clock=has_clock, qr_idx=2, qr_mode=qr_mode, clock_filter=clock_filter
             )
             cmd.extend([
                 "-filter_complex", overlay_filter,
                 "-map", "[vout]",
                 "-map", "1:a:0",
             ])
-        else:
+        elif has_clock and clock_filter:
             cmd.extend([
                 "-map", "0:v:0",
                 "-map", "1:a:0",
                 "-vf", clock_filter,
+            ])
+        else:
+            cmd.extend([
+                "-map", "0:v:0",
+                "-map", "1:a:0",
             ])
         cmd.extend([
             "-c:v", "libx264",
@@ -1388,17 +1410,8 @@ class StreamerCore:
         qr_overlay_file = self.generate_qr_overlay_image() if overlay_video else None
 
         clock_video = bool(self.config.get("overlay_clock_enabled", False) or self.config.get("overlay_clock_video", False))
-        clock_pos = self.config.get("overlay_clock_position", "top-right")
-
-        if clock_pos == "top-left":
-            clock_x, clock_y = "45", "26"
-        elif clock_pos == "bottom-right":
-            clock_x, clock_y = "w-tw-45", "h-th-26"
-        elif clock_pos == "bottom-left":
-            clock_x, clock_y = "45", "h-th-26"
-        else: # "top-right" default
-            clock_x, clock_y = "w-tw-45", "26"
-        clock_filter = get_live_clock_drawtext_filter(x=clock_x, y=clock_y, font_size=28)
+        has_clock = bool(clock_video)
+        clock_filter = get_clock_filter_for_config(self.config) if has_clock else None
 
         cmd = [get_ffmpeg_cmd(), "-fflags", "+genpts"]
         if self.accumulated_pts > 0:
@@ -1681,7 +1694,9 @@ class StreamerCore:
             self.status_detail = "FFmpeg Error"
             return None
 
-        clock_filter = get_live_clock_drawtext_filter()
+        clock_video = bool(self.config.get("overlay_clock_enabled", False) or self.config.get("overlay_clock_video", False))
+        has_clock = bool(clock_video)
+        clock_filter = get_clock_filter_for_config(self.config) if has_clock else None
 
         cmd = [
             get_ffmpeg_cmd(), "-re",
@@ -1691,7 +1706,10 @@ class StreamerCore:
         cmd.extend([
             "-loop", "1", "-i", os.path.abspath(playback_image_path),
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-            "-vf", clock_filter,
+        ])
+        if has_clock and clock_filter:
+            cmd.extend(["-vf", clock_filter])
+        cmd.extend([
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-tune", "zerolatency",
@@ -2254,7 +2272,9 @@ class StreamerCore:
                 time.sleep(1)
                 continue
 
-            clock_filter = get_live_clock_drawtext_filter()
+            clock_video = bool(self.config.get("overlay_clock_enabled", False) or self.config.get("overlay_clock_video", False))
+            has_clock = bool(clock_video)
+            clock_filter = get_clock_filter_for_config(self.config) if has_clock else None
 
             cmd = [
                 get_ffmpeg_cmd(), "-re",
@@ -2264,7 +2284,10 @@ class StreamerCore:
             cmd.extend([
                 "-loop", "1", "-i", os.path.abspath(STANDBY_IMAGE_PATH),
                 "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-                "-vf", clock_filter,
+            ])
+            if has_clock and clock_filter:
+                cmd.extend(["-vf", clock_filter])
+            cmd.extend([
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
                 "-tune", "zerolatency",
