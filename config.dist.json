@@ -26,5 +26,6 @@
   "standby_mode": "image",
   "standby_image_path": "",
   "web_password": "",
-  "max_video_upload_mb": 200
+  "max_video_upload_mb": 200,
+  "max_video_height": 1080
 }

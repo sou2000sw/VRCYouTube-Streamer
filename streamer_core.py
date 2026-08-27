@@ -104,7 +104,8 @@ DEFAULT_CONFIG = {
     "standby_mode": "image",
     "standby_image_path": "",
     "web_password": "",
-    "max_video_upload_mb": 200
+    "max_video_upload_mb": 200,
+    "max_video_height": 1080
 }
 
 def log_print(msg):
@@ -157,6 +158,22 @@ def get_drawtext_font_path(bold=True):
     font_path = font_path.replace("\\", "/")
     font_path_escaped = font_path.replace(":", "\\:")
     return font_path_escaped
+
+def get_keyframe_opts(segment_seconds):
+    """HLSセグメント長ちょうどにIDR(キーフレーム)を置くためのエンコードオプション。
+
+    HLSはセグメント単位で単独デコードできることが前提。先頭がIDRでないと
+    プレイヤーは次のIDRが来るまで映像を描けず、音声だけが進む——つまり
+    「音と映像がずれている」ように見える。実測では全14セグメントが非IDR開始で、
+    先頭からIDRまで平均0.9秒(最大1.4秒)の空白があった。
+
+    -g はフレーム数指定なので、入力fpsが変わるとGOP秒がずれる
+    (30fpsで -g 60 なら2.0秒。セグメント3秒とは6秒ごとにしか一致しない)。
+    時間式で強制すれば入力fpsに関係なく境界へIDRを置ける。
+    """
+    seg = max(1, int(segment_seconds or 3))
+    return ["-force_key_frames", f"expr:gte(t,n_forced*{seg})"]
+
 
 def get_live_clock_drawtext_filter(x="w-tw-45", y="26", font_size=28, bold=True):
     """リアルタイムLIVE時計オーバーレイ用 drawtext フィルタ文字列を生成"""
@@ -419,6 +436,7 @@ class StreamerCore:
 
         # 累積PTSとシームレス遷移管理
         self.accumulated_pts = 0.0
+        self.last_selected_height = 0
         self.last_stream_duration = 0.0
         self.prefetch_cache = {}
         self.prefetch_lock = threading.Lock()
@@ -734,7 +752,10 @@ class StreamerCore:
             "-f", "hls",
             "-hls_time", seg_time,
             "-hls_list_size", list_size,
-            "-hls_flags", "delete_segments+split_by_time+append_list",
+            # split_by_time は「キーフレームでなくても時間で切る」ため、
+            # GOP長とセグメント長が一致しない限り単独デコード不能なセグメントを量産する。
+            # 送信側で境界にIDRを強制した上で、ここではキーフレームでのみ分割させる。
+            "-hls_flags", "delete_segments+append_list",
             "-hls_segment_filename", os.path.join(HLS_DIR, "seg_%05d.ts"),
             os.path.join(HLS_DIR, "stream.m3u8"),
         ]
@@ -883,11 +904,33 @@ class StreamerCore:
             log_print(f"[Core] Failed to analyze URL: {e}")
             return []
 
+    def get_max_video_height(self):
+        """配信する映像の高さ上限(px)。0 以下なら無制限。"""
+        try:
+            return int(self.config.get("max_video_height", 1080))
+        except (TypeError, ValueError):
+            return 1080
+
+    def build_format_selector(self):
+        """yt-dlp の format 指定を組み立てる。
+
+        分離(DASH)形式を優先し、取れないときだけ結合形式へ落とす。
+        YouTube は結合形式を format 18 (640x360) しか残していないため、
+        ここへ落ちた時点で 360p 固定になる。落ちたことは呼び出し側でログに出す。
+        """
+        h = self.get_max_video_height()
+        cap = f"[height<={h}]" if h > 0 else ""
+        return (
+            f"bestvideo[vcodec^=avc1]{cap}+bestaudio[acodec^=mp4a]/"
+            f"bestvideo{cap}+bestaudio/"
+            f"best[vcodec^=avc1]{cap}/"
+            f"best{cap}/"
+            "best"
+        )
+
     def get_stream_urls(self, youtube_url):
         ydl_opts = self.get_base_ydl_opts()
-        ydl_opts.update({
-            "format": "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1]/bestvideo+bestaudio/best",
-        })
+        ydl_opts.update({"format": self.build_format_selector()})
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(youtube_url, download=False)
             video_url = audio_url = None
@@ -907,8 +950,34 @@ class StreamerCore:
                 audio_url = None
                 if info.get("http_headers"):
                     headers.update(info["http_headers"])
-            
+
+            # 実際に選ばれた解像度をログに出す。ここを黙らせていたため、
+            # 1080p を要求しているつもりで 360p を配信し続けていても気づけなかった。
+            self.last_selected_height = self._log_selected_format(info, audio_url)
+
             return video_url, audio_url, info.get("title", "Unknown"), info.get("duration", 0), headers
+
+    def _log_selected_format(self, info, audio_url):
+        """選択された形式の解像度をログ出力し、高さを返す。"""
+        rf = info.get("requested_formats") or []
+        if rf:
+            height = max((f.get("height") or 0) for f in rf)
+        else:
+            height = info.get("height") or 0
+        kind = "分離(DASH)" if audio_url else "結合"
+        want = self.get_max_video_height()
+        log_print(
+            f"[Core] Selected format: {info.get('format_id')} "
+            f"({info.get('width') or '?'}x{height or '?'}, {kind}) / 上限 {want}p"
+        )
+        if height and want > 0 and height < min(want, 720):
+            log_print(
+                f"[Core] 警告: 配信解像度が {height}p に留まりました。"
+                "YouTubeが高解像度(DASH)形式をトークン必須にしているためです。"
+                "exeと同じフォルダに cookies.txt (ログイン済みブラウザからエクスポート) "
+                "を置くと解放されることがあります。"
+            )
+        return height
 
     def get_audio_only_stream_urls(self, youtube_url):
         ydl_opts = self.get_base_ydl_opts()
@@ -1402,9 +1471,9 @@ class StreamerCore:
             "-profile:v", "baseline",
             "-level", "3.1",
             "-bf", "0",
-            "-g", "15",
-            "-keyint_min", "15",
             "-sc_threshold", "0",
+            # -r 2 で -g 15 は GOP 7.5秒。3秒セグメントと噛み合わないため時間式で強制する。
+            *get_keyframe_opts(self.config.get("hls_segment_time", 3)),
             "-pix_fmt", "yuv420p",
             "-r", "2",
             "-b:v", "200k",
@@ -1570,14 +1639,23 @@ class StreamerCore:
                 "-profile:v", "baseline",
                 "-level", "3.1",
                 "-pix_fmt", "yuv420p",
-                "-g", "60",
-                "-keyint_min", "60",
                 "-b:v", "2500k",
                 "-maxrate", "3000k",
                 "-bufsize", "2000k",
                 "-c:a", "aac", "-b:a", "128k",
                 "-af", "aresample=async=1",
                 "-shortest",
+            ])
+            # セグメント境界にIDRを置く（-g のフレーム数指定では入力fps次第でずれる）
+            cmd.extend(get_keyframe_opts(self.config.get("hls_segment_time", 3)))
+            # ラジオ経路と同じ多重化設定。これが無いと既定の muxdelay/muxpreload と
+            # max_interleave_delta(10秒) が効き、映像と音声の待ち合わせが崩れる。
+            cmd.extend([
+                "-fflags", "+nobuffer+flush_packets",
+                "-flush_packets", "1",
+                "-muxdelay", "0",
+                "-muxpreload", "0",
+                "-max_interleave_delta", "0",
                 "-f", "mpegts", "pipe:1"
             ])
         else:
@@ -1586,8 +1664,12 @@ class StreamerCore:
                 cmd.extend(["-map", "1:a:0"])
             else:
                 cmd.extend(["-map", "0:a:0?"])
+            # コピー経路ではIDR位置を制御できない（受信側がキーフレームで分割する）。
             cmd.extend(["-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                        "-af", "aresample=async=1", "-shortest", "-f", "mpegts", "pipe:1"])
+                        "-af", "aresample=async=1", "-shortest",
+                        "-fflags", "+nobuffer+flush_packets", "-flush_packets", "1",
+                        "-muxdelay", "0", "-muxpreload", "0", "-max_interleave_delta", "0",
+                        "-f", "mpegts", "pipe:1"])
 
         try:
             proc = subprocess.Popen(
