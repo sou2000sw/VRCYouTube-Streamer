@@ -216,6 +216,61 @@ def test_pipeline_clock_flag_respect():
 
     print("PASS: Pipeline clock flag respect verified successfully.")
 
+def test_drawtext_filter_actually_renders():
+    """FFmpegを実際に起動し、時計フィルタが本当に描画されるかを検証する回帰テスト。
+
+    文字列アサートだけでは、drawtext の展開エラー
+    （例: 「%{localtime} requires at most 1 arguments」）によって
+    実配信では何も描画されない、という不具合を検出できない。
+    そのため1フレームだけ実レンダリングし、「エラーが出ないこと」と
+    「実際にピクセルが変化すること」の両方を確認する。
+    """
+    print("")
+    print("--- 9. Testing Real FFmpeg drawtext Rendering (Regression) ---")
+    import shutil
+    import subprocess
+    import tempfile
+    from streamer_core import get_ffmpeg_cmd, get_clock_filter_for_config
+
+    ffmpeg = get_ffmpeg_cmd()
+    if not (os.path.isabs(ffmpeg) and os.path.exists(ffmpeg)) and not shutil.which(ffmpeg):
+        print("SKIP: ffmpeg not found.")
+        return
+
+    tmpdir = tempfile.mkdtemp(prefix="clock_render_")
+    try:
+        src = ["-f", "lavfi", "-i", "color=c=gray:size=640x200:rate=1"]
+
+        # (1) フィルタ無しのベースラインを描画
+        baseline = os.path.join(tmpdir, "baseline.png")
+        subprocess.run([ffmpeg, "-y"] + src + ["-frames:v", "1", "-update", "1", baseline],
+                       capture_output=True)
+        assert os.path.exists(baseline), "baseline render must succeed"
+        with open(baseline, "rb") as f:
+            baseline_bytes = f.read()
+
+        for pos in ("top-right", "top-left", "bottom-right", "bottom-left"):
+            clock_filter = get_clock_filter_for_config({"overlay_clock_position": pos})
+            out = os.path.join(tmpdir, "clock_%s.png" % pos)
+            proc = subprocess.run(
+                [ffmpeg, "-y"] + src + ["-frames:v", "1", "-update", "1", "-vf", clock_filter, out],
+                capture_output=True)
+            stderr = proc.stderr.decode("utf-8", errors="replace")
+
+            assert proc.returncode == 0, "ffmpeg must succeed (%s): %s" % (pos, stderr[-400:])
+            # drawtext の展開・解析エラーが1件も出ていないこと
+            for ng in ("requires at most", "Error parsing", "Invalid argument", "No such filter"):
+                assert ng not in stderr, "drawtext error (%s): %s" % (pos, ng)
+            assert os.path.exists(out), "clock render must produce output (%s)" % pos
+            # ベースラインと異なる = 実際にピクセルが描画されている
+            with open(out, "rb") as f:
+                rendered = f.read()
+            assert rendered != baseline_bytes, "clock overlay must actually draw pixels (%s)" % pos
+
+        print("PASS: drawtext clock overlay renders for all 4 positions.")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
 if __name__ == "__main__":
     test_html_sync()
     test_html_clock_elements()
@@ -225,6 +280,7 @@ if __name__ == "__main__":
     test_clock_filter_helpers()
     test_filter_complex_clock_combinations()
     test_pipeline_clock_flag_respect()
+    test_drawtext_filter_actually_renders()
     print("\n==============================================")
     print("ALL CLOCK FEATURE UNIT TESTS PASSED!")
     print("==============================================")
