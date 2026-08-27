@@ -163,7 +163,10 @@ def get_live_clock_drawtext_filter(x="w-tw-45", y="26", font_size=28, bold=True)
     font_path = get_drawtext_font_path(bold=bold)
     return (
         f"drawtext=fontfile='{font_path}':"
-        f"text='● LIVE %{{localtime\\:%H\\:%M\\:%S}} JST':"
+        # %T は strftime の %H:%M:%S 相当。時刻書式に「:」を直接書くと、
+        # フィルタグラフ解析でエスケープが外れて localtime に4引数が渡り、
+        # 「%{localtime} requires at most 1 arguments」で描画自体が消える。
+        f"text='● LIVE %{{localtime\\:%T}} JST':"
         f"fontsize={font_size}:fontcolor=white:"
         f"box=1:boxcolor=0x0F172A@0.82:boxborderw=8:"
         f"x={x}:y={y}"
