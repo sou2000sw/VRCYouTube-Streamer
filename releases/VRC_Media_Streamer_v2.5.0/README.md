@@ -1,4 +1,4 @@
-# VRCYouTube Streamer
+﻿# VRC_Media_Streamer
 
 YouTubeの動画・プレイリストをHLSストリーム（`.m3u8`）に変換し、Cloudflare Tunnel経由でVRChatワールド内動画プレイヤー（iwaSync3, YPlay, ProTV等）やブラウザから再生できるようにするストリーミングサーバーです。
 
@@ -41,14 +41,14 @@ GUI画面からの直感的な操作に加え、**外部アプリ（VRCBeacon等
 ```bash
 python gui_streamer.py
 # または配布EXE:
-VRCYouTubeStreamer.exe
+VRC_Media_Streamer.exe
 ```
 
 ### 2. ヘッドレス / APIサーバーモードで起動
 ```bash
 python gui_streamer.py --headless --port 8080
 # または配布EXE:
-VRCYouTubeStreamer.exe --headless --port 8080
+VRC_Media_Streamer.exe --headless --port 8080
 ```
 
 #### コマンドライン引数一覧
@@ -196,6 +196,6 @@ VRCYouTubeStreamer.exe --headless --port 8080
 * `streamer_core.py`: ストリーミングエンジン（キュー管理、`yt-dlp`、`ffmpeg`、`cloudflared`、設定管理）
 * `api_server.py`: マルチスレッドHTTP APIサーバー（HLS静的配信＋CORS JSON API）
 * `gui_streamer.py`: CLI引数解析 & CustomTkinter GUI（ドラッグ＆ドロップ、設定ダイアログ）
-* `build_exe.py`: PyInstallerによる単一バイナリ（`dist/VRCYouTubeStreamer.exe`）ビルドスクリプト
+* `build_exe.py`: PyInstallerによる単一バイナリ（`dist/VRC_Media_Streamer.exe`）ビルドスクリプト
 * `config.json`: 設定の永続化ファイル
 * `FUTURE_PLANS.md`: 将来の機能拡張案・バックログ（ラジオカード画面の自動生成モックアップ等）

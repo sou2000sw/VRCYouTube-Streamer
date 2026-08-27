@@ -38,7 +38,7 @@ VRCBeacon/
 ### 3. 開発時の連携（シンボリックリンク / ジャンクション）
 開発時はファイルをコピーせず、ジャンクションを作成することで変更を即座に共有できます（※フォルダ名は `plugin.json` の `id` である `vrc-media-streamer` に一致させてください）。
 ```powershell
-cmd /c mklink /J "E:\Projects\VRCBeacon\plugins\vrc-media-streamer" "E:\Projects\VRCYouTube\plugin"
+cmd /c mklink /J "E:\Projects\VRCBeacon\plugins\vrc-media-streamer" "E:\Projects\VRC_Media_Streamer\plugin"
 ```
 
 ## 📖 関連ドキュメント

@@ -1,4 +1,4 @@
-# VRCYouTube Streamer v2.6.0 リリース対応 引継ぎ
+# VRC_Media_Streamer v2.6.0 リリース対応 引継ぎ
 
 作成日: 2026-08-25
 対象ブランチ: `master`
@@ -51,13 +51,13 @@
 
 ### 1-4. 配布物
 
-`releases/VRCYouTubeStreamer_v2.6.0/` と2つのZIPは **(a)(b)(c) をすべて含む再ビルド版** です。
+`releases/VRC_Media_Streamer_v2.6.0/` と2つのZIPは **(a)(b)(c) をすべて含む再ビルド版** です。
 ビルド後スモークテスト (`verify_release`) は通過済み（`Served UI: 88239 chars, script tags balanced (4/4)`
 ／CORSヘッダ重複なし）。配布EXEを起動してのプレビュー実測も PASS（7章）。
 
 ```
-VRCYouTubeStreamer_v2.6.0.zip          : 10ファイル / 実行時生成物の混入なし
-vrcbeacon-plugin-vrcyoutube-v2.6.0.zip : 8ファイル  / 実行時生成物の混入なし
+VRC_Media_Streamer_v2.6.0.zip          : 10ファイル / 実行時生成物の混入なし
+vrcbeacon-plugin-vrc-media-streamer-v2.6.0.zip : 8ファイル  / 実行時生成物の混入なし
 config.json は config.dist.json と完全一致
 ```
 
@@ -204,7 +204,7 @@ P5 のテスト中、プレビュー再オープン直後に `seg_00177.ts` へ 
 python build_exe.py
 ```
 
-`releases/VRCYouTubeStreamer_v{version}/` と2つのZIPを生成し、最後に `verify_release()` が
+`releases/VRC_Media_Streamer_v{version}/` と2つのZIPを生成し、最後に `verify_release()` が
 実際にEXEを起動して `GET /` を検証します（UI正本との一致・`<script>`の開閉整合・`<body>`の存在・
 CORSヘッダ重複）。失敗するとビルドが異常終了します。
 
@@ -216,7 +216,7 @@ CORSヘッダ重複）。失敗するとビルドが異常終了します。
 起動直後の404窓を再現する必要があります。
 
 ```bash
-cd releases/VRCYouTubeStreamer_v2.6.0 && ./VRCYouTubeStreamer.exe --headless --no-tunnel --port 8996 --host 127.0.0.1
+cd releases/VRC_Media_Streamer_v2.6.0 && ./VRC_Media_Streamer.exe --headless --no-tunnel --port 8996 --host 127.0.0.1
 ```
 
 起動したら `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8996/stream.m3u8` が
@@ -356,7 +356,7 @@ python -m pytest test_security.py test_radio_unit.py -q
 - 画面中央に大きなQRコード、下部案内エリアに「LIVE時刻」と「リシンクTips」を配置。
 ```text
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           VRCYouTube Live Streamer                              │
+│                           VRC_Media_Streamer                              │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
 │          Scan QR code or visit URL below to request YouTube videos!             │

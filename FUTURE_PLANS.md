@@ -96,7 +96,7 @@ Webリモコン（スマホブラウザ等）に簡単なパスワード（数�
 YouTube側のプレイヤー仕様変更や暗号化シグネチャ変更（n-sig/JSチャレンジ/PO-Token等）に伴い、動画・音楽の解析・抽出ができなくなる問題を防止するため、`yt-dlp` 等の外部依存バイナリをアプリ本体の再インストールなしで自動的またはワンクリックで最新版へ更新できる機能。
 
 ### 背景と課題
-- **現状**: `yt_dlp` は PyInstaller によって `VRCYouTubeStreamer.exe` の内部に静的バンドルされている。
+- **現状**: `yt_dlp` は PyInstaller によって `VRC_Media_Streamer.exe` の内部に静的バンドルされている。
 - **課題**: YouTube側の仕様変更により再生不能になった場合、アプリ全体のリビルドおよび新バージョンの再配布・全ユーザーによる再ダウンロードが必要となり、ダウンタイムと保守負担が大きい。
 
 ### 仕様・実装設計
@@ -118,7 +118,7 @@ YouTube側のプレイヤー仕様変更や暗号化シグネチャ変更（n-si
    - `yt-dlp`: 頻繁な更新が必要なため自動/手動更新を実装。
    - `ffmpeg.exe`: 安定しており大容量（~80MB）なため、自動更新は行わず同梱版を固定利用。
    - `cloudflared.exe`: 安定しているため現状の管理を維持。
-   - `VRCYouTubeStreamer 本体`: GitHub Releases API を照会し、「最新バージョン vX.X.X が公開されています」の通知のみ表示。
+   - `VRC_Media_Streamer 本体`: GitHub Releases API を照会し、「最新バージョン vX.X.X が公開されています」の通知のみ表示。
 
 ### 変更対象予定ファイル
 - `streamer_core.py`（外部 `yt-dlp.exe` 呼び出し、JSONパース、`-U` 実行/更新マネージャー、エラー時のリカバリ処理）
@@ -188,7 +188,7 @@ YouTube側のプレイヤー仕様変更や暗号化シグネチャ変更（n-si
 
 ### 変更対象予定ファイル
 - `streamer_core.py`（クロスフェード用オーディオ合成3. **ビルドおよび起動スクリプト**:
-   - `build_exe.py` / `VRCYouTubeStreamer.spec`: 出力EXE名、ZIPアーカイブ名、バッチファイル内の文言および起動コマンド。
+   - `build_exe.py` / `VRC_Media_Streamer.spec`: 出力EXE名、ZIPアーカイブ名、バッチファイル内の文言および起動コマンド。
    - `Start_Normal.bat` / `Start_LocalTest.bat`: 表示ログや起動メッセージ。
 4. **プラグイン・連携部分**:
    - `vrcbeacon-plugin` 側のマニフェスト、UI、表示名の整合性確保。
@@ -198,7 +198,7 @@ YouTube側のプレイヤー仕様変更や暗号化シグネチャ変更（n-si
 - `gui_streamer.py`
 - `ui/index.html` / `plugin/ui/index.html`
 - `api_server.py`
-- `build_exe.py` / `VRCYouTubeStreamer.spec`
+- `build_exe.py` / `VRC_Media_Streamer.spec`
 - `Start_Normal.bat` / `Start_LocalTest.bat`
 - `FUTURE_PLANS.md`
 
@@ -366,8 +366,8 @@ WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge �
      - `btnHeaderRestart`（再起動）: VRCBeacon（IPC環境）かつ `isLocal` の場合のみ表示（通常ブラウザでは非表示）。
      - `btnHeaderLaunch`（起動）: VRCBeacon（IPC環境）かつ `isLocal` の場合のみ表示（通常ブラウザでは非表示）。
    - **オフラインバナー (`offlineBanner`)**:
-     - `btnOfflineLaunch`（VRCYouTube を起動する）: VRCBeacon（IPC環境）のみ表示。
-     - 通常ブラウザ（localhost）では「ホストPCで VRCYouTubeStreamer.exe を起動してください」という案内と「状態を再確認」ボタンのみを表示。
+     - `btnOfflineLaunch`（VRC_Media_Streamer を起動する）: VRCBeacon（IPC環境）のみ表示。
+     - 通常ブラウザ（localhost）では「ホストPCで VRC_Media_Streamer.exe を起動してください」という案内と「状態を再確認」ボタンのみを表示。
      - リモート（ゲスト）では「配信サーバーに接続できません / ホストの再開をお待ちください」案内のみを表示。
 
 ### 変更対象ファイル
@@ -463,7 +463,7 @@ WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge �
    - `ui/index.html` / `plugin/ui/index.html`: ブラウザタブタイトル（`<title>`）、Webリモコンヘッダーロゴ・名称。
    - `api_server.py`: UIアセット未検出フォールバック画面のタイトル・メッセージ。
 3. **ビルドおよび起動スクリプト**:
-   - `build_exe.py` / `VRCYouTubeStreamer.spec`: 出力EXE名、ZIPアーカイブ名、バッチファイル内の文言および起動コマンド。
+   - `build_exe.py` / `VRC_Media_Streamer.spec`: 出力EXE名、ZIPアーカイブ名、バッチファイル内の文言および起動コマンド。
    - `Start_Normal.bat` / `Start_LocalTest.bat`: 表示ログや起動メッセージ。
 4. **プラグイン・連携部分**:
    - `vrcbeacon-plugin` 側のマニフェスト、UI、表示名の整合性確保。
@@ -473,7 +473,7 @@ WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge �
 - `gui_streamer.py`
 - `ui/index.html` / `plugin/ui/index.html`
 - `api_server.py`
-- `build_exe.py` / `VRCYouTubeStreamer.spec`
+- `build_exe.py` / `VRC_Media_Streamer.spec`
 - `Start_Normal.bat` / `Start_LocalTest.bat`
 - `FUTURE_PLANS.md`
 

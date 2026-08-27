@@ -7,7 +7,7 @@
 > 契約が変わったら**両方を直すこと。片方だけ直さない。**
 > 実装の進捗や、この repo だけの判断は、こちら側に書き足してよい。
 
-**作業先はこの repo（`E:\Projects\VRCYouTube`）。VRCBeacon のコードは変えない。**
+**作業先はこの repo（`E:\Projects\VRC_Media_Streamer`）。VRCBeacon のコードは変えない。**
 VRCBeacon 側の受付口（`src-electron/plugins/`）と画面（`src/views/Beacon/BeaconPluginHost.vue`）は
 2026-08-25 に実装・コミット済み（`7430dc04` / `028877b5`）。
 受付口の仕様は `E:\Projects\VRCBeacon\Beacon\docs\08-plugin-loader-spec.md`。
@@ -284,7 +284,7 @@ if (typeof body !== 'undefined' && body !== null && typeof body !== 'string') {
 1. ジャンクションを貼る（フォルダ名は `plugin.json` の `id` に合わせる。
    `vrc_media_streamer` にすると「フォルダ名と id が一致しません」の警告が出る）
    ```
-   cmd /c mklink /J "E:\Projects\VRCBeacon\plugins\vrc-media-streamer" "E:\Projects\VRCYouTube\plugin"
+   cmd /c mklink /J "E:\Projects\VRCBeacon\plugins\vrc-media-streamer" "E:\Projects\VRC_Media_Streamer\plugin"
    ```
 2. VRCBeacon を起動 → ナビの「プラグイン」→ 管理タブでスイッチを入れる
 3. プラグインのタブが増えるので開く

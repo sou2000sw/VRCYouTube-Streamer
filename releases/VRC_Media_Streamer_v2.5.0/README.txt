@@ -1,4 +1,4 @@
-【概要】
+﻿【概要】
 本ソフトは、YouTubeの動画やプレイリストを自分専用のHLSライブストリームに変換し、VRChat内の各種ワールドプレイヤー（iwaSync3, YPlay, ProTV等）でシームレスに再生するためのツールです。
 通常のGUI操作に加え、外部アプリからHTTP JSON API経由で操作可能な「ヘッドレス（APIサーバー）モード」も搭載しています。
 
@@ -38,7 +38,7 @@
 ==================================================
 コマンドラインから以下のように起動することで、GUIを表示せずバックグラウンドのAPIサーバーとして動作します：
 
-  VRCYouTubeStreamer.exe --headless --port 8080
+  VRC_Media_Streamer.exe --headless --port 8080
 
 【主なAPIエンドポイント (JSON / CORS対応)】:
 - GET  /api/status   : ストリーマーの状態、URL、再生中動画、キュー一覧の取得

@@ -14,7 +14,7 @@
 もともと作者が自分で使うために個人的に作成したものです。
 AIバイブコーディング製のため手厚いサポートはできませんが、「動いたらラッキー」くらいの気持ちで気軽にご利用ください。
 
-- **ソースコード / GitHub**: [https://github.com/sou2000sw/VRCYouTube-Streamer](https://github.com/sou2000sw/VRCYouTube-Streamer)
+- **ソースコード / GitHub**: [https://github.com/sou2000sw/VRC_Media_Streamer](https://github.com/sou2000sw/VRC_Media_Streamer)
 
 ---
 
