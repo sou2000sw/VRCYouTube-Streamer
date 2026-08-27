@@ -146,7 +146,7 @@ def test_play_video_local_ffmpeg_cmd(core_instance, tmp_path):
         return proc
 
     with patch("subprocess.Popen", side_effect=mock_popen), \
-         patch.object(core, "ensure_hls_receiver", return_value=True), \
+         patch.object(core, "ensure_stream_sink", return_value=True), \
          patch.object(core, "get_stream_urls") as mock_ydl:
         core.play_video(item, seek_seconds=10)
 
@@ -190,7 +190,7 @@ def test_play_radio_local_ffmpeg_cmd(core_instance, tmp_path):
         return proc
 
     with patch("subprocess.Popen", side_effect=mock_popen), \
-         patch.object(core, "ensure_hls_receiver", return_value=True), \
+         patch.object(core, "ensure_stream_sink", return_value=True), \
          patch.object(core, "get_audio_only_stream_urls") as mock_ydl:
         core.play_radio(item)
         mock_ydl.assert_not_called()

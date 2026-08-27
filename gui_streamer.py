@@ -116,6 +116,94 @@ class SettingsWindow(ctk.CTkToplevel):
             self.switch_photo_advance.select()
         self.switch_photo_advance.pack(anchor="w", padx=15, pady=(2, 6))
 
+        # 6.4 配信先 (Destination) 設定
+        self.lbl_dest_section = ctk.CTkLabel(form_frame, text="📡 Destination (配信先/ストリーミング出力先):", font=ctk.CTkFont(weight="bold"), anchor="w")
+        self.lbl_dest_section.pack(fill="x", padx=15, pady=(8, 2))
+
+        self.lbl_out_mode = ctk.CTkLabel(form_frame, text="配信先モード (output_mode):", anchor="w")
+        self.lbl_out_mode.pack(fill="x", padx=15, pady=(2, 0))
+
+        curr_out_mode = cfg.get("output_mode", "hls")
+        if curr_out_mode == "topaz":
+            out_mode_val = "TopazChat (低遅延/VRChat向け)"
+        elif curr_out_mode == "generic_rtmp":
+            out_mode_val = "Generic RTMP (上級者向け)"
+        else:
+            out_mode_val = "Local HLS (既定/外部サービス不要)"
+
+        self.opt_output_mode = ctk.CTkOptionMenu(
+            form_frame,
+            values=["Local HLS (既定/外部サービス不要)", "TopazChat (低遅延/VRChat向け)", "Generic RTMP (上級者向け)"]
+        )
+        self.opt_output_mode.set(out_mode_val)
+        self.opt_output_mode.pack(fill="x", padx=15, pady=(2, 6))
+
+        # TopazChat Stream Key & Generate Button
+        self.lbl_topaz_key = ctk.CTkLabel(form_frame, text="🔑 TopazChat Stream Key:", anchor="w")
+        self.lbl_topaz_key.pack(fill="x", padx=15, pady=(2, 0))
+
+        topaz_key_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        topaz_key_frame.pack(fill="x", padx=15, pady=(2, 4))
+
+        self.entry_topaz_key = ctk.CTkEntry(topaz_key_frame, show="*")
+        if cfg.get("topaz_stream_key"):
+            self.entry_topaz_key.insert(0, str(cfg.get("topaz_stream_key", "")))
+        self.entry_topaz_key.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_generate_key = ctk.CTkButton(topaz_key_frame, text="キー新規生成", width=100, command=self.generate_topaz_key_gui)
+        self.btn_generate_key.pack(side="right")
+
+        # TopazChat Legal Notices
+        topaz_notice_text = (
+            "※ 本ソフトはTopazChatの公式ツールではありません。\n"
+            "※ TopazChatは個人運営の無償サービスです。法人が運営主体のイベント・番組制作等での利用は、別途TopazChatへの問い合わせが必要です。\n"
+            "※ 映像は最大2Mbps・音声は最大320kbpsです。超過すると配信が強制切断されます。"
+        )
+        self.lbl_topaz_notice = ctk.CTkLabel(
+            form_frame,
+            text=topaz_notice_text,
+            font=ctk.CTkFont(size=10),
+            text_color="#94A3B8",
+            anchor="w",
+            wraplength=440,
+            justify="left"
+        )
+        self.lbl_topaz_notice.pack(fill="x", padx=15, pady=(0, 6))
+
+        # Generic RTMP URL & Key
+        self.lbl_generic_rtmp_url = ctk.CTkLabel(form_frame, text="🌐 Generic RTMP URL (投稿先URL):", anchor="w")
+        self.lbl_generic_rtmp_url.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_generic_rtmp_url = ctk.CTkEntry(form_frame, placeholder_text="rtmp://localhost/live")
+        if cfg.get("generic_rtmp_url"):
+            self.entry_generic_rtmp_url.insert(0, str(cfg.get("generic_rtmp_url", "")))
+        self.entry_generic_rtmp_url.pack(fill="x", padx=15, pady=(2, 6))
+
+        self.lbl_generic_rtmp_key = ctk.CTkLabel(form_frame, text="🔑 Generic RTMP Key (ストリームキー):", anchor="w")
+        self.lbl_generic_rtmp_key.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_generic_rtmp_key = ctk.CTkEntry(form_frame, show="*")
+        if cfg.get("generic_rtmp_key"):
+            self.entry_generic_rtmp_key.insert(0, str(cfg.get("generic_rtmp_key", "")))
+        self.entry_generic_rtmp_key.pack(fill="x", padx=15, pady=(2, 6))
+
+        # Bitrates (Video & Audio)
+        self.lbl_rtmp_vbitrate = ctk.CTkLabel(form_frame, text="📹 Video Bitrate [kbps] (映像ビットレート):", anchor="w")
+        self.lbl_rtmp_vbitrate.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_rtmp_vbitrate = ctk.CTkEntry(form_frame)
+        self.entry_rtmp_vbitrate.insert(0, str(cfg.get("rtmp_video_bitrate_kbps", 1500)))
+        self.entry_rtmp_vbitrate.pack(fill="x", padx=15, pady=(2, 6))
+
+        self.lbl_rtmp_abitrate = ctk.CTkLabel(form_frame, text="🔊 Audio Bitrate [kbps] (音声ビットレート):", anchor="w")
+        self.lbl_rtmp_abitrate.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_rtmp_abitrate = ctk.CTkEntry(form_frame)
+        self.entry_rtmp_abitrate.insert(0, str(cfg.get("rtmp_audio_bitrate_kbps", 192)))
+        self.entry_rtmp_abitrate.pack(fill="x", padx=15, pady=(2, 6))
+
+        # Fallback Switch
+        self.switch_rtmp_fallback = ctk.CTkSwitch(form_frame, text="🛡 Auto Fallback to HLS (失敗時にHLSへ自動退避)")
+        if cfg.get("rtmp_fallback_to_hls", True):
+            self.switch_rtmp_fallback.select()
+        self.switch_rtmp_fallback.pack(anchor="w", padx=15, pady=(2, 8))
+
         # 6.5. BGM / ラジオモード設定 (音声のみ + 静止画低帯域配信)
         self.switch_radio = ctk.CTkSwitch(form_frame, text="📻 Radio / BGM Mode (YouTube音声のみ+静止画・超低帯域配信)")
         if cfg.get("radio_mode", False):
@@ -377,6 +465,15 @@ class SettingsWindow(ctk.CTkToplevel):
             self.api_toggle_btn.configure(text="▼ API 仕様・引数リファレンス (表示 / 折りたたみ)")
             self.is_api_ref_open = True
 
+    def generate_topaz_key_gui(self):
+        try:
+            new_key = self.streamer_core.generate_stream_key()
+            if new_key:
+                self.entry_topaz_key.delete(0, "end")
+                self.entry_topaz_key.insert(0, str(new_key))
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to generate stream key: {e}")
+
     def save_settings(self):
         try:
             port = int(self.entry_port.get().strip())
@@ -397,6 +494,32 @@ class SettingsWindow(ctk.CTkToplevel):
                 radio_bg = "standby"
             else:
                 radio_bg = "card"
+
+            selected_out_mode = self.opt_output_mode.get()
+            if "TopazChat" in selected_out_mode:
+                output_mode = "topaz"
+            elif "Generic RTMP" in selected_out_mode:
+                output_mode = "generic_rtmp"
+            else:
+                output_mode = "hls"
+
+            try:
+                rtmp_vbitrate = int(self.entry_rtmp_vbitrate.get().strip())
+            except Exception:
+                rtmp_vbitrate = 1500
+
+            try:
+                rtmp_abitrate = int(self.entry_rtmp_abitrate.get().strip())
+            except Exception:
+                rtmp_abitrate = 192
+
+            rtmp_fallback = bool(self.switch_rtmp_fallback.get())
+
+            if output_mode == "topaz":
+                if rtmp_vbitrate > 2000:
+                    rtmp_vbitrate = 2000
+                if rtmp_abitrate > 320:
+                    rtmp_abitrate = 320
 
             if port <= 0 or port > 65535:
                 raise ValueError("Port must be between 1 and 65535.")
@@ -434,8 +557,24 @@ class SettingsWindow(ctk.CTkToplevel):
                 "allow_web_queue_add": bool(self.switch_web_add.get()),
                 "allow_web_queue_edit": bool(self.switch_web_edit.get()),
                 "allow_web_playback_control": bool(self.switch_web_control.get()),
-                "web_password": web_password
+                "web_password": web_password,
+                "output_mode": output_mode,
+                "rtmp_video_bitrate_kbps": rtmp_vbitrate,
+                "rtmp_audio_bitrate_kbps": rtmp_abitrate,
+                "rtmp_fallback_to_hls": rtmp_fallback
             }
+
+            topaz_key = self.entry_topaz_key.get().strip()
+            if topaz_key:
+                new_cfg["topaz_stream_key"] = topaz_key
+
+            generic_url = self.entry_generic_rtmp_url.get().strip()
+            if generic_url:
+                new_cfg["generic_rtmp_url"] = generic_url
+
+            generic_key = self.entry_generic_rtmp_key.get().strip()
+            if generic_key:
+                new_cfg["generic_rtmp_key"] = generic_key
 
             self.streamer_core.save_config(new_cfg)
             self.streamer_core.generate_standby_image()

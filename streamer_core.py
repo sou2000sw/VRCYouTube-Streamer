@@ -145,9 +145,15 @@ TOPAZ_MAX_AUDIO_KBPS = 320
 STREAM_KEY_BYTES = 30          # token_urlsafe(30) => 40文字
 STREAM_KEY_MIN_LENGTH = 32
 
-# RTMP シンクは接続失敗時に即座に終了する。起動直後にこの秒数だけ生存確認してから
-# 「接続できた」とみなす（失敗を検知できないと、無音のまま配信が死ぬ）。
-SINK_STARTUP_PROBE_SECONDS = 2.0
+# ★実測（2026-08-28）: 入力が pipe:0 のFFmpegは、ストリーム情報が確定するまで
+# 出力側のRTMPハンドシェイクを開始しない。つまり「起動直後にプロセスが生きている」ことは
+# 接続成功を意味しない（誰もlistenしていない宛先でも2秒間は平然と生きていた）。
+# そのため到達性は起動前にTCPで確かめ、起動後の生存確認は即死検知の保険として短く持つ。
+SINK_STARTUP_PROBE_SECONDS = 1.0
+RTMP_CONNECT_TIMEOUT_SECONDS = 3.0
+# この秒数以上生き延びたシンクの死は「一度は繋がった上での切断」とみなし、
+# 連続失敗カウントをリセットして再接続サイクルをやり直す。
+SINK_STABLE_SECONDS = 30.0
 
 # 変更されたらシンクを作り直す必要がある設定キー
 DESTINATION_CONFIG_KEYS = (
@@ -483,6 +489,7 @@ class StreamerCore:
         self.destination_fallback_active = False
         self.destination_last_error = ""
         self._sink_fail_count = 0
+        self._sink_started_at = 0.0
         self._sink_retry_at = 0.0
         self._sink_force_restart = False
         self._sink_stderr_tail = collections.deque(maxlen=20)
@@ -988,9 +995,38 @@ class StreamerCore:
             "generic_rtmp_key_set": bool(generic_key),
             "rtmp_video_bitrate_kbps": int(self.config.get("rtmp_video_bitrate_kbps", 1500)),
             "rtmp_audio_bitrate_kbps": int(self.config.get("rtmp_audio_bitrate_kbps", 192)),
+            "rtmp_fallback_to_hls": bool(self.config.get("rtmp_fallback_to_hls", True)),
             "max_video_bitrate_kbps": self.get_rtmp_limits()[0],
             "max_audio_bitrate_kbps": self.get_rtmp_limits()[1],
         }
+
+    def probe_rtmp_endpoint(self, url):
+        """RTMP投稿先へTCPで到達できるかを起動前に確かめる。
+
+        FFmpeg 側の即死検知だけでは不十分である（実測: pipe:0 入力では、入力データが
+        流れ始めるまで出力側の接続を試みないため、宛先が落ちていても起動直後は生きて見える）。
+        ここで落としておかないと「配信できていないのに配信中に見える」状態になる。
+        返り値は (到達可否, 理由)。
+        """
+        try:
+            parsed = urllib.parse.urlparse(url)
+            host = parsed.hostname
+            port = parsed.port or 1935
+        except Exception as e:
+            return False, f"配信先URLを解釈できません: {e}"
+        if not host:
+            return False, "配信先URLにホスト名がありません"
+
+        try:
+            sock = socket.create_connection((host, port), timeout=RTMP_CONNECT_TIMEOUT_SECONDS)
+            sock.close()
+            return True, ""
+        except socket.gaierror:
+            return False, f"配信先ホストを解決できません ({host})"
+        except (socket.timeout, TimeoutError):
+            return False, f"配信先へ接続できません（タイムアウト: {host}:{port}）"
+        except OSError as e:
+            return False, f"配信先へ接続できません ({host}:{port}): {e}"
 
     def build_sink_command(self, mode):
         """destination 別のシンクFFmpegコマンドを組み立てる。返り値は (cmd, 表示用の宛先)。
@@ -1077,6 +1113,13 @@ class StreamerCore:
             self.destination_last_error = msg
             return False
 
+        if mode in RTMP_OUTPUT_MODES:
+            reachable, reason = self.probe_rtmp_endpoint(self.get_rtmp_publish_url(mode))
+            if not reachable:
+                log_print(f"[Sink] Destination '{mode}' is unreachable: {reason}")
+                self.destination_last_error = reason
+                return False
+
         self._sink_stderr_tail.clear()
         try:
             proc = subprocess.Popen(
@@ -1109,9 +1152,9 @@ class StreamerCore:
             self.hls_proc = proc
             self.current_stdin = proc.stdin
         self.active_output_mode = mode
+        self._sink_started_at = time.time()
         if mode == self.get_output_mode():
             self.destination_last_error = ""
-            self._sink_fail_count = 0
         log_print(f"[Sink] Destination '{mode}' started -> {target}")
         return True
 
@@ -1141,14 +1184,16 @@ class StreamerCore:
             return self._start_sink(mode)
 
         # RTMP系: 失敗しても配信そのものは止めない。規定回数試して駄目ならHLSへ退避する。
+        # 失敗計数は呼び出しをまたいで持ち越す。そうしないと「起動しては数秒で切断」を
+        # 繰り返す相手に対して永遠に再接続を続け、退避条件に到達できない。
         attempts = max(1, int(self.config.get("rtmp_fallback_after_failures", 3) or 3))
-        for attempt in range(1, attempts + 1):
+        while self._sink_fail_count < attempts:
             if self._start_sink(mode):
                 return True
             self._sink_fail_count += 1
-            log_print(f"[Destination] '{mode}' connection failed ({attempt}/{attempts}): {self.destination_last_error}")
-            if attempt < attempts:
-                time.sleep(min(2.0, 0.5 * attempt))
+            log_print(f"[Destination] '{mode}' connection failed ({self._sink_fail_count}/{attempts}): {self.destination_last_error}")
+            if self._sink_fail_count < attempts:
+                time.sleep(min(2.0, 0.5 * self._sink_fail_count))
 
         if not self.config.get("rtmp_fallback_to_hls", True):
             return False
@@ -1172,9 +1217,14 @@ class StreamerCore:
             try:
                 proc = self.hls_proc
                 if proc is not None and proc.poll() is not None:
-                    log_print(f"[Sink] Destination sink died unexpectedly (rc={proc.returncode}). Restarting...")
+                    lived = time.time() - getattr(self, "_sink_started_at", 0.0)
+                    log_print(f"[Sink] Destination sink died unexpectedly (rc={proc.returncode}, alive {lived:.1f}s). Restarting...")
                     if self.active_output_mode in RTMP_OUTPUT_MODES:
-                        self._sink_fail_count += 1
+                        if lived >= SINK_STABLE_SECONDS:
+                            # 一度は安定して流れていた上での切断。単発の事故として計数をやり直す
+                            self._sink_fail_count = 0
+                        else:
+                            self._sink_fail_count += 1
                     self._sink_force_restart = True
                     if self.ensure_stream_sink():
                         self.reload_stream_event.set()

@@ -1,0 +1,392 @@
+# -*- coding: utf-8 -*-
+"""タスク14: 配信先（destination）切替・フォールバック・キーマスクの単体テスト。
+
+FFmpeg も TopazChat も呼ばない。コマンド組み立て・設定クランプ・マスク・
+フォールバック判定という「壊れても静かに壊れる」部分だけを検証する。
+
+注意: StreamerCore は実在の config.json を読み書きするため、
+各テストは元の config.json を退避し、必ず復元する。
+"""
+
+import io
+import json
+import os
+import shutil
+
+import streamer_core
+from streamer_core import (
+    StreamerCore,
+    DEFAULT_CONFIG,
+    OUTPUT_MODES,
+    RTMP_OUTPUT_MODES,
+    TOPAZ_MAX_VIDEO_KBPS,
+    TOPAZ_MAX_AUDIO_KBPS,
+    STREAM_KEY_MIN_LENGTH,
+)
+
+CONFIG_FILE = streamer_core.CONFIG_FILE
+BACKUP_FILE = CONFIG_FILE + ".test_destination.bak"
+
+
+def setup_module(module):
+    if os.path.exists(CONFIG_FILE):
+        shutil.copy2(CONFIG_FILE, BACKUP_FILE)
+
+
+def teardown_module(module):
+    if os.path.exists(BACKUP_FILE):
+        shutil.copy2(BACKUP_FILE, CONFIG_FILE)
+        os.remove(BACKUP_FILE)
+
+
+def make_core():
+    return StreamerCore(override_port=8997, override_enable_tunnel=False)
+
+
+def test_defaults_keep_hls():
+    """既定値は必ず hls。配布ソフトが黙って他者のサーバーへ帯域を向けてはいけない。"""
+    print("\n--- 1. Default destination stays HLS ---")
+    assert DEFAULT_CONFIG["output_mode"] == "hls"
+    assert DEFAULT_CONFIG["topaz_stream_key"] == ""
+
+    core = make_core()
+    core.config["output_mode"] = "hls"
+    assert core.get_output_mode() == "hls"
+
+    # 未知の値は fail-safe に hls へ落ちる
+    core.config["output_mode"] = "youtube_live"
+    assert core.get_output_mode() == "hls"
+    print("PASS: default and unknown output_mode both resolve to 'hls'.")
+
+
+def test_hls_sink_command_unchanged():
+    """HLS のシンク引数は従来どおり（-c copy / キーフレーム分割）であること。"""
+    print("\n--- 2. HLS sink command ---")
+    core = make_core()
+    core.config["output_mode"] = "hls"
+    cmd, target = core.build_sink_command("hls")
+
+    assert cmd is not None
+    assert "-f" in cmd and "hls" in cmd
+    assert cmd[cmd.index("-c:v") + 1] == "copy"
+    assert cmd[cmd.index("-c:a") + 1] == "copy"
+    assert "delete_segments+append_list" in cmd
+    assert "libx264" not in cmd, "HLS路では再エンコードしない"
+    assert "local HLS" in target
+    print("PASS: HLS sink still passes through without re-encoding.")
+
+
+def test_topaz_sink_command_reencodes_within_limits():
+    """TopazChat 路では再エンコード必須。上限内のビットレートとGOP固定を確認する。"""
+    print("\n--- 3. TopazChat sink command ---")
+    core = make_core()
+    core.config["output_mode"] = "topaz"
+    core.config["topaz_rtmp_base"] = "rtmp://topaz.chat/live"
+    core.config["topaz_stream_key"] = "K" * 40
+    core.config["rtmp_video_bitrate_kbps"] = 1500
+    core.config["rtmp_audio_bitrate_kbps"] = 192
+    core.config["rtmp_fps"] = 30
+    core.config["rtmp_gop_seconds"] = 2
+
+    cmd, target = core.build_sink_command("topaz")
+    assert cmd is not None
+
+    # 出力は flv/RTMP で、URL末尾はストリームキー
+    assert cmd[cmd.index("-f") + 1] == "flv"
+    assert cmd[-1] == "rtmp://topaz.chat/live/" + "K" * 40
+
+    # -c copy の素通しでは上限超過も切替時の切断も防げないため再エンコードする
+    assert cmd[cmd.index("-c:v") + 1] == "libx264"
+    assert cmd[cmd.index("-c:a") + 1] == "aac"
+    assert cmd[cmd.index("-b:v") + 1] == "1500k"
+    assert cmd[cmd.index("-b:a") + 1] == "192k"
+
+    # 解像度・fps 固定でアイテム切替時のパラメータ変化を消す
+    vf = cmd[cmd.index("-vf") + 1]
+    assert "scale=1280:720" in vf and "fps=30" in vf
+
+    # GOP は fps * gop_seconds で固定
+    assert cmd[cmd.index("-g") + 1] == "60"
+    assert cmd[cmd.index("-keyint_min") + 1] == "60"
+
+    # ログ表示用の宛先にはキーが出てはいけない
+    assert "K" * 40 not in target
+    print("PASS: TopazChat sink re-encodes with fixed params and masks the log target.")
+
+
+def test_bitrate_clamped_to_topaz_limits():
+    """上限超過は接続直後に強制切断されるため、設定値の側をクランプする。"""
+    print("\n--- 4. Bitrate clamping ---")
+    core = make_core()
+    core.config["output_mode"] = "topaz"
+    core.config["rtmp_video_bitrate_kbps"] = 8000
+    core.config["rtmp_audio_bitrate_kbps"] = 640
+
+    core.clamp_rtmp_bitrates()
+    assert core.config["rtmp_video_bitrate_kbps"] == TOPAZ_MAX_VIDEO_KBPS
+    assert core.config["rtmp_audio_bitrate_kbps"] == TOPAZ_MAX_AUDIO_KBPS
+
+    # 汎用RTMPは自前サーバーなので上限を課さない
+    core.config["output_mode"] = "generic_rtmp"
+    core.config["rtmp_video_bitrate_kbps"] = 8000
+    core.clamp_rtmp_bitrates()
+    assert core.config["rtmp_video_bitrate_kbps"] == 8000
+    print("PASS: Topaz limits clamped, generic RTMP left alone.")
+
+
+def test_stream_key_generated_long_and_masked():
+    """短いキーは第三者に配信を乗っ取られる。自動生成は十分に長いこと。"""
+    print("\n--- 5. Stream key generation & masking ---")
+    core = make_core()
+    key = core.generate_stream_key()
+    assert len(key) >= STREAM_KEY_MIN_LENGTH, f"key too short: {len(key)}"
+    assert core.generate_stream_key() != key, "毎回異なるキーであること"
+
+    masked = core.mask_stream_key(key)
+    assert key not in masked
+    assert masked.startswith(key[:2]) and masked.endswith(key[-2:])
+    assert "*" in masked
+    assert core.mask_stream_key("") == ""
+    assert core.mask_stream_key("short") == "*****"
+    assert core.is_masked_stream_key(masked) is True
+    assert core.is_masked_stream_key(key) is False
+
+    # 未設定・短すぎるキーは自動生成で置き換わる
+    core.config["topaz_stream_key"] = "test"
+    generated = core.ensure_stream_key("topaz", persist=False)
+    assert len(generated) >= STREAM_KEY_MIN_LENGTH
+    assert generated != "test"
+    print("PASS: keys are long, unique, and masked.")
+
+
+def test_status_never_leaks_key_to_guests():
+    """/api/status はゲストにも届く。include_secrets=False で生キーが混ざらないこと。"""
+    print("\n--- 6. Status masking ---")
+    core = make_core()
+    secret = "S" * 40
+    core.config["output_mode"] = "topaz"
+    core.config["topaz_stream_key"] = secret
+    core.config["generic_rtmp_key"] = secret
+
+    guest = json.dumps(core.get_status_data(include_secrets=False), ensure_ascii=False)
+    assert secret not in guest, "ゲスト向けレスポンスに生キーが漏れている"
+
+    host = json.dumps(core.get_status_data(include_secrets=True), ensure_ascii=False)
+    assert secret in host, "ホスト本人には生キーが必要（ワールドに貼るURLのため）"
+
+    # 既定引数（従来の呼び出し）でもマスクされる側であること
+    assert secret not in json.dumps(core.get_status_data(), ensure_ascii=False)
+    print("PASS: stream key is masked for guests, revealed only for the host.")
+
+
+def test_video_url_and_remote_url_are_separated():
+    """動画URLとWebリモコンURLは別物。QRが焼くのは後者だけ。"""
+    print("\n--- 7. URL separation ---")
+    core = make_core()
+    core.tunnel_raw_url = "https://example.trycloudflare.com"
+
+    core.config["output_mode"] = "hls"
+    status = core.get_status_data(include_secrets=True)
+    assert status["video_url"].endswith("/stream.m3u8")
+    assert status["remote_url"] == "https://example.trycloudflare.com"
+
+    core.config["output_mode"] = "topaz"
+    core.config["topaz_rtsp_base"] = "rtspt://topaz.chat/live"
+    core.config["topaz_stream_key"] = "T" * 40
+    status = core.get_status_data(include_secrets=True)
+    assert status["video_url"] == "rtspt://topaz.chat/live/" + "T" * 40
+    assert status["remote_url"] == "https://example.trycloudflare.com", "リモコンURLはトンネルのまま"
+    print("PASS: video URL follows the destination, remote URL stays on the tunnel.")
+
+
+def test_fallback_to_hls_when_rtmp_unreachable():
+    """相手が落ちていても配信自体は止めない（fail-safe）。"""
+    print("\n--- 8. Fallback to HLS ---")
+    core = make_core()
+    core.config["output_mode"] = "topaz"
+    core.config["topaz_stream_key"] = "F" * 40
+    core.config["rtmp_fallback_to_hls"] = True
+    core.config["rtmp_fallback_after_failures"] = 2
+
+    calls = []
+
+    def fake_start(mode):
+        calls.append(mode)
+        return mode == "hls"   # RTMP は必ず失敗、HLS は成功する状況を再現
+
+    core._start_sink = fake_start
+    core._sink_force_restart = True
+    assert core.ensure_stream_sink() is True
+
+    assert calls.count("topaz") == 2, f"規定回数だけ再試行すること: {calls}"
+    assert calls[-1] == "hls", "最後はHLSへ退避すること"
+    assert core.destination_fallback_active is True
+    assert core.get_active_output_mode() == "hls", "退避中の実配信先はHLS"
+    assert core.get_output_mode() == "topaz", "設定上の配信先は変えない"
+    assert core._sink_retry_at > 0, "復帰はバックオフ後に試みる"
+
+    info = core.get_destination_info()
+    assert info["fallback_active"] is True
+    assert info["active_output_mode"] == "hls"
+    print("PASS: RTMP failure falls back to HLS without stopping the stream.")
+
+
+def test_fallback_disabled_keeps_failure_visible():
+    """自動退避を切っている場合は、黙ってHLSへ流さず失敗として返すこと。"""
+    print("\n--- 9. Fallback disabled ---")
+    core = make_core()
+    core.config["output_mode"] = "topaz"
+    core.config["topaz_stream_key"] = "F" * 40
+    core.config["rtmp_fallback_to_hls"] = False
+    core.config["rtmp_fallback_after_failures"] = 1
+
+    core._start_sink = lambda mode: False
+    core._sink_force_restart = True
+    assert core.ensure_stream_sink() is False
+    assert core.destination_fallback_active is False
+    print("PASS: with fallback disabled the failure is surfaced, not hidden.")
+
+
+def test_masked_key_is_not_written_back():
+    """UIがマスク値を送り返しても、本物のキーを潰さないこと。"""
+    print("\n--- 10. Masked key round-trip guard ---")
+    core = make_core()
+    real = "R" * 40
+    core.config["topaz_stream_key"] = real
+    core.save_config({"topaz_stream_key": core.mask_stream_key(real)})
+    assert core.config["topaz_stream_key"] == real, "マスク値で上書きされてはいけない"
+
+    core.save_config({"topaz_stream_key": "N" * 40})
+    assert core.config["topaz_stream_key"] == "N" * 40, "本物の新キーは反映されること"
+    print("PASS: masked values are ignored, real keys are accepted.")
+
+
+def test_generic_rtmp_url_composition():
+    print("\n--- 11. Generic RTMP URL ---")
+    core = make_core()
+    core.config["output_mode"] = "generic_rtmp"
+    core.config["generic_rtmp_url"] = "rtmp://localhost/live/"
+    core.config["generic_rtmp_key"] = "mykey"
+    assert core.get_rtmp_publish_url("generic_rtmp") == "rtmp://localhost/live/mykey"
+
+    core.config["generic_rtmp_key"] = ""
+    assert core.get_rtmp_publish_url("generic_rtmp") == "rtmp://localhost/live"
+
+    core.config["generic_rtmp_url"] = ""
+    assert core.get_rtmp_publish_url("generic_rtmp") == ""
+    cmd, _ = core.build_sink_command("generic_rtmp")
+    assert cmd is None, "URL未設定のRTMPシンクは起動させない"
+    print("PASS: generic RTMP URL composition and empty-URL guard.")
+
+
+def test_unreachable_rtmp_detected_before_ffmpeg_starts():
+    """★実測由来の回帰防止（2026-08-28）。
+
+    pipe:0 入力のFFmpegは、入力データが流れ始めるまで出力側のRTMP接続を試みない。
+    つまり「起動直後にプロセスが生きている」ことは接続成功を意味せず、
+    誰もlistenしていない宛先でも起動プローブだけでは失敗を検知できなかった。
+    そのため到達性は起動前にTCPで確認する。
+    """
+    print("\n--- 12. Unreachable RTMP is caught before spawning ffmpeg ---")
+    core = make_core()
+    core.config["output_mode"] = "topaz"
+    core.config["topaz_rtmp_base"] = "rtmp://127.0.0.1:19350/live"   # 誰もlistenしていない
+    core.config["topaz_stream_key"] = "U" * 40
+
+    reachable, reason = core.probe_rtmp_endpoint(core.get_rtmp_publish_url("topaz"))
+    assert reachable is False and reason, "到達不可を検知できていない"
+
+    spawned = []
+    original_popen = streamer_core.subprocess.Popen
+    streamer_core.subprocess.Popen = lambda *a, **kw: spawned.append(a) or original_popen(*a, **kw)
+    try:
+        assert core._start_sink("topaz") is False
+    finally:
+        streamer_core.subprocess.Popen = original_popen
+    assert spawned == [], "到達できない宛先に対してFFmpegを起動してはいけない"
+    assert core.destination_last_error
+
+    # ホスト名が解決できない場合も同様に失敗として扱う
+    ok, reason = core.probe_rtmp_endpoint("rtmp://this-host-does-not-exist.invalid/live/key")
+    assert ok is False and reason
+    print("PASS: unreachable destinations fail fast, without spawning ffmpeg.")
+
+
+def test_failure_count_carries_over_between_calls():
+    """『起動しては数秒で切断』を繰り返す相手でも退避条件に到達すること。
+
+    失敗計数を呼び出しごとにリセットすると、ウォッチドッグの再起動と組み合わさって
+    永遠に再接続し続け、いつまでもHLSへ退避しない。
+    """
+    print("\n--- 14. Failure count carries over ---")
+    core = make_core()
+    core.config["output_mode"] = "topaz"
+    core.config["topaz_stream_key"] = "C" * 40
+    core.config["rtmp_fallback_to_hls"] = True
+    core.config["rtmp_fallback_after_failures"] = 3
+
+    # ウォッチドッグが短命な切断を2回数えた状態を再現
+    core._sink_fail_count = 2
+
+    calls = []
+    core._start_sink = lambda mode: calls.append(mode) or (mode == "hls")
+    core._sink_force_restart = True
+    assert core.ensure_stream_sink() is True
+    assert calls.count("topaz") == 1, f"残り1回だけ試すこと: {calls}"
+    assert core.destination_fallback_active is True
+    print("PASS: accumulated failures still reach the fallback condition.")
+
+
+def test_backward_compatible_alias():
+    """外部（プラグイン・既存テスト）が呼ぶ旧名を壊していないこと。"""
+    print("\n--- 12. ensure_hls_receiver alias ---")
+    core = make_core()
+    called = []
+    core.ensure_stream_sink = lambda: called.append(True) or True
+    assert core.ensure_hls_receiver() is True
+    assert called == [True]
+    print("PASS: ensure_hls_receiver() still delegates to ensure_stream_sink().")
+
+
+def test_ui_has_destination_controls():
+    """UIの配信先操作要素と、規約上必須の注記が存在すること。"""
+    print("\n--- 13. UI elements & required notices ---")
+    ui_path = os.path.join(os.path.dirname(__file__), "ui", "index.html")
+    plugin_path = os.path.join(os.path.dirname(__file__), "plugin", "ui", "index.html")
+    content = io.open(ui_path, encoding="utf-8").read()
+
+    for element_id in (
+        "settingOutputMode", "settingTopazKey", "btnGenerateTopazKey",
+        "settingGenericRtmpUrl", "settingGenericRtmpKey",
+        "settingRtmpVideoBitrate", "settingRtmpAudioBitrate", "settingRtmpFallback",
+        "destinationVideoUrl", "btnCopyVideoUrl", "destinationStatusBadge",
+        "btnRetryDestination", "topazSettingsBlock", "genericRtmpBlock",
+    ):
+        assert f'id="{element_id}"' in content, f"missing UI element: {element_id}"
+
+    # 規約・法務上、表示が必須の注記
+    assert "本ソフトはTopazChatの公式ツールではありません" in content
+    assert "法人が運営主体" in content
+    assert "最大2Mbps" in content
+    assert "https://topaz.chat/" in content
+
+    # 公式を騙らないこと: ロゴ・ブランド素材は使わずテキスト名とリンクのみ
+    import re as _re
+    for tag in _re.findall(r"<img[^>]*>", content, flags=_re.I):
+        assert "topaz" not in tag.lower(), f"TopazChatのブランド画像を使ってはいけない: {tag}"
+    assert not _re.search(r'(src|background-image)[^;>]*topaz', content, flags=_re.I),         "TopazChatのロゴ・ブランド素材を読み込んではいけない"
+
+    assert content == io.open(plugin_path, encoding="utf-8").read(), \
+        "ui/index.html と plugin/ui/index.html は完全一致でなければならない"
+    print("PASS: destination UI controls and required notices are present and synced.")
+
+
+if __name__ == "__main__":
+    setup_module(None)
+    try:
+        for name, fn in sorted(globals().items()):
+            if name.startswith("test_") and callable(fn):
+                fn()
+        print("\nAll destination tests passed.")
+    finally:
+        teardown_module(None)

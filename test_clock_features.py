@@ -159,7 +159,8 @@ def test_pipeline_clock_flag_respect():
     from unittest.mock import patch
     core = StreamerCore(override_port=8998, override_enable_tunnel=False)
     try:
-        # Mock ensure_hls_receiver to True
+        # Mock the destination sink (旧名 ensure_hls_receiver は ensure_stream_sink への別名)
+        core.ensure_stream_sink = lambda: True
         core.ensure_hls_receiver = lambda: True
 
         import tempfile

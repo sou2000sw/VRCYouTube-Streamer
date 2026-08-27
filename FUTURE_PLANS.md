@@ -21,7 +21,7 @@
 | **11** | ⏰ 時計表示 | **配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化** (Live Clock Overlay) | **v2.7.0** | 🟢 **実装完了 ✅** |
 | **12** | 🏷️ 名称変更 | **アプリの名称変更およびREADME・ウィンドウタイトル・UI表記の刷新** (App Renaming) | **v2.8.0** | 🟢 **実装完了 ✅** |
 | **13** | 🎬 動画対応 | **写真に加えてMP4等のローカル動画ファイルアップロード・再生対応** (Local Video Upload) | **v2.8.0** | 🟢 **実装完了 ✅** |
-| **14** | 📡 配信経路 | **配信先（HLS/TopazChat/汎用RTMP）の選択制対応** (Selectable Streaming Destination) | **v2.9.0** | 🔵 **設計検討中 📋** |
+| **14** | 📡 配信経路 | **配信先（HLS/TopazChat/汎用RTMP）の選択制対応** (Selectable Streaming Destination) | **v2.9.0** | 🟡 **実装完了・実機検証待ち 🔬** |
 | **15** | 🔄 外部依存 | **外部ソース（yt-dlp等）の自動更新・メンテナンス機能** (External Tools Auto-Update) | 未定 | 🔵 **検討中 📋** |
 | **16** | 🎨 GUI刷新 | **ホストソフトGUIのモダン化・リデザイン** (Host GUI Modernization) | 未定 | 🔵 **検討中 📋** |
 | **17** | 🎵 ラジオ | **ラジオモード時のクロスフェード・滑らか切り替え** (Smooth Crossfade) | 未定 | ⚪ **実装予定 📝** |
@@ -263,7 +263,7 @@ Webリモコン（スマホブラウザ / PC）およびホストPCのデスク�
 
 ---
 
-## 14. 📡 配信先（HLS / TopazChat / 汎用RTMP）の選択制対応 (Selectable Streaming Destination) 【設計検討中 📋】
+## 14. 📡 配信先（HLS / TopazChat / 汎用RTMP）の選択制対応 (Selectable Streaming Destination) 【実装完了・実機検証待ち 🔬】
 
 ### 概要
 現在ハードコードされている配信経路「ローカルHLS生成 → Flask配信 → Cloudflare Quick Tunnel（`*.trycloudflare.com`）」を抽象化し、**配信先（destination）を設定で切り替えられる**ようにする。特に VRChat 向けに設計された **TopazChat（RTMP入力 → `rtsp://` 出力）** を第一候補として追加する。
@@ -346,6 +346,41 @@ Webリモコン（スマホブラウザ / PC）およびホストPCのデスク�
 ### 依存・前提
 - タスク11（LIVE時計オーバーレイ）の実機確認は **2026-08-28 完了**。本タスクの着手ブロッカーは解消済み。
 - タスク18（ハードウェアエンコード対応）と設計上の関連あり（RTMP再エンコードが必要となった場合、NVENC等の適用でCPUコストを相殺できる可能性）。
+
+### 実装記録（2026-08-28 / ブランチ `feature/task14-stream-destination`）
+
+Phase 1（`hls` / `topaz`）と Phase 2（`generic_rtmp`）を同時に実装した。
+シンクの分岐は1箇所に閉じており、`generic_rtmp` は同じRTMP経路の宛先違いに過ぎないため、
+分割するより一度に入れた方が差分が小さく済むと判断した。
+
+- `ensure_hls_receiver()` → **`ensure_stream_sink()`** へ改称し、`build_sink_command(mode)` で
+  出口だけを差し替える構造にした。旧名は別名として残してある（プラグイン・既存テスト互換）。
+- RTMP系は設計どおり**再エンコード必須**（`scale`+`pad`+`fps` 固定 → `libx264` / `aac`、
+  GOP = `fps × rtmp_gop_seconds`）。TopazChat の 2Mbps / 320kbps は保存時クランプで担保。
+- ストリームキーは `secrets.token_urlsafe(30)`（40文字）で自動生成。`/api/status`・
+  `/api/config`・POSTボディのログの全経路でマスクし、生キーは localhost 限定の
+  `/api/destination`（`reveal_key`）でのみ取得できる。
+- `get_status_data()` に `video_url`（ワールドに貼る）と `remote_url`（Webリモコン）を分離して追加。
+  QRが焼くのは従来どおり後者のみで、この点は変更していない。
+
+#### ★実測でひっくり返った設計前提（2026-08-28）
+
+当初は「RTMPシンクは接続失敗時に即座に終了するので、起動直後の生存確認で失敗を検知できる」
+という前提で組んだが、**誰も listen していないポートを宛先にしても FFmpeg は2秒間平然と生きていた**。
+原因は入力が `pipe:0` であること — 入力データが流れ始めてストリーム情報が確定するまで、
+FFmpeg は出力側のRTMPハンドシェイクを開始しない。つまり起動直後の生存は接続成功を意味しない。
+
+対策として **投稿先へのTCP到達性を起動前に確認**（`probe_rtmp_endpoint()`）する方式へ変更した。
+併せて、失敗計数を呼び出しをまたいで持ち越すようにした（毎回リセットすると
+「起動しては数秒で切断」を繰り返す相手に対して永遠に再接続し、退避条件へ到達できない）。
+回帰防止として `test_destination.py` に「到達できない宛先にFFmpegを起動しないこと」を追加済み。
+
+#### 未検証（実機確認が必要）
+
+- **実際のTopazChatへの投稿**（到達可能なRTMPサーバーが手元に無いため、成功パスは未検証）
+- **再エンコードのCPUコスト**（`libx264` 常時稼働。ラジオモードとの共存可否を含む）
+- **アイテム切替をまたぐRTMPセッション維持**（解像度・fps固定で消しにいく設計だが未実測）
+- **VRChat（AVPro）での `rtspt://` 再生可否**
 
 ---
 

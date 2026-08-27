@@ -442,6 +442,128 @@
 
             <!-- TAB 2: SETTINGS & QR -->
             <div id="tab-settings" class="tab-pane hidden flex flex-col gap-4">
+                <!-- Stream Destination Settings Card -->
+                <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-4">
+                    <div class="flex items-center justify-between pb-2 border-b border-border">
+                        <div class="flex items-center gap-2">
+                            <i class="ri-broadcast-line text-primary text-base"></i>
+                            <h3 class="font-semibold text-xs text-zinc-200">📡 配信先（ストリーミング出力先）設定</h3>
+                        </div>
+                        <div id="destinationStatusBadge" class="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700 flex items-center gap-1.5">
+                            <span>ローカルHLS</span>
+                        </div>
+                    </div>
+
+                    <!-- Destination Video URL Quick Bar / Display -->
+                    <div class="bg-card-muted border border-border rounded-lg p-2.5 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 text-xs">
+                        <div class="flex items-center gap-2 min-w-0 flex-1">
+                            <span class="text-zinc-400 shrink-0 font-medium">ワールド動画URL:</span>
+                            <input id="destinationVideoUrl" readonly class="bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1 text-xs text-primary font-mono w-full truncate focus:outline-none focus:border-primary" value="取得中...">
+                        </div>
+                        <div class="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                            <button id="btnCopyVideoUrl" onclick="copyDestinationVideoUrl()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded text-xs transition">
+                                <i class="ri-file-copy-line"></i>
+                                <span>コピー</span>
+                            </button>
+                            <button id="btnRetryDestination" onclick="retryDestination()" class="hidden flex items-center gap-1 px-2.5 py-1 bg-amber-900/80 hover:bg-amber-800 text-amber-200 border border-amber-700 rounded text-xs transition" title="退避中から本来の配信先へ復帰を試みる">
+                                <i class="ri-refresh-line"></i>
+                                <span>即時復帰</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Output Mode Select & Fallback -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400 font-medium">配信先モード (output_mode)</label>
+                            <select id="settingOutputMode" onchange="updateDestinationVisibility(); updateSettings();" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary">
+                                <option value="hls">ローカルHLS（既定・外部サービス不要 / 遅延 約9〜12秒）</option>
+                                <option value="topaz">TopazChat（低遅延 約1〜2秒 / VRChat向け・AVPro必須）</option>
+                                <option value="generic_rtmp">汎用RTMP（上級者向け・自己責任）</option>
+                            </select>
+                        </div>
+                        
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400 font-medium">自動退避設定</label>
+                            <label class="flex items-center gap-2 cursor-pointer mt-1">
+                                <input type="checkbox" id="settingRtmpFallback" onchange="updateSettings()" checked class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                                <span class="text-xs text-zinc-200">失敗時にHLSへ自動退避</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- TopazChat Settings Block -->
+                    <div id="topazSettingsBlock" class="hidden flex flex-col gap-3 pt-2 border-t border-zinc-800/80">
+                        <div class="flex flex-col gap-1.5">
+                            <label class="text-xs text-zinc-400 font-medium">TopazChat ストリームキー</label>
+                            <div class="flex gap-2">
+                                <div class="relative flex-1">
+                                    <input type="password" id="settingTopazKey" onchange="updateSettings()" placeholder="TopazChat ストリームキー" class="w-full bg-zinc-900 border border-zinc-700 rounded pl-3 pr-10 py-1.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-primary">
+                                    <button type="button" id="btnToggleTopazKey" onclick="toggleTopazKeyVisibility()" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200">
+                                        <i id="iconToggleTopazKey" class="ri-eye-line text-sm"></i>
+                                    </button>
+                                </div>
+                                <button type="button" id="btnGenerateTopazKey" onclick="generateTopazKey()" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded text-xs transition shrink-0 flex items-center gap-1">
+                                    <i class="ri-key-2-line"></i>
+                                    <span>キー新規生成</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Legal / Terms notice for TopazChat -->
+                        <div class="bg-zinc-900/60 border border-zinc-800 rounded p-3 text-[11px] text-zinc-400 flex flex-col gap-1 leading-relaxed">
+                            <div>※ 本ソフトはTopazChatの公式ツールではありません。</div>
+                            <div>※ TopazChatは個人運営の無償サービスです。法人が運営主体のイベント・番組制作等での利用は、別途TopazChatへの問い合わせが必要です。</div>
+                            <div>※ 映像は最大2Mbps・音声は最大320kbpsです。超過すると配信が強制切断されます。</div>
+                            <div class="flex items-center gap-3 mt-1 text-primary">
+                                <a href="https://topaz.chat/" target="_blank" rel="noopener noreferrer" class="hover:underline flex items-center gap-1">
+                                    <span>TopazChat 公式サイト</span>
+                                    <i class="ri-external-link-line"></i>
+                                </a>
+                                <a href="https://github.com/TopazChat/TopazChat" target="_blank" rel="noopener noreferrer" class="hover:underline flex items-center gap-1">
+                                    <span>GitHub リポジトリ</span>
+                                    <i class="ri-external-link-line"></i>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Generic RTMP Settings Block -->
+                    <div id="genericRtmpBlock" class="hidden flex flex-col gap-3 pt-2 border-t border-zinc-800/80">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="flex flex-col gap-1.5">
+                                <label class="text-xs text-zinc-400 font-medium">RTMP 投稿先URL</label>
+                                <input type="text" id="settingGenericRtmpUrl" onchange="updateSettings()" placeholder="rtmp://localhost/live" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-primary">
+                            </div>
+                            <div class="flex flex-col gap-1.5">
+                                <label class="text-xs text-zinc-400 font-medium">RTMP ストリームキー</label>
+                                <div class="relative">
+                                    <input type="password" id="settingGenericRtmpKey" onchange="updateSettings()" placeholder="ストリームキー" class="w-full bg-zinc-900 border border-zinc-700 rounded pl-3 pr-10 py-1.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-primary">
+                                    <button type="button" onclick="togglePasswordVisibility('settingGenericRtmpKey', 'iconToggleGenericKey')" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200">
+                                        <i id="iconToggleGenericKey" class="ri-eye-line text-sm"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-red-950/30 border border-red-900/50 rounded p-2.5 text-[11px] text-red-400 leading-relaxed">
+                            ※ 上級者向け。配信先の規約・著作権の順守は利用者の責任です。YouTube Live等へ他者の動画を再送出すると、アカウント停止の対象になり得ます。
+                        </div>
+                    </div>
+
+                    <!-- Bitrate Settings Block (Common) -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-zinc-800/80">
+                        <div class="flex flex-col gap-1.5">
+                            <label class="text-xs text-zinc-400 font-medium">映像ビットレート (kbps)</label>
+                            <input type="number" id="settingRtmpVideoBitrate" min="100" max="20000" step="100" value="1500" onchange="updateSettings()" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-primary">
+                        </div>
+                        <div class="flex flex-col gap-1.5">
+                            <label class="text-xs text-zinc-400 font-medium">音声ビットレート (kbps)</label>
+                            <input type="number" id="settingRtmpAudioBitrate" min="32" max="512" step="16" value="192" onchange="updateSettings()" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-primary">
+                        </div>
+                    </div>
+                </div>
+
                 <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-4">
                     <div class="flex items-center gap-2 pb-2 border-b border-border">
                         <i class="ri-qr-code-line text-primary text-base"></i>
@@ -1609,6 +1731,76 @@
                 const advEl = document.getElementById('settingImageAutoAdvance');
                 if (advEl) advEl.checked = data.image_auto_advance;
             }
+
+            // Destination tab sync
+            const dest = data.destination || {};
+            const outputMode = data.output_mode || dest.output_mode;
+            if (outputMode) {
+                const modeEl = document.getElementById('settingOutputMode');
+                if (modeEl && document.activeElement !== modeEl) {
+                    modeEl.value = outputMode;
+                    updateDestinationVisibility();
+                }
+            }
+            if (dest.rtmp_video_bitrate_kbps !== undefined) {
+                const vbEl = document.getElementById('settingRtmpVideoBitrate');
+                if (vbEl && document.activeElement !== vbEl) vbEl.value = dest.rtmp_video_bitrate_kbps;
+            }
+            if (dest.rtmp_audio_bitrate_kbps !== undefined) {
+                const abEl = document.getElementById('settingRtmpAudioBitrate');
+                if (abEl && document.activeElement !== abEl) abEl.value = dest.rtmp_audio_bitrate_kbps;
+            }
+            if (dest.rtmp_fallback_to_hls !== undefined) {
+                const fbEl = document.getElementById('settingRtmpFallback');
+                if (fbEl && document.activeElement !== fbEl) fbEl.checked = dest.rtmp_fallback_to_hls;
+            }
+            if (dest.generic_rtmp_url !== undefined) {
+                const gurlEl = document.getElementById('settingGenericRtmpUrl');
+                if (gurlEl && document.activeElement !== gurlEl) gurlEl.value = dest.generic_rtmp_url;
+            }
+
+            const topazKeyInput = document.getElementById('settingTopazKey');
+            if (topazKeyInput && document.activeElement !== topazKeyInput) {
+                if (dest.topaz_stream_key_set) {
+                    topazKeyInput.value = dest.topaz_stream_key || '';
+                } else if (!dest.topaz_stream_key_set && !topazKeyInput.value) {
+                    topazKeyInput.value = '';
+                }
+            }
+
+            const genericKeyInput = document.getElementById('settingGenericRtmpKey');
+            if (genericKeyInput && document.activeElement !== genericKeyInput) {
+                if (dest.generic_rtmp_key_set) {
+                    genericKeyInput.value = dest.generic_rtmp_key || '';
+                } else if (!dest.generic_rtmp_key_set && !genericKeyInput.value) {
+                    genericKeyInput.value = '';
+                }
+            }
+
+            const destUrl = dest.video_url || data.video_url || '';
+            const destUrlEl = document.getElementById('destinationVideoUrl');
+            if (destUrlEl) destUrlEl.value = destUrl || '-';
+
+            const badgeEl = document.getElementById('destinationStatusBadge');
+            const retryBtn = document.getElementById('btnRetryDestination');
+            const activeMode = dest.active_output_mode || data.active_output_mode || outputMode || 'hls';
+
+            if (badgeEl) {
+                if (dest.fallback_active) {
+                    const lastErr = dest.last_error ? `: ${dest.last_error}` : '';
+                    badgeEl.className = 'text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-amber-950 text-amber-400 border border-amber-800 flex items-center gap-1.5';
+                    badgeEl.innerHTML = `<i class="ri-alert-line"></i><span>配信先に接続できないためローカルHLSへ退避中${escapeHtml(lastErr)}</span>`;
+                    if (retryBtn) retryBtn.classList.remove('hidden');
+                } else {
+                    let modeLabel = 'ローカルHLS';
+                    if (activeMode === 'topaz') modeLabel = 'TopazChat';
+                    else if (activeMode === 'generic_rtmp') modeLabel = '汎用RTMP';
+
+                    badgeEl.className = 'text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-1.5';
+                    badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span><span>${modeLabel} 出力中</span>`;
+                    if (retryBtn) retryBtn.classList.add('hidden');
+                }
+            }
         }
 
         function updateUiOffline() {
@@ -2187,6 +2379,98 @@
             }
         }
 
+        function updateDestinationVisibility() {
+            const modeEl = document.getElementById('settingOutputMode');
+            const mode = modeEl ? modeEl.value : 'hls';
+            const topazBlock = document.getElementById('topazSettingsBlock');
+            const genericBlock = document.getElementById('genericRtmpBlock');
+            if (topazBlock) {
+                if (mode === 'topaz') topazBlock.classList.remove('hidden');
+                else topazBlock.classList.add('hidden');
+            }
+            if (genericBlock) {
+                if (mode === 'generic_rtmp') genericBlock.classList.remove('hidden');
+                else genericBlock.classList.add('hidden');
+            }
+        }
+
+        function copyDestinationVideoUrl() {
+            const el = document.getElementById('destinationVideoUrl');
+            if (!el || !el.value || el.value === '-') return;
+            navigator.clipboard.writeText(el.value);
+            showToast('動画URLをコピーしました', 'success');
+        }
+
+        async function toggleTopazKeyVisibility() {
+            const input = document.getElementById('settingTopazKey');
+            const icon = document.getElementById('iconToggleTopazKey');
+            if (!input || !icon) return;
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.className = 'ri-eye-off-line text-sm text-primary';
+                if (input.value.includes('*')) {
+                    try {
+                        const res = await fetch(`${apiBase}/api/destination`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ action: 'reveal_key' })
+                        });
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data.destination && data.destination.topaz_stream_key) {
+                                input.value = data.destination.topaz_stream_key;
+                            }
+                        }
+                    } catch (e) {}
+                }
+            } else {
+                input.type = 'password';
+                icon.className = 'ri-eye-line text-sm';
+            }
+        }
+
+        async function generateTopazKey() {
+            if (!confirm('TopazChatのストリームキーを新規生成しますか？')) return;
+            try {
+                const res = await fetch(`${apiBase}/api/destination`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'generate_key' })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    showToast('ストリームキーを新規生成しました', 'success');
+                    if (data.destination && data.destination.topaz_stream_key) {
+                        const input = document.getElementById('settingTopazKey');
+                        if (input) input.value = data.destination.topaz_stream_key;
+                    }
+                    checkServerHealth(true);
+                } else {
+                    showToast('ストリームキーの生成に失敗しました', 'danger');
+                }
+            } catch (e) {
+                showToast('通信エラーが発生しました', 'danger');
+            }
+        }
+
+        async function retryDestination() {
+            try {
+                const res = await fetch(`${apiBase}/api/destination`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'retry' })
+                });
+                if (res.ok) {
+                    showToast('配信先への再接続を要求しました', 'info');
+                    checkServerHealth(true);
+                } else {
+                    showToast('再接続の要求に失敗しました', 'danger');
+                }
+            } catch (e) {
+                showToast('通信エラーが発生しました', 'danger');
+            }
+        }
+
         async function updateSettings() {
             const qrEnabled = document.getElementById('settingQrEnabled').checked;
             const qrMode = document.getElementById('settingQrMode').value;
@@ -2194,20 +2478,65 @@
             const duration = parseInt(document.getElementById('settingImageDuration').value) || 15;
             const autoAdvance = document.getElementById('settingImageAutoAdvance').checked;
 
+            const outputModeEl = document.getElementById('settingOutputMode');
+            const outputMode = outputModeEl ? outputModeEl.value : 'hls';
+
+            let vBitrate = parseInt(document.getElementById('settingRtmpVideoBitrate')?.value) || 1500;
+            let aBitrate = parseInt(document.getElementById('settingRtmpAudioBitrate')?.value) || 192;
+            const fallback = document.getElementById('settingRtmpFallback') ? document.getElementById('settingRtmpFallback').checked : true;
+
+            if (outputMode === 'topaz') {
+                let clamped = false;
+                if (vBitrate > 2000) {
+                    vBitrate = 2000;
+                    clamped = true;
+                    if (document.getElementById('settingRtmpVideoBitrate')) document.getElementById('settingRtmpVideoBitrate').value = 2000;
+                }
+                if (aBitrate > 320) {
+                    aBitrate = 320;
+                    clamped = true;
+                    if (document.getElementById('settingRtmpAudioBitrate')) document.getElementById('settingRtmpAudioBitrate').value = 320;
+                }
+                if (clamped) {
+                    showToast('TopazChatの上限に合わせて調整しました', 'info');
+                }
+            }
+
+            const payload = {
+                overlay_qr_enabled: qrEnabled,
+                overlay_qr_video: qrEnabled,
+                overlay_qr_image: qrEnabled,
+                overlay_qr_mode: qrMode,
+                overlay_clock_enabled: clockOverlay,
+                overlay_clock_video: clockOverlay,
+                image_display_duration: duration,
+                image_auto_advance: autoAdvance,
+                output_mode: outputMode,
+                rtmp_video_bitrate_kbps: vBitrate,
+                rtmp_audio_bitrate_kbps: aBitrate,
+                rtmp_fallback_to_hls: fallback
+            };
+
+            const topazKeyVal = document.getElementById('settingTopazKey')?.value || '';
+            if (topazKeyVal && !topazKeyVal.includes('*')) {
+                payload.topaz_stream_key = topazKeyVal;
+            }
+
+            const genericUrlVal = document.getElementById('settingGenericRtmpUrl')?.value || '';
+            if (genericUrlVal && !genericUrlVal.includes('*')) {
+                payload.generic_rtmp_url = genericUrlVal;
+            }
+
+            const genericKeyVal = document.getElementById('settingGenericRtmpKey')?.value || '';
+            if (genericKeyVal && !genericKeyVal.includes('*')) {
+                payload.generic_rtmp_key = genericKeyVal;
+            }
+
             try {
                 const res = await fetch(`${apiBase}/api/config`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        overlay_qr_enabled: qrEnabled,
-                        overlay_qr_video: qrEnabled,
-                        overlay_qr_image: qrEnabled,
-                        overlay_qr_mode: qrMode,
-                        overlay_clock_enabled: clockOverlay,
-                        overlay_clock_video: clockOverlay,
-                        image_display_duration: duration,
-                        image_auto_advance: autoAdvance
-                    })
+                    body: JSON.stringify(payload)
                 });
                 if (res.ok) {
                     showToast('設定を保存しました', 'success');
