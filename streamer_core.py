@@ -1237,16 +1237,37 @@ class StreamerCore:
 
         clock_filter = get_live_clock_drawtext_filter()
 
+        # QRオーバーレイ判定（スライドショーは get_image_for_playback で合成済みのため除外）
+        is_slideshow = bool(slideshow_manifest_path and os.path.exists(slideshow_manifest_path))
+        overlay_radio = bool(self.config.get("overlay_qr_enabled", False)) and not is_slideshow
+        qr_overlay_file = self.generate_qr_overlay_image() if overlay_radio else None
+        has_qr = bool(overlay_radio and qr_overlay_file and os.path.exists(qr_overlay_file))
+
         cmd = [get_ffmpeg_cmd()]
         if self.accumulated_pts > 0:
             cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
-        cmd.extend(video_input_opts)
+        cmd.extend(video_input_opts)           # [0] = 静止画 or concat
         cmd.extend(input_opts)
-        cmd.extend(["-i", audio_url])
+        cmd.extend(["-i", audio_url])           # [1] = YouTube音声
+
+        if has_qr:
+            cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])  # [2] = QRオーバーレイ
+            qr_mode = self.config.get("overlay_qr_mode", "bottom-right")
+            overlay_filter = self._build_video_filter_complex(
+                has_qr=True, has_clock=True, qr_idx=2, qr_mode=qr_mode, clock_filter=clock_filter
+            )
+            cmd.extend([
+                "-filter_complex", overlay_filter,
+                "-map", "[vout]",
+                "-map", "1:a:0",
+            ])
+        else:
+            cmd.extend([
+                "-map", "0:v:0",
+                "-map", "1:a:0",
+                "-vf", clock_filter,
+            ])
         cmd.extend([
-            "-map", "0:v:0",
-            "-map", "1:a:0",
-            "-vf", clock_filter,
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-tune", "zerolatency",
@@ -1386,18 +1407,11 @@ class StreamerCore:
                 qr_idx = 2 if audio_url else 1
                 cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])
                 mode = self.config.get("overlay_qr_mode", "bottom-right")
-                if mode == "fullscreen":
-                    if has_clock:
-                        overlay_filter = f"[{qr_idx}:v][0:v]scale2ref[qr_scaled][vmain];[vmain][qr_scaled]overlay=0:0:shortest=1[v_qr];[v_qr]{clock_filter}[vout]"
-                    else:
-                        overlay_filter = f"[{qr_idx}:v][0:v]scale2ref[qr_scaled][vmain];[vmain][qr_scaled]overlay=0:0:shortest=1[vout]"
-                else:
-                    if has_clock:
-                        overlay_filter = f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-25:main_h-overlay_h-25:shortest=1[v_qr];[v_qr]{clock_filter}[vout]"
-                    else:
-                        overlay_filter = f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-25:main_h-overlay_h-25:shortest=1[vout]"
             else:
-                overlay_filter = f"[0:v]{clock_filter}[vout]"
+                qr_idx = 0
+                mode = "bottom-right"
+
+            overlay_filter = self._build_video_filter_complex(has_qr, has_clock, qr_idx, mode, clock_filter)
 
             cmd.extend([
                 "-filter_complex", overlay_filter,
@@ -1456,6 +1470,22 @@ class StreamerCore:
         return stop_event
 
     _stream_video = play_video
+
+    def _build_video_filter_complex(self, has_qr, has_clock, qr_idx, qr_mode, clock_filter):
+        """QR/時計オーバーレイ用 -filter_complex 文字列を安全に構築（動画・ラジオ共通）"""
+        if has_qr:
+            if qr_mode == "fullscreen":
+                base = f"[{qr_idx}:v][0:v]scale2ref[qr_scaled][vmain];[vmain][qr_scaled]overlay=0:0:shortest=1"
+            else:
+                base = f"[0:v][{qr_idx}:v]overlay=main_w-overlay_w-25:main_h-overlay_h-25:shortest=1"
+
+            if has_clock:
+                return base + f"[v_qr];[v_qr]{clock_filter}[vout]"
+            else:
+                return base + "[vout]"
+        elif has_clock:
+            return f"[0:v]{clock_filter}[vout]"
+        return None
 
     def optimize_image_to_cache(self, img_input, output_filename=None):
         """PIL画像、バイナリ、またはファイルパスから 1920x1080 黒帯付き最適化画像を生成して保存"""
@@ -1896,6 +1926,25 @@ class StreamerCore:
                     offset_y = (target_h - new_h) // 2
                     final_img.paste(img_resized, (offset_x, offset_y))
 
+                    # overlay_qr_enabled なら QR オーバーレイを合成 (v2.6.0 standby_mode 追加時の考慮漏れ修正)
+                    if bool(self.config.get("overlay_qr_enabled", False)):
+                        qr_path = self.generate_qr_overlay_image()
+                        if qr_path and os.path.exists(qr_path):
+                            try:
+                                qr_img = Image.open(qr_path).convert("RGBA")
+                                canvas = final_img.convert("RGBA")
+                                qr_mode = self.config.get("overlay_qr_mode", "bottom-right")
+                                if qr_mode == "fullscreen":
+                                    canvas.alpha_composite(qr_img, dest=(0, 0))
+                                else:
+                                    qw, qh = qr_img.size
+                                    pos_x = max(0, target_w - qw - 25)
+                                    pos_y = max(0, target_h - qh - 25)
+                                    canvas.alpha_composite(qr_img, dest=(pos_x, pos_y))
+                                final_img = canvas.convert("RGB")
+                            except Exception as e:
+                                log_print(f"[Core] Error compositing QR overlay on standby image: {e}")
+
                     final_img.save(STANDBY_IMAGE_PATH, "PNG")
                     return
                 except Exception as e:
@@ -1908,6 +1957,25 @@ class StreamerCore:
             font_sub = get_pil_font(30, bold=False)
             draw.text((960, 480), "VRCYouTube Live Streamer", fill="#38BDF8", anchor="mm", font=font_title)
             draw.text((960, 560), "Standby — Queue is Empty", fill="#94A3B8", anchor="mm", font=font_sub)
+            # overlay_qr_enabled なら QR オーバーレイを合成
+            if bool(self.config.get("overlay_qr_enabled", False)):
+                qr_path = self.generate_qr_overlay_image()
+                if qr_path and os.path.exists(qr_path):
+                    try:
+                        qr_img = Image.open(qr_path).convert("RGBA")
+                        canvas = img.convert("RGBA")
+                        qr_mode = self.config.get("overlay_qr_mode", "bottom-right")
+                        if qr_mode == "fullscreen":
+                            canvas.alpha_composite(qr_img, dest=(0, 0))
+                        else:
+                            qw, qh = qr_img.size
+                            pos_x = max(0, 1920 - qw - 25)
+                            pos_y = max(0, 1080 - qh - 25)
+                            canvas.alpha_composite(qr_img, dest=(pos_x, pos_y))
+                        img = canvas.convert("RGB")
+                    except Exception as e:
+                        log_print(f"[Core] Error compositing QR overlay on fallback standby: {e}")
+
             try:
                 img.save(STANDBY_IMAGE_PATH, "PNG")
             except Exception as e:

@@ -2,6 +2,17 @@
 
 ## [2.7.0] - 2026-08-26
 
+### 📱 待機画面・通常動画・ラジオ全画面でのQRコード表示モード統括・修正 (QR Code Overlay & Standby Modes Fix)
+- **待機画面固定画像モード (`standby_mode: "image"`) での QR 合成対応**:
+  - `standby_mode == "image"` 時に `overlay_qr_enabled: true` が設定されている場合、固定画像（デフォルト画像・カスタム画像・フォールバック画面）上に Pillow (`alpha_composite`) でQRコードカードを自動合成するよう修正。
+- **動画・ラジオ共通の FFmpeg フィルタグラフビルダー (`_build_video_filter_complex`)**:
+  - 音声ストリームの分離有無に応じた入力インデックス（`qr_idx`）や `scale2ref` / `overlay` / `drawtext`（時計）の組み合わせを堅牢に組み立てるビルダーメソッドを新設。
+- **ラジオモードの QR オーバーレイ対応 (`play_radio`)**:
+  - `card` / `standby` 背景使用時、`overlay_qr_enabled` が有効な場合は動画再生時と同様に FFmpeg `-filter_complex` でQRコードを合成して配信。
+  - スライドショー（`slideshow`）は `get_image_for_playback()` でPillow合成済みのため、二重合成を自動防止。
+- **ユニットテストの整備**:
+  - `test_standby.py`（待機画面QR合成検証2件）および `test_qr_overlay.py`（ビルダー・QR画像生成検証9件）を追加。
+
 ### 🔒 Webリモコン パスワード/PIN認証保護機能 (Web Remote Password Protection / Web PIN)
 - **PIN / パスワード認証によるリモコン保護**:
   - `config.json` に `"web_password": ""`（未設定時は認証なし＝オプトイン）を追加。
