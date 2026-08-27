@@ -564,12 +564,15 @@ class App(ctk.CTk):
         self.add_frame = ctk.CTkFrame(self)
         self.add_frame.pack(fill="x", padx=20, pady=5)
 
-        self.url_entry = ctk.CTkEntry(self.add_frame, placeholder_text="Paste YouTube URL / Photo URL here...")
+        self.url_entry = ctk.CTkEntry(self.add_frame, placeholder_text="Paste YouTube URL / Media File Path here...")
         self.url_entry.pack(side="left", fill="x", expand=True, padx=(10, 5), pady=10)
         self.url_entry.bind("<Return>", lambda e: self.add_to_queue())
 
-        self.add_btn = ctk.CTkButton(self.add_frame, text="Add Video", width=85, command=self.add_to_queue)
+        self.add_btn = ctk.CTkButton(self.add_frame, text="Add URL", width=80, command=self.add_to_queue)
         self.add_btn.pack(side="right", padx=(5, 10), pady=10)
+
+        self.add_video_btn = ctk.CTkButton(self.add_frame, text="🎬 Add Video", width=95, fg_color="#1F618D", hover_color="#154360", command=self.add_video_file_gui)
+        self.add_video_btn.pack(side="right", padx=(0, 5), pady=10)
 
         self.add_photo_btn = ctk.CTkButton(self.add_frame, text="🖼 Add Photo", width=95, fg_color="#2E4053", hover_color="#1F2A36", command=self.add_photo_file)
         self.add_photo_btn.pack(side="right", padx=(0, 5), pady=10)
@@ -819,6 +822,32 @@ class App(ctk.CTk):
             self.streamer_core.set_image_duration(sec)
         except Exception:
             pass
+
+    def add_video_file_gui(self):
+        file_paths = filedialog.askopenfilenames(
+            title="Select Video File(s)",
+            filetypes=[
+                ("Video Files", "*.mp4;*.mov;*.webm;*.mkv;*.avi;*.m4v;*.ts;*.flv"),
+                ("All Files", "*.*")
+            ]
+        )
+        if not file_paths:
+            return
+
+        total = len(file_paths)
+        self.add_video_btn.configure(state="disabled", text=f"Adding (0/{total})...")
+
+        def bg_add():
+            added_count = 0
+            for i, fp in enumerate(file_paths):
+                self.after(0, lambda idx=i+1: self.add_video_btn.configure(text=f"Adding ({idx}/{total})..."))
+                item = self.streamer_core.add_video_file(fp)
+                if item:
+                    added_count += 1
+            log_print(f"[GUI] Added {added_count}/{total} video(s) to video queue.")
+            self.after(0, lambda: self.add_video_btn.configure(state="normal", text="🎬 Add Video"))
+
+        threading.Thread(target=bg_add, daemon=True).start()
 
     def add_photo_file(self):
         file_paths = filedialog.askopenfilenames(

@@ -9,7 +9,7 @@ import time
 import ipaddress
 import hmac
 from urllib.parse import urlparse
-from streamer_core import BASE_PATH, HLS_DIR, StreamerCore, log_print
+from streamer_core import BASE_PATH, HLS_DIR, StreamerCore, log_print, is_video_url_or_file, is_image_url_or_file
 
 def _ui_html_candidates():
     """
@@ -136,6 +136,7 @@ GLOBAL_AUTH_BLOCKED_UNTIL = 0.0
 
 MAX_REQUEST_BODY_BYTES = 64 * 1024
 MAX_UPLOAD_BODY_BYTES = 20 * 1024 * 1024 # 20MB
+MAX_VIDEO_UPLOAD_BODY_BYTES = 200 * 1024 * 1024 # 200MB
 
 def parse_multipart_file(body_bytes, content_type_header):
     """multipart/form-data からファイルバイナリとファイル名を取得"""
@@ -642,7 +643,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         if self.reject_if_auth_blocked(path):
             return
 
-        # 1. API: Photo Upload (写真・画像アップロード)
+        # 1. API: Media Upload (写真・画像・動画アップロード)
         if path == "/api/upload":
             if not self.check_web_password_auth():
                 self.send_json_response(401, {
@@ -654,14 +655,14 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             if not self.is_local_request() and not self.streamer_core.config.get("allow_web_queue_add", True):
                 self.send_json_response(403, {
                     "success": False,
-                    "message": "Forbidden: Adding photos from Web is disabled by the host."
+                    "message": "Forbidden: Adding media from Web is disabled by the host."
                 })
                 return
 
             if not self.is_local_request() and not self.check_upload_rate_limit():
                 self.send_json_response(429, {
                     "success": False,
-                    "message": (f"Rate limit exceeded: up to {UPLOAD_RATE_LIMIT_BURST} photos per "
+                    "message": (f"Rate limit exceeded: up to {UPLOAD_RATE_LIMIT_BURST} uploads per "
                                 f"{int(UPLOAD_RATE_LIMIT_WINDOW)} seconds. Please wait a moment.")
                 })
                 return
@@ -671,10 +672,16 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             except (TypeError, ValueError):
                 content_len = 0
 
-            if content_len <= 0 or content_len > MAX_UPLOAD_BODY_BYTES:
+            max_video_upload_bytes = (
+                self.streamer_core.config.get("max_video_upload_mb", 200) * 1024 * 1024
+                if self.streamer_core else MAX_VIDEO_UPLOAD_BODY_BYTES
+            )
+            max_limit = max(MAX_UPLOAD_BODY_BYTES, max_video_upload_bytes)
+
+            if content_len <= 0 or content_len > max_limit:
                 self.send_json_response(413, {
                     "success": False,
-                    "message": f"Invalid upload size or payload exceeds limit (max {MAX_UPLOAD_BODY_BYTES // (1024*1024)}MB)"
+                    "message": f"Invalid upload size or payload exceeds limit (max {max_limit // (1024*1024)}MB)"
                 })
                 return
 
@@ -685,30 +692,65 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             body_bytes = self.rfile.read(content_len)
             content_type = self.headers.get("Content-Type", "")
 
-            img_bytes, filename = None, "photo.jpg"
+            file_bytes, filename = None, "uploaded_file"
             if "multipart/form-data" in content_type:
-                img_bytes, filename = parse_multipart_file(body_bytes, content_type)
+                file_bytes, filename = parse_multipart_file(body_bytes, content_type)
             else:
-                img_bytes = body_bytes
-                filename = "uploaded_image.png"
+                file_bytes = body_bytes
+                filename = "uploaded_video.mp4" if "video" in content_type.lower() else "uploaded_image.png"
 
-            if not img_bytes:
-                self.send_json_response(400, {"success": False, "message": "Could not parse image data from upload request"})
+            if not file_bytes:
+                self.send_json_response(400, {"success": False, "message": "Could not parse media data from upload request"})
                 return
 
-            item = self.streamer_core.add_image_bytes(img_bytes, original_filename=filename)
-            if item:
-                self.send_json_response(200, {
-                    "success": True,
-                    "message": f"Successfully uploaded photo: {item.get('title')}",
-                    "item": item
-                })
+            is_video = (
+                is_video_url_or_file(filename) or
+                "video" in content_type.lower() or
+                (len(file_bytes) > 12 and b"ftyp" in file_bytes[:12])
+            )
+
+            if is_video:
+                if len(file_bytes) > max_video_upload_bytes:
+                    self.send_json_response(413, {
+                        "success": False,
+                        "message": f"Video upload size exceeds limit (max {max_video_upload_bytes // (1024*1024)}MB)"
+                    })
+                    return
+                item = self.streamer_core.add_video_bytes(file_bytes, original_filename=filename)
+                if item:
+                    self.send_json_response(200, {
+                        "success": True,
+                        "type": "video",
+                        "message": f"Successfully uploaded video: {item.get('title')}",
+                        "item": item
+                    })
+                else:
+                    self.send_json_response(400, {
+                        "success": False,
+                        "message": "Failed to process video (unsupported video format or queue full)"
+                    })
+                return
             else:
-                self.send_json_response(400, {
-                    "success": False,
-                    "message": "Failed to process image (unsupported image format or queue full)"
-                })
-            return
+                if len(file_bytes) > MAX_UPLOAD_BODY_BYTES:
+                    self.send_json_response(413, {
+                        "success": False,
+                        "message": f"Photo upload size exceeds limit (max {MAX_UPLOAD_BODY_BYTES // (1024*1024)}MB)"
+                    })
+                    return
+                item = self.streamer_core.add_image_bytes(file_bytes, original_filename=filename)
+                if item:
+                    self.send_json_response(200, {
+                        "success": True,
+                        "type": "image",
+                        "message": f"Successfully uploaded photo: {item.get('title')}",
+                        "item": item
+                    })
+                else:
+                    self.send_json_response(400, {
+                        "success": False,
+                        "message": "Failed to process image (unsupported image format or queue full)"
+                    })
+                return
 
         # ボディ取得（JSON用サイズ上限 64KB）
         try:

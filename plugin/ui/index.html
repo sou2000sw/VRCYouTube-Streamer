@@ -320,22 +320,22 @@
                         </div>
                     </div>
 
-                    <!-- Photo Upload Card -->
+                    <!-- Media Upload Card (Photo & Video) -->
                     <div class="lg:col-span-5 bg-card border border-border rounded-lg p-3 sm:p-4 flex flex-col gap-3">
                         <div class="flex items-center justify-between">
                             <div class="flex items-center gap-2">
-                                <i class="ri-image-add-line text-emerald-400 text-base"></i>
-                                <span class="font-semibold text-xs text-zinc-200">写真・スライドショー共有</span>
+                                <i class="ri-folder-upload-line text-emerald-400 text-base"></i>
+                                <span class="font-semibold text-xs text-zinc-200">写真・動画ファイル共有</span>
                             </div>
-                            <span class="text-[10px] text-zinc-500">複数枚一括対応</span>
+                            <span class="text-[10px] text-zinc-500">一括アップロード対応</span>
                         </div>
 
                         <div id="dropZone" onclick="document.getElementById('fileInput').click()" 
                             class="border border-dashed border-zinc-700 hover:border-emerald-500/80 bg-zinc-900/60 hover:bg-zinc-900 rounded p-3 text-center cursor-pointer transition flex flex-col items-center gap-1">
                             <i class="ri-upload-cloud-line text-xl text-zinc-400"></i>
-                            <span class="text-xs text-zinc-300 font-medium">タップして写真を選択 / ドロップ</span>
-                            <span class="text-[10px] text-zinc-500">JPEG, PNG, WebP, GIF (最大20MB)</span>
-                            <input type="file" id="fileInput" multiple accept="image/*" class="hidden" onchange="handleImageFiles(this.files)">
+                            <span class="text-xs text-zinc-300 font-medium">タップして写真/動画を選択 / ドロップ</span>
+                            <span class="text-[10px] text-zinc-500">画像 (JPEG, PNG, WebP) / 動画 (MP4, MOV, WebM)</span>
+                            <input type="file" id="fileInput" multiple accept="image/*,video/mp4,video/webm,video/quicktime,video/*" class="hidden" onchange="handleImageFiles(this.files)">
                         </div>
                     </div>
                 </div>
@@ -1745,9 +1745,9 @@
 
             container.innerHTML = entries.map(({ item, realIndex }) => {
                 const index = realIndex;
-                const duration = formatDuration(item.duration);
-                const typeLabel = item.is_radio ? 'RADIO' : ((item.is_image || item.type === 'image') ? 'PHOTO' : 'VIDEO');
-                const typeBadgeColor = item.is_radio ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : ((item.is_image || item.type === 'image') ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-sky-500/10 text-sky-400 border-sky-500/20');
+                const isLocalVideo = Boolean(item.is_local || item.type === 'local_video');
+                const typeLabel = item.is_radio ? 'RADIO' : (isLocalVideo ? 'LOCAL' : ((item.is_image || item.type === 'image') ? 'PHOTO' : 'VIDEO'));
+                const typeBadgeColor = item.is_radio ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : (isLocalVideo ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' : ((item.is_image || item.type === 'image') ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-sky-500/10 text-sky-400 border-sky-500/20'));
 
                 return `
                     <div class="queue-row p-2.5 px-3 flex items-center justify-between gap-2.5 hover:bg-zinc-800/40 transition group" 
@@ -1989,13 +1989,14 @@
         async function handleImageFiles(files) {
             if (!files || files.length === 0) return;
 
-            showToast(`${files.length}枚の画像をアップロード中...`, 'info');
+            const isSingleVideo = (files.length === 1 && (files[0].type.startsWith('video/') || /\.(mp4|mov|webm|mkv|avi|m4v|ts|flv)$/i.test(files[0].name)));
+            showToast(isSingleVideo ? '動画をアップロード中...' : `${files.length}件のメディアをアップロード中...`, 'info');
 
             let successCount = 0;
             let lastError = '';
             for (let i = 0; i < files.length; i++) {
                 const formData = new FormData();
-                formData.append('image', files[i]);
+                formData.append('file', files[i]);
 
                 try {
                     const res = await fetch(`${apiBase}/api/upload`, {
@@ -2015,13 +2016,13 @@
             }
 
             if (successCount === files.length) {
-                showToast(`${successCount}枚の画像を追加しました`, 'success');
+                showToast(isSingleVideo ? '動画をキューに追加しました' : `${successCount}件のメディアを追加しました`, 'success');
                 checkServerHealth(true);
             } else if (successCount > 0) {
-                showToast(`${successCount}/${files.length}枚を追加しました（失敗: ${lastError}）`, 'warning');
+                showToast(`${successCount}/${files.length}件を追加しました（失敗: ${lastError}）`, 'warning');
                 checkServerHealth(true);
             } else {
-                showToast(`画像の追加に失敗しました: ${lastError || '不明なエラー'}`, 'danger');
+                showToast(`追加に失敗しました: ${lastError || '不明なエラー'}`, 'danger');
             }
         }
 

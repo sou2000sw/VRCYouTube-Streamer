@@ -38,6 +38,8 @@ DEFAULT_STANDBY_IMAGE_PATH = os.path.join(BASE_PATH, "assets", "standby_default.
 QR_OVERLAY_PATH = os.path.join(HLS_DIR, "qr_overlay.png")
 CLOUDFLARED_EXE = os.path.join(BASE_PATH, "cloudflared.exe")
 LOCAL_FFMPEG = os.path.join(APP_DIR, "ffmpeg.exe")
+LOCAL_FFPROBE = os.path.join(APP_DIR, "ffprobe.exe")
+VIDEO_STORAGE_DIR = os.path.join(HLS_DIR, "videos")
 
 def cleanup_hls_dir_completely():
     """HLS出力ディレクトリ内の全一時ファイル・フォルダを完全消去する（atexit ハンドラ）。"""
@@ -101,7 +103,8 @@ DEFAULT_CONFIG = {
     "radio_bg_source": "card",
     "standby_mode": "image",
     "standby_image_path": "",
-    "web_password": ""
+    "web_password": "",
+    "max_video_upload_mb": 200
 }
 
 def log_print(msg):
@@ -114,6 +117,11 @@ def get_ffmpeg_cmd():
     if os.path.exists(LOCAL_FFMPEG):
         return LOCAL_FFMPEG
     return "ffmpeg"
+
+def get_ffprobe_cmd():
+    if os.path.exists(LOCAL_FFPROBE):
+        return LOCAL_FFPROBE
+    return "ffprobe"
 
 def kill_proc(proc):
     if not proc:
@@ -263,12 +271,67 @@ def is_image_url_or_file(path_or_url):
     clean = path_or_url.split("?")[0].split("#")[0].lower()
     return clean.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"))
 
+def is_video_url_or_file(path_or_url):
+    """パスまたはURLが動画形式かどうかを判定"""
+    if not path_or_url or not isinstance(path_or_url, str):
+        return False
+    clean = path_or_url.split("?")[0].split("#")[0].lower()
+    return clean.endswith((".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".ts", ".flv"))
+
+def get_video_file_duration(file_path):
+    """ffprobe または ffmpeg を用いてローカル動画の再生時間（秒）を取得"""
+    if not file_path or not os.path.exists(file_path):
+        return 0.0
+    try:
+        cmd = [
+            get_ffprobe_cmd(),
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            file_path
+        ]
+        res = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, timeout=5,
+            creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            val = float(res.stdout.strip())
+            if val > 0:
+                return val
+    except Exception:
+        pass
+
+    try:
+        cmd = [get_ffmpeg_cmd(), "-i", file_path]
+        res = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, timeout=5,
+            creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", res.stderr)
+        if m:
+            hours, minutes, seconds = float(m.group(1)), float(m.group(2)), float(m.group(3))
+            return hours * 3600 + minutes * 60 + seconds
+    except Exception:
+        pass
+    return 0.0
+
 def extract_pts_from_ts_chunk(chunk):
-    """MPEG-TSチャンクから最新のPTS（タイムスタンプ・秒単位）を抽出"""
+    """MPEG-TSチャンクから再生位置PTS（秒）を抽出する。
+
+    映像PES・音声PESそれぞれの最新PTSを個別に拾い、**遅れている方（min）** を返す。
+    以前は「チャンク内で最後に見つかったPTS」をそのまま返していたため、
+    映像だけが音声より数十秒先行して多重化された場合（concat スライドショー背景で発生）、
+    relay_stream_data のペーシングが先行した映像PTSを実際の配信位置と誤認し、
+    先読みバッファ制御が効かずに実時間の数倍速で送出しきってしまっていた。
+    配信位置として意味を持つのは遅れている側なので min を採用する。
+    """
     length = len(chunk)
     if length < 188:
         return None
-    latest_pts = None
+    latest_video_pts = None
+    latest_audio_pts = None
     offset = 0
     while offset + 188 <= length:
         if chunk[offset] == 0x47:
@@ -284,7 +347,9 @@ def extract_pts_from_ts_chunk(chunk):
             if payload_unit_start and payload_offset + 9 <= 188:
                 if pkt[payload_offset] == 0x00 and pkt[payload_offset+1] == 0x00 and pkt[payload_offset+2] == 0x01:
                     stream_id = pkt[payload_offset+3]
-                    if (0xE0 <= stream_id <= 0xEF) or (0xC0 <= stream_id <= 0xDF):
+                    is_video = 0xE0 <= stream_id <= 0xEF
+                    is_audio = 0xC0 <= stream_id <= 0xDF
+                    if is_video or is_audio:
                         flags2 = pkt[payload_offset+7]
                         pts_flag = (flags2 >> 7) & 0x01
                         if pts_flag and payload_offset + 14 <= 188:
@@ -296,14 +361,22 @@ def extract_pts_from_ts_chunk(chunk):
                             pts = (((b0 & 0x0E) << 29) | ((b1 & 0xFF) << 22) |
                                    ((b2 & 0xFE) << 14) | ((b3 & 0xFF) << 7) |
                                    ((b4 & 0xFE) >> 1))
-                            latest_pts = pts / 90000.0
+                            pts_sec = pts / 90000.0
+                            if is_video:
+                                latest_video_pts = pts_sec
+                            else:
+                                latest_audio_pts = pts_sec
             offset += 188
         else:
             next_sync = chunk.find(b'\x47', offset + 1)
             if next_sync == -1:
                 break
             offset = next_sync
-    return latest_pts
+
+    found = [p for p in (latest_video_pts, latest_audio_pts) if p is not None]
+    if not found:
+        return None
+    return min(found)
 
 class StreamerCore:
     def __init__(self, override_port=None, override_host=None, override_enable_tunnel=None):
@@ -374,7 +447,7 @@ class StreamerCore:
         """
         if not os.path.exists(HLS_DIR):
             return
-        preserved = {"images"} if preserve_images else set()
+        preserved = {"images", "videos"} if preserve_images else set()
         for attempt in range(5):
             try:
                 remaining = False
@@ -715,15 +788,17 @@ class StreamerCore:
 
                 # PTSの抽出と再生進捗の更新（ペーシング有効時）
                 if is_paced:
-                    # 実経過時間と先行マージンの計算
-                    wall_elapsed = time.time() - start_wall_time
-                    ahead = current_stream_pos - wall_elapsed
-
-                    # 先行秒数が目標バッファ（15秒）を超えている場合、実時間が進むまで待機
-                    if ahead > BUFFER_AHEAD_SECONDS:
-                        sleep_time = min(0.2, ahead - BUFFER_AHEAD_SECONDS)
-                        if sleep_time > 0.02:
-                            time.sleep(sleep_time)
+                    # 先行秒数が目標バッファ（15秒）に収まるまで「実時間が追いつくのを待ち切る」。
+                    # 以前は1チャンクにつき最大0.2秒しか眠らなかったため、
+                    # 送信側FFmpegの出力レートが高いと待機が追いつかず先行秒数が青天井に増加し、
+                    # 曲の残り全部を数十秒で送出しきってプレイリスト更新が止まっていた
+                    # （＝視聴側ではセグメントが尽きて配信停止に見える）。
+                    while not stop_event.is_set() and self.is_running:
+                        wall_elapsed = time.time() - start_wall_time
+                        ahead = current_stream_pos - wall_elapsed
+                        if ahead <= BUFFER_AHEAD_SECONDS:
+                            break
+                        time.sleep(min(0.2, max(0.02, ahead - BUFFER_AHEAD_SECONDS)))
 
                 try:
                     stdin_to_write.write(data)
@@ -1135,33 +1210,49 @@ class StreamerCore:
         return None
 
     def play_radio(self, video_info, seek_seconds=0):
-        """BGM/ラジオモード: YouTube音声ストリーム + 静止画/写真を合成し、極小帯域でHLS配信"""
-        url = video_info["url"]
+        """BGM/ラジオモード: YouTube音声ストリーム / ローカル動画音声 + 静止画/写真を合成し、極小帯域でHLS配信"""
+        url = video_info.get("url", "")
+        is_local = bool(video_info.get("is_local") or video_info.get("type") == "local_video" or (video_info.get("path") and os.path.exists(video_info["path"])))
         try:
-            cached = None
-            with self.prefetch_lock:
-                if url in self.prefetch_cache and self.prefetch_cache[url].get("is_radio"):
-                    c = self.prefetch_cache.pop(url)
-                    if time.time() - c.get("timestamp", 0) < 600:
-                        cached = c
-
-            if cached:
-                audio_url = cached["audio_url"]
-                title = cached["title"]
-                duration = cached["duration"]
-                headers = cached["headers"]
-                metadata = cached.get("meta") or {"title": title, "duration": duration}
-                log_print(f"[Radio] Using pre-fetched audio URL for: {title}")
+            if is_local:
+                audio_url = os.path.abspath(video_info.get("path") or url)
+                title = video_info.get("title") or os.path.splitext(os.path.basename(audio_url))[0]
+                duration = video_info.get("duration", 0)
+                if not duration:
+                    duration = get_video_file_duration(audio_url)
+                headers = None
+                metadata = {
+                    "title": title,
+                    "artist": "Local Video",
+                    "duration": duration,
+                    "id": video_info.get("id", "")
+                }
+                log_print(f"[Radio] Using local video audio: {title}")
             else:
-                res = self.get_audio_only_stream_urls(url)
-                if len(res) >= 5:
-                    audio_url, title, duration, headers, metadata = res[:5]
+                cached = None
+                with self.prefetch_lock:
+                    if url in self.prefetch_cache and self.prefetch_cache[url].get("is_radio"):
+                        c = self.prefetch_cache.pop(url)
+                        if time.time() - c.get("timestamp", 0) < 600:
+                            cached = c
+
+                if cached:
+                    audio_url = cached["audio_url"]
+                    title = cached["title"]
+                    duration = cached["duration"]
+                    headers = cached["headers"]
+                    metadata = cached.get("meta") or {"title": title, "duration": duration}
+                    log_print(f"[Radio] Using pre-fetched audio URL for: {title}")
                 else:
-                    audio_url, title, duration, headers = res[:4]
-                    metadata = {"title": title, "duration": duration}
+                    res = self.get_audio_only_stream_urls(url)
+                    if len(res) >= 5:
+                        audio_url, title, duration, headers, metadata = res[:5]
+                    else:
+                        audio_url, title, duration, headers = res[:4]
+                        metadata = {"title": title, "duration": duration}
 
             if not audio_url:
-                raise ValueError("No audio stream URL returned by yt-dlp")
+                raise ValueError("No audio stream URL returned")
             self.current_video = {
                 "title": f"📻 {title}",
                 "url": url,
@@ -1247,16 +1338,18 @@ class StreamerCore:
         if headers:
             headers_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
 
-        input_opts = [
-            "-reconnect", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "2",
-            "-reconnect_on_network_error", "1",
-            "-reconnect_on_http_error", "4xx,5xx",
-            "-rw_timeout", "10000000",
-        ]
-        if headers_str:
-            input_opts.extend(["-headers", headers_str])
+        input_opts = []
+        if not is_local:
+            input_opts.extend([
+                "-reconnect", "1",
+                "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "2",
+                "-reconnect_on_network_error", "1",
+                "-reconnect_on_http_error", "4xx,5xx",
+                "-rw_timeout", "10000000",
+            ])
+            if headers_str:
+                input_opts.extend(["-headers", headers_str])
         if seek_seconds > 0:
             input_opts.extend(["-ss", str(int(seek_seconds))])
 
@@ -1323,6 +1416,13 @@ class StreamerCore:
             "-flush_packets", "1",
             "-muxdelay", "0",
             "-muxpreload", "0",
+            # 映像と音声を必ず時刻順に多重化する（先行した側を待ち合わせる）。
+            # スライドショー背景は concat + -stream_loop -1 のため、マニフェストが
+            # 一周するたびに映像PTSだけが音声より十数秒〜25秒先へ飛び、
+            # 既定の max_interleave_delta(10秒) を超えて「過去に戻るDTS」を
+            # 受信側FFmpegへ流し込んでいた。受信側HLS multiplexerはそこで
+            # セグメント出力を停止し、配信が固まっていた。
+            "-max_interleave_delta", "0",
             "-f", "mpegts", "pipe:1"
         ])
 
@@ -1349,24 +1449,35 @@ class StreamerCore:
         return stop_event
 
     def play_video(self, video_info, seek_seconds=0):
-        url = video_info["url"]
+        url = video_info.get("url", "")
+        is_local = bool(video_info.get("is_local") or video_info.get("type") == "local_video" or (video_info.get("path") and os.path.exists(video_info["path"])))
         try:
-            cached = None
-            with self.prefetch_lock:
-                if url in self.prefetch_cache and not self.prefetch_cache[url].get("is_radio"):
-                    c = self.prefetch_cache.pop(url)
-                    if time.time() - c.get("timestamp", 0) < 600:
-                        cached = c
-
-            if cached:
-                video_url = cached["video_url"]
-                audio_url = cached["audio_url"]
-                title = cached["title"]
-                duration = cached["duration"]
-                headers = cached["headers"]
-                log_print(f"[Player] Using pre-fetched stream URLs for: {title}")
+            if is_local:
+                video_url = os.path.abspath(video_info.get("path") or url)
+                audio_url = None
+                title = video_info.get("title") or os.path.splitext(os.path.basename(video_url))[0]
+                duration = video_info.get("duration", 0)
+                if not duration:
+                    duration = get_video_file_duration(video_url)
+                headers = None
+                log_print(f"[Player] Using local video file: {title} ({video_url})")
             else:
-                video_url, audio_url, title, duration, headers = self.get_stream_urls(url)
+                cached = None
+                with self.prefetch_lock:
+                    if url in self.prefetch_cache and not self.prefetch_cache[url].get("is_radio"):
+                        c = self.prefetch_cache.pop(url)
+                        if time.time() - c.get("timestamp", 0) < 600:
+                            cached = c
+
+                if cached:
+                    video_url = cached["video_url"]
+                    audio_url = cached["audio_url"]
+                    title = cached["title"]
+                    duration = cached["duration"]
+                    headers = cached["headers"]
+                    log_print(f"[Player] Using pre-fetched stream URLs for: {title}")
+                else:
+                    video_url, audio_url, title, duration, headers = self.get_stream_urls(url)
 
             self.current_video = {
                 "title": title,
@@ -1393,16 +1504,18 @@ class StreamerCore:
         if headers:
             headers_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
 
-        input_opts = [
-            "-reconnect", "1",
-            "-reconnect_streamed", "1",
-            "-reconnect_delay_max", "2",
-            "-reconnect_on_network_error", "1",
-            "-reconnect_on_http_error", "4xx,5xx",
-            "-rw_timeout", "10000000",
-        ]
-        if headers_str:
-            input_opts.extend(["-headers", headers_str])
+        input_opts = []
+        if not is_local:
+            input_opts.extend([
+                "-reconnect", "1",
+                "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "2",
+                "-reconnect_on_network_error", "1",
+                "-reconnect_on_http_error", "4xx,5xx",
+                "-rw_timeout", "10000000",
+            ])
+            if headers_str:
+                input_opts.extend(["-headers", headers_str])
         if seek_seconds > 0:
             input_opts.extend(["-ss", str(int(seek_seconds))])
 
@@ -1425,7 +1538,7 @@ class StreamerCore:
         has_qr = bool(overlay_video and qr_overlay_file and os.path.exists(qr_overlay_file))
         has_clock = bool(clock_video)
 
-        if has_qr or has_clock:
+        if has_qr or has_clock or is_local:
             if has_qr:
                 qr_idx = 2 if audio_url else 1
                 cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])
@@ -1436,10 +1549,13 @@ class StreamerCore:
 
             overlay_filter = self._build_video_filter_complex(has_qr, has_clock, qr_idx, mode, clock_filter)
 
-            cmd.extend([
-                "-filter_complex", overlay_filter,
-                "-map", "[vout]"
-            ])
+            if overlay_filter:
+                cmd.extend([
+                    "-filter_complex", overlay_filter,
+                    "-map", "[vout]"
+                ])
+            else:
+                cmd.extend(["-map", "0:v:0"])
             if audio_url:
                 cmd.extend(["-map", "1:a:0"])
             else:
@@ -1556,6 +1672,63 @@ class StreamerCore:
         except Exception as e:
             log_print(f"[Core] Error optimizing image: {e}")
             return None
+
+    def add_video_file(self, file_path, title=None, original_filename=None, is_uploaded=False):
+        """ローカル動画ファイルを動画キュー (play_queue) に追加"""
+        with self.queue_lock:
+            if len(self.play_queue) >= MAX_QUEUE_CAPACITY:
+                log_print(f"[Core] Queue capacity reached ({MAX_QUEUE_CAPACITY}).")
+                return None
+
+        if not os.path.exists(file_path):
+            log_print(f"[Core] Video file not found: {file_path}")
+            return None
+
+        clean_orig = original_filename or os.path.basename(file_path)
+        if not title:
+            base_name = os.path.splitext(clean_orig)[0]
+            title = f"🎬 {base_name}" if not base_name.startswith("🎬") else base_name
+
+        duration = get_video_file_duration(file_path)
+        video_id = f"v_{uuid.uuid4().hex[:8]}"
+        item = {
+            "id": video_id,
+            "type": "local_video",
+            "title": title,
+            "url": os.path.abspath(file_path),
+            "path": os.path.abspath(file_path),
+            "original_filename": clean_orig,
+            "duration": duration,
+            "is_local": True,
+            "is_uploaded": is_uploaded
+        }
+        with self.queue_lock:
+            self.play_queue.append(item)
+        log_print(f"[Core] Added local video to queue: {title} (id: {video_id}, {duration:.1f}s)")
+        return item
+
+    def add_video_bytes(self, video_bytes, original_filename="video.mp4"):
+        """アップロードされた動画バイナリを videos フォルダに保存してキューに追加"""
+        with self.queue_lock:
+            if len(self.play_queue) >= MAX_QUEUE_CAPACITY:
+                log_print(f"[Core] Queue capacity reached ({MAX_QUEUE_CAPACITY}).")
+                return None
+
+        os.makedirs(VIDEO_STORAGE_DIR, exist_ok=True)
+        ext = os.path.splitext(original_filename)[1].lower()
+        if ext not in (".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".ts", ".flv"):
+            ext = ".mp4"
+        saved_filename = f"upload_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
+        saved_path = os.path.join(VIDEO_STORAGE_DIR, saved_filename)
+
+        try:
+            with open(saved_path, "wb") as f:
+                f.write(video_bytes)
+        except Exception as e:
+            log_print(f"[Core] Failed to save uploaded video file: {e}")
+            return None
+
+        return self.add_video_file(saved_path, original_filename=original_filename, is_uploaded=True)
 
     def add_image_file(self, file_path, title=None):
         """ローカル画像ファイルを最適化して写真プールに追加"""
@@ -1755,14 +1928,22 @@ class StreamerCore:
         return stop_event
 
     def add_to_queue(self, url):
-        """URL（動画または画像）を解析してキューに追加"""
+        """URL（動画または画像）またはローカルファイルパスを解析してキューに追加"""
         with self.queue_lock:
             if len(self.play_queue) >= MAX_QUEUE_CAPACITY:
                 log_print(f"[Core] Cannot add items: Queue reached max capacity ({MAX_QUEUE_CAPACITY}).")
                 return []
 
-        # 画像URLの場合
+        # ローカル動画ファイルの場合
+        if is_video_url_or_file(url) and os.path.exists(url):
+            item = self.add_video_file(url)
+            return [item] if item else []
+
+        # 画像URLまたはローカル画像ファイルの場合
         if is_image_url_or_file(url):
+            if os.path.exists(url):
+                item = self.add_image_file(url)
+                return [item] if item else []
             is_safe, reason = is_safe_url(url)
             if not is_safe:
                 log_print(f"[Core] Rejected unsafe image URL: {reason}")
@@ -1799,6 +1980,12 @@ class StreamerCore:
 
     def clear_queue(self):
         with self.queue_lock:
+            for item in self.play_queue:
+                if item.get("is_uploaded") and item.get("path") and os.path.exists(item["path"]):
+                    try:
+                        os.remove(item["path"])
+                    except Exception:
+                        pass
             self.play_queue.clear()
         log_print("[Core] Queue cleared.")
 
@@ -1806,6 +1993,11 @@ class StreamerCore:
         with self.queue_lock:
             if 0 <= idx < len(self.play_queue):
                 removed = self.play_queue.pop(idx)
+                if removed.get("is_uploaded") and removed.get("path") and os.path.exists(removed["path"]):
+                    try:
+                        os.remove(removed["path"])
+                    except Exception:
+                        pass
                 log_print(f"[Core] Removed item at index {idx} ({removed.get('title')}) from queue.")
                 return removed
         return None
@@ -1938,6 +2130,33 @@ class StreamerCore:
         qr_path = self.generate_qr_overlay_image() if overlay_enabled else None
         has_qr = bool(qr_path and os.path.exists(qr_path))
 
+        # キャッシュキーは「元画像 + 合成するオーバーレイの内容」だけで決まる安定値にする。
+        # 以前は呼び出し側の連番 unique_id をキーに混ぜていたため、シャッフル有効時は
+        # 曲が変わるたびに同じ写真が別名で再生成され、1曲ごとに写真枚数ぶんの
+        # リサイズ＋PNG保存（200枚なら数十秒）が走って送信再開が遅れ、
+        # さらにキャッシュファイルが際限なく増え続けていた。
+        try:
+            src_stat = os.stat(image_path)
+            key_parts = [os.path.abspath(image_path), str(int(src_stat.st_mtime)), str(src_stat.st_size),
+                         str(overlay_enabled)]
+        except OSError:
+            key_parts = [os.path.abspath(image_path), str(overlay_enabled)]
+        if has_qr:
+            try:
+                qr_stat = os.stat(qr_path)
+                # QRの内容（URL）が変わればキャッシュも作り直す
+                key_parts.append(f"{int(qr_stat.st_mtime)}_{qr_stat.st_size}")
+            except OSError:
+                pass
+            key_parts.append(str(self.config.get("overlay_qr_mode", "bottom-right")))
+        path_hash = hashlib.md5("_".join(key_parts).encode()).hexdigest()[:12]
+        temp_path = os.path.join(IMAGE_CACHE_DIR, f"playback_prep_{path_hash}.png")
+        try:
+            if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                return temp_path
+        except OSError:
+            pass
+
         try:
             # 1. 元画像を読み込み、EXIFの向きを補正
             src_img = Image.open(image_path)
@@ -1975,12 +2194,13 @@ class StreamerCore:
                     pos_y = max(0, target_h - qh - 25)
                     canvas.alpha_composite(qr_img, dest=(pos_x, pos_y))
 
-            # 4. 一時ファイルとして保存（衝突しないユニークな名前）
+            # 4. キャッシュファイルとして保存。
+            # 配信中のFFmpegが concat マニフェスト経由で同じパスを読み直すため、
+            # 書きかけのファイルを掴ませないよう一時名で書いてから置換する。
             os.makedirs(IMAGE_CACHE_DIR, exist_ok=True)
-            path_hash = hashlib.md5(f"{os.path.abspath(image_path)}_{overlay_enabled}_{unique_id}".encode()).hexdigest()[:8]
-            id_tag = f"_{unique_id}" if unique_id is not None else ""
-            temp_path = os.path.join(IMAGE_CACHE_DIR, f"playback_prep{id_tag}_{path_hash}.png")
-            canvas.convert("RGB").save(temp_path, "PNG")
+            tmp_write_path = f"{temp_path}.{uuid.uuid4().hex[:6]}.part"
+            canvas.convert("RGB").save(tmp_write_path, "PNG")
+            os.replace(tmp_write_path, temp_path)
             return temp_path
         except Exception as e:
             log_print(f"[Core] Failed to prepare playback image ({image_path}): {e}")

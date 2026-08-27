@@ -25,5 +25,6 @@
   "radio_bg_source": "slideshow",
   "standby_mode": "image",
   "standby_image_path": "",
-  "web_password": ""
+  "web_password": "",
+  "max_video_upload_mb": 200
 }
