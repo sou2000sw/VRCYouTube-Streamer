@@ -205,7 +205,12 @@ def test_live_clock_and_resync_overlay():
 
     clock_filter = get_live_clock_drawtext_filter(x="w-tw-45", y="26", font_size=28)
     assert "drawtext=" in clock_filter
-    assert "text='● LIVE %{localtime\\:%H\\:%M\\:%S} JST'" in clock_filter
+    # %T は strftime の %H:%M:%S 相当。時刻書式に「:」を直接書くと
+    # フィルタグラフ解析でエスケープが外れ、localtime に4引数が渡って
+    # 「%{localtime} requires at most 1 arguments」となり描画自体が消える。
+    assert "text='● LIVE %{localtime\\:%T} JST'" in clock_filter
+    # 回帰防止：「:」直書きの時刻書式に戻していないことを確かめる。
+    assert "%H" not in clock_filter and "%M" not in clock_filter
     assert "boxcolor=0x0F172A@0.82" in clock_filter
     assert "fontsize=28" in clock_filter
     print("Generated live clock drawtext filter:", clock_filter)
