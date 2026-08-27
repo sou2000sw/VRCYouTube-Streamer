@@ -13,20 +13,14 @@
 | **3** | 🔀 キュー操作 | **キューの表示専用ソート＆種別絞り込み機能** (Display Sort & Filtering) | v2.3.0 | 🟢 **実装完了 ✅** |
 | **4** | 📊 帯域・診断 | **配信ビットレート・遅延・FPSのリアルタイム診断表示** (Diagnostics Dashboard) | v2.4.0 | 🟢 **実装完了 ✅** |
 | **5** | 📱 UI/統合 | **スマホ向け写真・スクショ一括アップロード機能** (Batch Photo Upload) | v2.4.0 | 🟢 **実装完了 ✅** |
-| **6** | 🖼️ 背景選択 | **BGM/ラジオモード時の背景切り替え機能** (Radio Background Selector) | **v2.7.0(再修正)** | 🟡 **実装完了（実機・手動未確認 🧪）** |
+| **6** | 🖼️ 背景選択 | **BGM/ラジオモード時の背景切り替え機能** (Radio Background Selector) | **v2.7.0(再修正)** | 🟢 **実装完了 ✅** |
 | **7** | 🎬 互換性 | **実機検証済み対応動画元・プラットフォームの仕様明記** (Platform Compatibility) | v2.5.0 | 🟢 **実装完了 ✅** |
 | **8** | 🧩 プラグイン | **Webリモコン＆VRCBeaconプラグインUIの完全統合＆UI正本配置整理** (Integrated UI) | v2.6.0 | 🟢 **実装完了 ✅** |
-| **9** | 📻 モード分離 | **再生モード3分岐 ＆ 写真・動画キュー完全分離 ＆ スライドショー安定化** (Playback Modes) | **v2.7.0** | 🟡 **実装完了（実機・手動未確認 🧪）** |
-| **10** | 📱 QRオーバーレイ | **待機画面・通常動画・ラジオ全画面でのQRコード表示モード統括・修正** (QR Overlay) | **v2.7.0** | 🟡 **実装完了（実機・手動未確認 🧪）** |
-| **11** | ⏰ 時計表示 | **配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化** (Live Clock Overlay) | **v2.7.0** | 🟡 **実装完了（実機・手動未確認 🧪）** |
+| **9** | 📻 モード分離 | **再生モード3分岐 ＆ 写真・動画キュー完全分離 ＆ スライドショー安定化** (Playback Modes) | **v2.7.0** | 🟢 **実装完了 ✅** |
+| **10** | 📱 QRオーバーレイ | **待機画面・通常動画・ラジオ全画面でのQRコード表示モード統括・修正** (QR Overlay) | **v2.7.0** | 🟢 **実装完了 ✅** |
+| **11** | ⏰ 時計表示 | **配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化** (Live Clock Overlay) | **v2.7.0** | 🔴 **実機NG・要修正 🐛** |
 | **12** | 🏷️ 名称変更 | **アプリの名称変更およびREADME・ウィンドウタイトル・UI表記の刷新** (App Renaming) | **v2.8.0** | 🟢 **実装完了 ✅** |
-| **13** | 🎬 動画対応 | **写真に加えてMP4等のローカル動画ファイルアップロード・再生対応** (Local Video Upload) | **v2.8.0** | 🟡 **実装完了（実機・手動未確認 🧪）** |��** |
-| **8** | 🧩 プラグイン | **Webリモコン＆VRCBeaconプラグインUIの完全統合＆UI正本配置整理** (Integrated UI) | v2.6.0 | 🟢 **実装完了 ✅** |
-| **9** | 📻 モード分離 | **再生モード3分岐 ＆ 写真・動画キュー完全分離 ＆ スライドショー安定化** (Playback Modes) | **v2.7.0** | 🟡 **実装完了（実機・手動未確認 🧪）** |
-| **10** | 📱 QRオーバーレイ | **待機画面・通常動画・ラジオ全画面でのQRコード表示モード統括・修正** (QR Overlay) | **v2.7.0** | 🟡 **実装完了（実機・手動未確認 🧪）** |
-| **11** | ⏰ 時計表示 | **配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化** (Live Clock Overlay) | **v2.7.0** | 🟡 **実装完了（実機・手動未確認 🧪）** |
-| **12** | 🏷️ 名称変更 | **アプリの名称変更およびREADME・ウィンドウタイトル・UI表記の刷新** (App Renaming) | **v2.8.0 / 次期** | 📝 **実装予定** |
-| **13** | 🎬 動画対応 | **写真に加えてMP4等のローカル動画ファイルアップロード・再生対応** (Local Video Upload) | **v2.8.0** | 🟡 **実装完了（実機・手動未確認 🧪）** |
+| **13** | 🎬 動画対応 | **写真に加えてMP4等のローカル動画ファイルアップロード・再生対応** (Local Video Upload) | **v2.8.0** | 🟢 **実装完了 ✅** |
 
 ---
 
@@ -187,109 +181,6 @@ YouTube側のプレイヤー仕様変更や暗号化シグネチャ変更（n-si
    - Webリモコン / ホスト設定画面に「クロスフェード秒数」スライダーを追加。
 
 ### 変更対象予定ファイル
-- `streamer_core.py`（クロスフェード用オーディオ合成3. **ビルドおよび起動スクリプト**:
-   - `build_exe.py` / `VRC_Media_Streamer.spec`: 出力EXE名、ZIPアーカイブ名、バッチファイル内の文言および起動コマンド。
-   - `Start_Normal.bat` / `Start_LocalTest.bat`: 表示ログや起動メッセージ。
-4. **プラグイン・連携部分**:
-   - `vrcbeacon-plugin` 側のマニフェスト、UI、表示名の整合性確保。
-
-### 変更対象予定ファイル
-- `README.md` / `README.txt`
-- `gui_streamer.py`
-- `ui/index.html` / `plugin/ui/index.html`
-- `api_server.py`
-- `build_exe.py` / `VRC_Media_Streamer.spec`
-- `Start_Normal.bat` / `Start_LocalTest.bat`
-- `FUTURE_PLANS.md`
-
----
-
-## 13. 🎬 写真に加えてMP4等のローカル動画ファイルアップロード・再生対応 (Local Video File Upload & Playback) 【実装完了（実機・手動未確認 🧪）】分離、写真0枚フォールバック案内バー合成、再生ループ3分岐制御）
-- `api_server.py`（`/api/status`, `/api/control`, `/api/upload` の 3モード・写真プールCRUD対応）
-- `ui/index.html` / `plugin/ui/index.html`（3ボタントグルUI、写真プール管理カード・操作ロジック追加）
-- `gui_streamer.py`（GUIヘッダーに3モードセグメントボタン追加、設定同期）
-- `config.dist.json`（`playback_mode: "video"` 追加）
-- `test_playback_modes.py`（3モード動作・写真プール分離・案内バー合成の単体テスト）
-- `test_radio_unit.py`（写真プール対応への修正）
-
----
-
-## 10. 📱 待機画面・通常動画・ラジオ全画面でのQRコード表示モード統括・修正 (QR Code Overlay & Standby Modes) 【実装完了（実機・手動未確認 🧪）】
-
-### 概要
-待機画面（Standby）、通常動画再生時、ラジオモード時のすべてにおいて、Webリクエスト用QRコードおよび接続URLのオーバーレイ表示が意図通りに動作しない、またはFFmpegフィルタエラーで配信が落ちる不具合を解消し、全配信モードでの設定仕様を完全統一。
-
-### 実装内容
-1. **待機画面固定画像モード (`standby_mode: "image"`) での QR 合成対応**:
-   - `standby_mode == "image"` 時に `overlay_qr_enabled: true` の場合、Pillow (`alpha_composite`) で待機画像（カスタム画像 / デフォルト画像 / フォールバック画面）上にQRオーバーレイを合成して保存するよう修正。
-2. **堅牢な FFmpeg フィルタグラフビルダーの導入 (`_build_video_filter_complex`)**:
-   - 音声ストリームの有無による入力インデックス（`qr_idx`）や `scale2ref` / `overlay` / `drawtext`（時計）の組み合わせを安全に組み立てる共通ビルダーメソッドを整備。
-3. **ラジオモードの QR オーバーレイ対応 (`play_radio`)**:
-   - `card` / `standby` 背景使用時、`overlay_qr_enabled` が有効な場合は動画再生時と同様に FFmpeg `-filter_complex` でQRコードを合成して配信。
-   - スライドショー（`slideshow`）は `get_image_for_playback()` でPillow合成済みのため、二重合成を自動防止するガードを装備。
-4. **単体テスト整備**:
-   - `test_standby.py`（待機画面QR合成検証2件）および `test_qr_overlay.py`（ビルダー・QR画像生成検証9件）を追加し、全テストパスを確認。
-
----
-
-## 11. ⏰ 配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化 (Live Clock Overlay & Sync Marker) 【実装完了（実機・手動未確認 🧪）】
-
-### 概要
-配信映像（通常動画・ラジオ画面・静止画/スライドショー・待機画面）において、配信実時刻（JST）をオーバーレイ表示し、VRChat内プレイヤーとの遅延可視化とリシンク判断を可能にする機能において、設定フラグを厳格に尊重するパイプライン制御を実装し、無効時の不要なフィルタ負荷やフォント起因のFFmpegエラーを解消。
-
-### 実装内容
-1. **設定フラグ（`overlay_clock_enabled` / `overlay_clock_video`）の厳格な尊重**:
-   - `play_radio`、`play_image`、`play_standby_loop` において、設定が無効な場合は FFmpeg に一切の `-vf`（`drawtext`）を付与せずバイパス。
-   - 設定が有効な場合のみ、リアルタイム時刻を描画する `drawtext` フィルタを適用。
-2. **位置設定共通ヘルパーの導入 (`get_clock_filter_for_config`)**:
-   - `overlay_clock_position`（`top-right`, `top-left`, `bottom-right`, `bottom-left`）に応じた座標計算と `drawtext` 文字列生成を共通関数化し、全配信パイプラインで一元管理。
-3. **フォントパス解決とエスケープの堅牢化 (`get_drawtext_font_path`)**:
-   - Windows・Linux・macOSのフォント探索候補を拡充し、パス区切り文字およびコロンのエスケープ（`C\:/...`）を安全に処理。
-4. **包括的な単体テスト整備**:
-   - `test_clock_features.py` に時計フィルタヘルパー、位置座標計算、`-filter_complex` ビルダー組み合わせ、および各配信パイプラインでのフラグチェック検証（計8項目）を追加し、全テストパスを確認。
-
-### 変更ファイル
-- `streamer_core.py`（`get_clock_filter_for_config`, `get_drawtext_font_path`, `play_radio`, `play_image`, `play_standby_loop`, `play_video`）
-- `test_clock_features.py`（位置座標・ビルダー組み合わせ・パイプラインフラグ検証テスト拡充）
-- `FUTURE_PLANS.md`（タスク11完了記録）
-
----
-
-## 12. 🏷️ アプリの名称変更およびREADME・ウィンドウタイトル・UI表記の刷新 (App Renaming & Rebranding) 【実装予定 📝】
-
-### 概要
-アプリケーションの正式名称変更に伴い、ドキュメント（`README.md`、`README.txt`）、デスクトップGUIウィンドウタイトル（`gui_streamer.py`）、WebリモコンUIタイトル（`ui/index.html`）、ビルド設定、バッチファイル、プラグイン等の各所に存在する旧アプリ名の表記を一括で更新・統一するタスク。
-
-### 検討・改訂対象箇所
-1. **ドキュメント類の改訂**:
-   - `README.md` / `README.txt`: アプリ名、概要説明、起動手順、各種設定ファイルの説明を新名称に更新。
-   - `HANDOVER_*.md` / ドキュメント内の名称リンクやタイトルの整理。
-2. **GUI / Web UI の表示刷新**:
-   - `gui_streamer.py`: ウィンドウタイトル（`self.title("...")`）、ヘッダーラベル（`title_label`）、各種ダイアログのタイトル表記。
-   - `ui/index.html` / `plugin/ui/index.html`: ブラウザタブタイトル（`<title>`）、Webリモコンヘッダーロゴ・名称。
-   - `api_server.py`: UIアセット未検出フォールバック画面のタイトル・メッセージ。
-3. **ビルドおよび起動スクリプト**:
----
-
-## 5. 🎵 ラジオモード時のクロスフェード・滑らか切り替え (Smooth Crossfade in Radio Mode) 【実装予定 📝】
-
-### 概要
-ラジオモード（音声＋アルバムアートカード/スライドショー）再生時、曲の終了と次の曲の開始がブツ切り・無音にならず、設定した秒数（例: 2〜4秒）で前の曲をフェードアウトしながら次の曲をフェードインして滑らかにシームレス遷移する機能。
-
-### 仕様・実装設計
-1. **先読み（prefetch）との連携**:
-   - 既に実装されている `prefetch_item` により次曲のオーディオストリームURLは事前取得済み。
-   - 再生中の曲の終了残り \(N\) 秒（クロスフェード秒数）のタイミングで次曲のエンコード・音声結合処理を起動。
-2. **クロスフェード処理方式**:
-   - **方式A (FFmpeg `acrossfade` / `afade` フィルター)**:
-     - 曲末尾と曲頭のオーディオストリームを `acrossfade=d=3:c1=tri:c2=tri` 等でオーバーラップ合成し、HLS セグメントシーケンス番号（`sequence_offset`）の連続性を維持して送出。
-   - **方式B (セグメントレベル・ボリュームカーブ合成)**:
-     - 前曲末尾セグメントに `volume='1.0-t/d':eval=frame`、次曲頭セグメントに `volume='t/d':eval=frame` を適用してシームレスに結合。
-3. **設定とUI**:
-   - `config.json`: `"radio_crossfade_duration": 3`（0で無効、1〜5秒で調整可能）。
-   - Webリモコン / ホスト設定画面に「クロスフェード秒数」スライダーを追加。
-
-### 変更対象予定ファイル
 - `streamer_core.py`（クロスフェード用オーディオ合成ロジック、セグメント遷移ハンドリング）
 - `config.dist.json`（`radio_crossfade_duration: 3` 追加）
 - `gui_streamer.py` / `ui/index.html`（クロスフェード設定UI）
@@ -376,7 +267,7 @@ WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge �
 
 ---
 
-## 9. 📻 再生モード3分岐 ＆ 写真・動画キュー完全分離 ＆ スライドショー安定化 (Playback Modes & Photo Pool Separation) 【実装完了（実機・手動未確認 🧪）】
+## 9. 📻 再生モード3分岐 ＆ 写真・動画キュー完全分離 ＆ スライドショー安定化 (Playback Modes & Photo Pool Separation) 【実装完了 ✅】
 
 ### 概要
 動画・ラジオ・スライドショーの3大再生モードへの明確な分岐、写真プール（アルバム）と動画キューの完全分離、および写真0枚時のフォールバック案内表記（パターンA）を導入し、スライドショー再生の動作安定化とキュー混在による不具合を根本解決。
@@ -408,7 +299,7 @@ WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge �
 
 ---
 
-## 10. 📱 待機画面・通常動画・ラジオ全画面でのQRコード表示モード統括・修正 (QR Code Overlay & Standby Modes) 【実装完了（実機・手動未確認 🧪）】
+## 10. 📱 待機画面・通常動画・ラジオ全画面でのQRコード表示モード統括・修正 (QR Code Overlay & Standby Modes) 【実装完了 ✅】
 
 ### 概要
 待機画面（Standby）、通常動画再生時、ラジオモード時のすべてにおいて、Webリクエスト用QRコードおよび接続URLのオーバーレイ表示が意図通りに動作しない、またはFFmpegフィルタエラーで配信が落ちる不具合を解消し、全配信モードでの設定仕様を完全統一。
@@ -426,7 +317,7 @@ WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge �
 
 ---
 
-## 11. ⏰ 配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化 (Live Clock Overlay & Sync Marker) 【実装完了（実機・手動未確認 🧪）】
+## 11. ⏰ 配信実時刻（LIVE時計）オーバーレイ機能の修正・堅牢化 (Live Clock Overlay & Sync Marker) 【実機NG・要修正 🐛】
 
 ### 概要
 配信映像（通常動画・ラジオ画面・静止画/スライドショー・待機画面）において、配信実時刻（JST）をオーバーレイ表示し、VRChat内プレイヤーとの遅延可視化とリシンク判断を可能にする機能において、設定フラグを厳格に尊重するパイプライン制御を実装し、無効時の不要なフィルタ負荷やフォント起因のFFmpegエラーを解消。
@@ -446,6 +337,13 @@ WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge �
 - `streamer_core.py`（`get_clock_filter_for_config`, `get_drawtext_font_path`, `play_radio`, `play_image`, `play_standby_loop`, `play_video`）
 - `test_clock_features.py`（位置座標・ビルダー組み合わせ・パイプラインフラグ検証テスト拡充）
 - `FUTURE_PLANS.md`（タスク11完了記録）
+
+### 🐛 実機確認結果（2026-08-27）: NG・要修正
+実機確認の結果、**期待どおりに動作しないことを確認**（単体テストは全件通過しているが実配信で再現せず）。
+再修正が必要。具体的な症状（表示されない / 位置がずれる / 特定モードのみ失敗 / FFmpegエラー等）は未記録のため、
+次回着手時に症状を追記してから原因調査を行うこと。
+- 作業ブランチ: `feature/task-11-live-clock-overlay`
+- 単体テストが通るのに実機でNG → テスト側が実配信条件（フォント解決・フィルタ結合順・モード分岐）を再現できていない可能性が高い。
 
 ---
 
@@ -479,7 +377,7 @@ WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge �
 
 ---
 
-## 13. 🎬 写真に加えてMP4等のローカル動画ファイルアップロード・再生対応 (Local Video File Upload & Playback) 【実装完了（実機・手動未確認 🧪）】
+## 13. 🎬 写真に加えてMP4等のローカル動画ファイルアップロード・再生対応 (Local Video File Upload & Playback) 【実装完了 ✅】
 
 ### 概要
 Webリモコン（スマホブラウザ / PC）およびホストPCのデスクトップGUIから、画像（写真・スクショ）だけでなく **MP4 / MOV / WebM などのローカル動画ファイル** を直接アップロード（またはドラッグ＆ドロップ）し、動画キュー（`play_queue`）に追加してVRChat向けにHLS配信できる機能。
