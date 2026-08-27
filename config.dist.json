@@ -27,5 +27,20 @@
   "standby_image_path": "",
   "web_password": "",
   "max_video_upload_mb": 200,
-  "max_video_height": 1080
+  "max_video_height": 1080,
+  "output_mode": "hls",
+  "topaz_rtmp_base": "rtmp://topaz.chat/live",
+  "topaz_rtsp_base": "rtspt://topaz.chat/live",
+  "topaz_stream_key": "",
+  "generic_rtmp_url": "",
+  "generic_rtmp_key": "",
+  "rtmp_video_bitrate_kbps": 1500,
+  "rtmp_audio_bitrate_kbps": 192,
+  "rtmp_video_width": 1280,
+  "rtmp_video_height": 720,
+  "rtmp_fps": 30,
+  "rtmp_gop_seconds": 2,
+  "rtmp_fallback_to_hls": true,
+  "rtmp_fallback_after_failures": 3,
+  "rtmp_retry_backoff_max_seconds": 300
 }

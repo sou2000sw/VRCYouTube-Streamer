@@ -138,6 +138,27 @@ MAX_REQUEST_BODY_BYTES = 64 * 1024
 MAX_UPLOAD_BODY_BYTES = 20 * 1024 * 1024 # 20MB
 MAX_VIDEO_UPLOAD_BODY_BYTES = 200 * 1024 * 1024 # 200MB
 
+SENSITIVE_BODY_KEYS = ("topaz_stream_key", "generic_rtmp_key", "web_password", "password")
+
+
+def redact_sensitive(payload):
+    """ログへ出す前に機密値を伏せる。
+
+    ストリームキーは「知っていれば誰でもそのキーで配信を投稿できる」ため、
+    パスワードと同格に扱う必要がある。ログファイルは配布物と一緒に
+    第三者へ渡ることがあるので、平文で残してはいけない。
+    """
+    if not isinstance(payload, dict):
+        return payload
+    safe = {}
+    for key, value in payload.items():
+        if key in SENSITIVE_BODY_KEYS and value:
+            safe[key] = "***redacted***"
+        else:
+            safe[key] = value
+    return safe
+
+
 def parse_multipart_file(body_bytes, content_type_header):
     """multipart/form-data からファイルバイナリとファイル名を取得"""
     m = re.search(r'boundary=([^;]+)', content_type_header)
@@ -533,10 +554,12 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 })
                 return
             if self.streamer_core:
-                data = self.streamer_core.get_status_data()
                 # ホスト本人かどうかはリクエスト単位でしか判定できないので、ここで載せる。
                 # これが無いと UI 側が「常にホスト」と誤認し、ゲストにサーバー終了/再起動ボタンを見せてしまう。
                 is_local = self.is_local_request()
+                # ストリームキーはリモートのゲストにも届くレスポンスに載るため、
+                # ホスト本人のリクエスト以外では必ずマスクされた状態で返す。
+                data = self.streamer_core.get_status_data(include_secrets=is_local)
                 data["is_local"] = is_local
                 if isinstance(data.get("permissions"), dict):
                     data["permissions"]["is_local"] = is_local
@@ -551,7 +574,15 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(403, {"error": "Forbidden: Configuration access is restricted to localhost."})
                 return
             if self.streamer_core:
-                self.send_json_response(200, self.streamer_core.config)
+                # localhost 限定のエンドポイントではあるが、ストリームキーは
+                # 画面共有・スクリーンショット経由でも漏れる。表示用にはマスクを返し、
+                # 生のキーは /api/destination (action=reveal_key) でのみ取得させる。
+                safe_config = dict(self.streamer_core.config)
+                for key_field in ("topaz_stream_key", "generic_rtmp_key"):
+                    raw = str(safe_config.get(key_field, "") or "")
+                    safe_config[key_field] = self.streamer_core.mask_stream_key(raw)
+                    safe_config[f"{key_field}_set"] = bool(raw)
+                self.send_json_response(200, safe_config)
             else:
                 self.send_json_response(500, {"error": "Core not initialized"})
             return
@@ -770,7 +801,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             log_print(f"[APIServer] Error parsing JSON body: {e}")
             body_json = {}
 
-        log_print(f"[APIServer] POST {path} body: {body_json}")
+        log_print(f"[APIServer] POST {path} body: {redact_sensitive(body_json)}")
 
         # 1.5. API: Auth Check / Login
         if path == "/api/auth":
@@ -1004,7 +1035,54 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(500, {"success": False, "message": "Failed to save configuration"})
             return
 
-        # 4. API: Shutdown (ローカルホスト限定)
+        # 4. API: Destination (配信先操作 / ローカルホスト限定)
+        elif path == "/api/destination":
+            if not self.is_local_request():
+                self.send_json_response(403, {"success": False, "message": "Forbidden: Destination control is restricted to localhost."})
+                return
+            if not self.streamer_core:
+                self.send_json_response(500, {"success": False, "message": "Streamer core not available"})
+                return
+
+            core = self.streamer_core
+            action = str((body_json or {}).get("action", "")).strip()
+
+            if action == "generate_key":
+                # 既存キーを新しいランダムキーで作り直す（ワールド側の貼り直しが必要）
+                core.config["topaz_stream_key"] = core.generate_stream_key()
+                core.save_config()
+                self.send_json_response(200, {
+                    "success": True,
+                    "destination": core.get_destination_info(include_secrets=True)
+                })
+                return
+
+            if action == "reveal_key":
+                self.send_json_response(200, {
+                    "success": True,
+                    "destination": core.get_destination_info(include_secrets=True)
+                })
+                return
+
+            if action == "retry":
+                # HLSへ退避している状態から、本来の配信先へ即時復帰を試みる
+                core.destination_fallback_active = False
+                core.destination_last_error = ""
+                core._sink_fail_count = 0
+                core._sink_retry_at = 0.0
+                core._sink_force_restart = True
+                ok = core.ensure_stream_sink()
+                core.reload_stream_event.set()
+                self.send_json_response(200, {
+                    "success": bool(ok),
+                    "destination": core.get_destination_info(include_secrets=True)
+                })
+                return
+
+            self.send_json_response(400, {"success": False, "message": f"Unknown destination action: {action}"})
+            return
+
+        # 5. API: Shutdown (ローカルホスト限定)
         elif path == "/api/shutdown":
             if not self.is_local_request():
                 self.send_json_response(403, {"success": False, "message": "Forbidden: Shutdown command is restricted to localhost."})
