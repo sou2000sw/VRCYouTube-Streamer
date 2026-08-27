@@ -1173,6 +1173,14 @@ class StreamerCore:
             if not force and self.hls_proc and self.hls_proc.poll() is None and self.current_stdin:
                 return True
             if self.hls_proc:
+                # 先に stdin を閉じてから殺す。閉じずに参照だけ捨てると、
+                # 後片付け(GC)のタイミングで BufferedWriter の finalize が失敗し、
+                # 「Exception ignored while finalizing file」がログに湧く。
+                if self.current_stdin:
+                    try:
+                        self.current_stdin.close()
+                    except Exception:
+                        pass
                 kill_proc(self.hls_proc)
                 self.hls_proc = None
                 self.current_stdin = None

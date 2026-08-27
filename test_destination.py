@@ -43,6 +43,29 @@ def make_core():
     return StreamerCore(override_port=8997, override_enable_tunnel=False)
 
 
+def import_gui_streamer():
+    """gui_streamer を安全に import する。
+
+    gui_streamer は import 時に sys.stdout/stderr を TextIOWrapper で包み直す
+    （PyInstaller の --noconsole 対策）。そのままだと pytest のキャプチャ用
+    一時ファイルがラッパーのGCで閉じられ、以降の全テストが道連れになる。
+    包まれたラッパーは detach() して下層バッファを閉じずに切り離す。
+    """
+    import sys
+    saved_out, saved_err = sys.stdout, sys.stderr
+    try:
+        import gui_streamer
+        return gui_streamer
+    finally:
+        for stream in (sys.stdout, sys.stderr):
+            if stream is not saved_out and stream is not saved_err:
+                try:
+                    stream.detach()
+                except Exception:
+                    pass
+        sys.stdout, sys.stderr = saved_out, saved_err
+
+
 def test_defaults_keep_hls():
     """既定値は必ず hls。配布ソフトが黙って他者のサーバーへ帯域を向けてはいけない。"""
     print("\n--- 1. Default destination stays HLS ---")
@@ -346,6 +369,48 @@ def test_backward_compatible_alias():
     assert core.ensure_hls_receiver() is True
     assert called == [True]
     print("PASS: ensure_hls_receiver() still delegates to ensure_stream_sink().")
+
+
+def test_gui_url_helpers_follow_destination():
+    """ホストGUIの「ワールド用 動画URL」が配信先に追従し、既定ではキーを伏せること。
+
+    App はウィンドウを開かずに検証したいので、非束縛メソッドへスタブを渡して呼ぶ。
+    """
+    print("\n--- 16. GUI URL helpers ---")
+    gui_streamer = import_gui_streamer()
+
+    core = make_core()
+    core.tunnel_raw_url = "https://example.trycloudflare.com"
+    core.tunnel_url = "https://example.trycloudflare.com/stream.m3u8"
+
+    class Stub:
+        streamer_core = core
+
+    stub = Stub()
+    get_video = gui_streamer.App.get_world_video_url
+    get_remote = gui_streamer.App.get_remote_url
+
+    # HLS: 動画URLは m3u8、リモコンURLはトンネルのルート
+    core.config["output_mode"] = "hls"
+    assert get_video(stub).endswith("/stream.m3u8")
+    assert get_remote(stub) == "https://example.trycloudflare.com"
+
+    # TopazChat: 動画URLだけが配信先に追従し、リモコンURLは変わらない
+    core.config["output_mode"] = "topaz"
+    core.config["topaz_rtsp_base"] = "rtspt://topaz.chat/live"
+    core.config["topaz_stream_key"] = "G" * 40
+    assert get_video(stub, include_secrets=True) == "rtspt://topaz.chat/live/" + "G" * 40
+    assert get_remote(stub) == "https://example.trycloudflare.com"
+
+    # 既定（マスク表示）では画面にキーが出ない
+    masked = get_video(stub, include_secrets=False)
+    assert "G" * 40 not in masked and "*" in masked
+
+    # HLSへ退避中は、退避先のURLが出る（配信できていない先のURLを出さない）
+    core.destination_fallback_active = True
+    assert get_video(stub).endswith("/stream.m3u8")
+    core.destination_fallback_active = False
+    print("PASS: GUI shows the destination-aware video URL, masked by default.")
 
 
 def test_ui_has_destination_controls():

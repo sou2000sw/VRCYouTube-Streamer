@@ -640,8 +640,9 @@ class App(ctk.CTk):
         self.api_server = api_server
 
         self.title("VRC_Media_Streamer")
-        self.geometry("680x620")
-        self.minsize(540, 480)
+        # 動画URLとWebリモコンURLの2段表示ぶん、既定の高さを広げてある
+        self.geometry("680x680")
+        self.minsize(540, 520)
 
         # ウィンドウの✕ボタンでも on_closing() を通す。
         # これが無いと shutdown() が呼ばれず、cloudflared / ffmpeg の子プロセスが孤児化する。
@@ -689,20 +690,41 @@ class App(ctk.CTk):
         self.now_playing_label = ctk.CTkLabel(self.status_frame, text="None", font=ctk.CTkFont(size=14, weight="bold"), anchor="w")
         self.now_playing_label.pack(fill="x", anchor="w", padx=15, pady=(0, 8))
 
-        self.tunnel_title = ctk.CTkLabel(self.status_frame, text="HLS URL for VRChat:", font=ctk.CTkFont(size=12, weight="bold"), text_color="gray")
+        # 配信先(destination)導入後、「ワールドの動画プレイヤーに貼るURL」と
+        # 「Webリモコンを開くURL」は別物になった。混同すると
+        # ワールドにリモコンURLを貼る事故が起きるため、2段に分けて表示する。
+        self.tunnel_title = ctk.CTkLabel(self.status_frame, text="🌍 ワールド用 動画URL:", font=ctk.CTkFont(size=12, weight="bold"), text_color="gray")
         self.tunnel_title.pack(anchor="w", padx=15, pady=(0, 2))
 
         self.url_frame = ctk.CTkFrame(self.status_frame, fg_color="transparent")
-        self.url_frame.pack(fill="x", padx=15, pady=(0, 8))
+        self.url_frame.pack(fill="x", padx=15, pady=(0, 4))
 
         self.tunnel_label = ctk.CTkLabel(self.url_frame, text="Starting tunnel...", font=ctk.CTkFont(size=12), anchor="w")
         self.tunnel_label.pack(side="left", fill="x", expand=True)
 
-        self.qr_btn = ctk.CTkButton(self.url_frame, text="📱 QR Code", width=85, fg_color="#2E4053", hover_color="#1F2A36", command=self.open_qr_code)
+        self.copy_btn = ctk.CTkButton(self.url_frame, text="Copy URL", width=80, command=self.copy_url)
+        self.copy_btn.pack(side="right", padx=(5, 0))
+
+        # ストリームキーは実質パスワードであり、画面共有・配信で映り込むと乗っ取られる。
+        # 既定はマスク表示にし、必要なときだけ本人が明かす（コピーは常に本物を渡す）。
+        self.video_url_revealed = False
+        self.reveal_btn = ctk.CTkButton(self.url_frame, text="👁 表示", width=60, fg_color="#2E4053", hover_color="#1F2A36", command=self.toggle_video_url_reveal)
+        self.reveal_btn.pack(side="right", padx=(10, 0))
+
+        self.remote_title = ctk.CTkLabel(self.status_frame, text="🔗 Webリモコン URL:", font=ctk.CTkFont(size=12, weight="bold"), text_color="gray")
+        self.remote_title.pack(anchor="w", padx=15, pady=(0, 2))
+
+        self.remote_frame = ctk.CTkFrame(self.status_frame, fg_color="transparent")
+        self.remote_frame.pack(fill="x", padx=15, pady=(0, 8))
+
+        self.remote_label = ctk.CTkLabel(self.remote_frame, text="Starting tunnel...", font=ctk.CTkFont(size=12), anchor="w")
+        self.remote_label.pack(side="left", fill="x", expand=True)
+
+        self.qr_btn = ctk.CTkButton(self.remote_frame, text="📱 QR Code", width=85, fg_color="#2E4053", hover_color="#1F2A36", command=self.open_qr_code)
         self.qr_btn.pack(side="right", padx=(5, 0))
 
-        self.copy_btn = ctk.CTkButton(self.url_frame, text="Copy URL", width=80, command=self.copy_url)
-        self.copy_btn.pack(side="right", padx=(10, 0))
+        self.copy_remote_btn = ctk.CTkButton(self.remote_frame, text="Copy URL", width=80, command=self.copy_remote_url)
+        self.copy_remote_btn.pack(side="right", padx=(10, 0))
 
         # 3. Add to Queue Frame
         self.add_frame = ctk.CTkFrame(self)
@@ -943,16 +965,58 @@ class App(ctk.CTk):
             url = f"http://localhost:{port}"
         QRCodeWindow(self, url)
 
+    def get_world_video_url(self, include_secrets=True):
+        """ワールドの動画プレイヤーに貼るURL。配信先(destination)に追従する。"""
+        core = self.streamer_core
+        try:
+            url = core.get_video_url(include_secrets=include_secrets)
+        except AttributeError:
+            url = ""
+        if url:
+            return url
+        # HLS 経路のフォールバック（トンネル未確立・トンネル無効時）
+        if core.get_active_output_mode() == "hls":
+            if core.tunnel_url:
+                return core.tunnel_url
+            if not getattr(core, "enable_tunnel", True):
+                port = core.config.get("port", 8000)
+                return f"http://localhost:{port}/stream.m3u8"
+        return ""
+
+    def get_remote_url(self):
+        """Webリモコンを開くURL。QRが焼くのもこちら。"""
+        core = self.streamer_core
+        url = core.tunnel_raw_url
+        if not url and not getattr(core, "enable_tunnel", True):
+            port = core.config.get("port", 8000)
+            url = f"http://localhost:{port}"
+        return url
+
+    def toggle_video_url_reveal(self):
+        self.video_url_revealed = not self.video_url_revealed
+        self.reveal_btn.configure(text="🙈 隠す" if self.video_url_revealed else "👁 表示")
+        # 定期更新(update_ui_loop)は自分で再スケジュールするため、ここから呼ぶと二重に走る。
+        # ラベルだけ即時反映すれば足りる。
+        self.tunnel_label.configure(text=self.get_world_video_url(include_secrets=self.video_url_revealed) or "Starting tunnel...")
+
     def copy_url(self):
-        url = self.streamer_core.tunnel_url
-        if not url and not getattr(self.streamer_core, "enable_tunnel", True):
-            port = self.streamer_core.config.get("port", 8000)
-            url = f"http://localhost:{port}/stream.m3u8"
+        # 表示がマスクされていても、コピーされるのは常に本物のURL
+        url = self.get_world_video_url(include_secrets=True)
         if url:
             self.clipboard_clear()
             self.clipboard_append(url)
             self.copy_btn.configure(text="Copied!")
             self.after(2000, lambda: self.copy_btn.configure(text="Copy URL"))
+        else:
+            messagebox.showwarning("Warning", "URL is not ready yet.")
+
+    def copy_remote_url(self):
+        url = self.get_remote_url()
+        if url:
+            self.clipboard_clear()
+            self.clipboard_append(url)
+            self.copy_remote_btn.configure(text="Copied!")
+            self.after(2000, lambda: self.copy_remote_btn.configure(text="Copy URL"))
         else:
             messagebox.showwarning("Warning", "URL is not ready yet.")
 
@@ -1135,8 +1199,29 @@ class App(ctk.CTk):
         title_text = curr.get("title", "None") if curr else "None"
         self.now_playing_label.configure(text=title_text)
 
-        # 2. Tunnel URL
-        self.tunnel_label.configure(text=self.streamer_core.tunnel_url or "Starting tunnel...")
+        # 2. URL 表示（ワールド用 動画URL / Webリモコン URL）
+        core = self.streamer_core
+        mode = core.get_output_mode()
+        active = core.get_active_output_mode()
+        mode_names = {"hls": "Local HLS", "topaz": "TopazChat", "generic_rtmp": "Generic RTMP"}
+
+        if getattr(core, "destination_fallback_active", False):
+            self.tunnel_title.configure(
+                text=f"🌍 ワールド用 動画URL  ⚠ {mode_names.get(mode, mode)} へ接続できず {mode_names['hls']} へ退避中:",
+                text_color="#F39C12",
+            )
+        else:
+            self.tunnel_title.configure(text=f"🌍 ワールド用 動画URL ({mode_names.get(active, active)}):", text_color="gray")
+
+        video_url = self.get_world_video_url(include_secrets=self.video_url_revealed)
+        if not video_url:
+            if active == "generic_rtmp":
+                video_url = "（汎用RTMPの再生URLは配信先サーバーの構成に依存します）"
+            else:
+                video_url = "Starting tunnel..."
+        self.tunnel_label.configure(text=video_url)
+
+        self.remote_label.configure(text=self.get_remote_url() or "Starting tunnel...")
 
         # 3. Queue List
         with self.streamer_core.queue_lock:
