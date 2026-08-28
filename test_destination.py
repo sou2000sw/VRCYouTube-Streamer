@@ -429,6 +429,14 @@ def test_ui_has_destination_controls():
     ):
         assert f'id="{element_id}"' in content, f"missing UI element: {element_id}"
 
+    # RTMP系ではローカルHLSを生成しないため、プレビューは成立しない。
+    # 404を叩き続けずに理由を出して止めること。
+    assert "function stopHlsPreview" in content, "RTMP時にプレビューを停止する処理が必要"
+    assert "プレビューできません" in content, "プレビュー不可の理由表示が必要"
+    assert "activeOutputMode" in content, "実配信先を追跡する変数が必要"
+    # ワールドに貼るURLは配信先に追従すること（HLS固定の .m3u8 ではない）
+    assert "data.video_url" in content, "プレイヤー入力用URLは video_url ベースであること"
+
     # 規約・法務上、表示が必須の注記
     assert "本ソフトはTopazChatの公式ツールではありません" in content
     assert "法人が運営主体" in content

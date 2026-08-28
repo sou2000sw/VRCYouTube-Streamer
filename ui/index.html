@@ -686,7 +686,7 @@
                         </div>
 
                         <div class="flex flex-col gap-1 mt-1">
-                            <span class="text-zinc-400 font-medium">VRChat プレイヤー入力用 URL (iwaSync3 / YPlay / ProTV):</span>
+                            <span class="text-zinc-400 font-medium">VRChat プレイヤー入力用 URL (配信先に追従 / iwaSync3 / YPlay / ProTV):</span>
                             <div class="flex gap-2">
                                 <input id="infoStreamUrl" readonly class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 font-mono text-primary font-bold truncate" value="-">
                                 <button onclick="copyElementText('infoStreamUrl')" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-200 shrink-0">コピー</button>
@@ -887,6 +887,9 @@
         let currentStatusData = null;
         let hlsInstance = null;
         let previewEnabled = true;
+        // 実際に今動いている出口。RTMP系(topaz / generic_rtmp)のときは
+        // ローカルHLSを生成していないため、プレビューは原理的に成立しない。
+        let activeOutputMode = 'hls';
 
         // Password / PIN Modal Handlers
         function showPasswordModal(hasError = false) {
@@ -1225,11 +1228,45 @@
             if (overlay) overlay.classList.add('opacity-0');
         }
 
+        function stopHlsPreview(message) {
+            // RTMP配信中は /stream.m3u8 が存在しない。放置すると hls.js が
+            // 404 を叩き続けるので、インスタンスごと畳んで理由を出す。
+            if (hlsRetryTimer) {
+                clearTimeout(hlsRetryTimer);
+                hlsRetryTimer = null;
+            }
+            if (hlsInstance) {
+                try { hlsInstance.destroy(); } catch (e) {}
+                hlsInstance = null;
+            }
+            const video = document.getElementById('liveVideo');
+            if (video) {
+                try { video.pause(); } catch (e) {}
+                video.removeAttribute('src');
+            }
+            const overlay = document.getElementById('videoOverlayMsg');
+            const statusText = document.getElementById('videoStatusText');
+            if (statusText) statusText.innerText = message;
+            if (overlay) overlay.classList.remove('opacity-0');
+        }
+
+        function destinationPreviewMessage() {
+            if (activeOutputMode === 'topaz') {
+                return 'TopazChat 配信中のためプレビューできません（配信自体は正常です）。映像はワールド側の AVPro プレイヤーで確認してください。';
+            }
+            return 'RTMP配信中のためプレビューできません（配信自体は正常です）。映像は配信先のプレイヤーで確認してください。';
+        }
+
         function initHlsPlayer() {
             const video = document.getElementById('liveVideo');
             const overlay = document.getElementById('videoOverlayMsg');
             const statusText = document.getElementById('videoStatusText');
             if (!video) return;
+
+            if (activeOutputMode !== 'hls') {
+                stopHlsPreview(destinationPreviewMessage());
+                return;
+            }
 
             const streamM3u8Url = `${apiBase}/stream.m3u8`;
 
@@ -1606,8 +1643,31 @@
             if (btnClearQueue) btnClearQueue.disabled = !isLocal; // Full clear is always local-only
 
             // Update Stream URLs
-            const streamUrl = data.stream_url || (data.tunnel_url ? `${data.tunnel_url}/stream.m3u8` : `${apiBase}/stream.m3u8`);
+            // 配信先(destination)導入後、ワールドに貼るURLは video_url。
+            // HLS のときは従来どおり .m3u8 と同じ値になる。
+            const prevActiveMode = activeOutputMode;
+            activeOutputMode = data.active_output_mode || (data.destination && data.destination.active_output_mode) || 'hls';
+
+            let streamUrl = data.video_url || '';
+            if (!streamUrl) {
+                streamUrl = (activeOutputMode === 'generic_rtmp')
+                    ? '（汎用RTMPの再生URLは配信先サーバーの構成に依存します）'
+                    : (data.stream_url || (data.tunnel_url ? `${data.tunnel_url}/stream.m3u8` : `${apiBase}/stream.m3u8`));
+            } else if (streamUrl.includes('*')) {
+                // ゲストにはストリームキーを渡さない。マスク済みURLを貼っても再生できないため、
+                // 誤って配布されないようURLそのものを出さない。
+                streamUrl = 'ホストPCの画面で確認してください（ストリームキーは非公開）';
+            }
             const tunnelUrl = data.tunnel_url || apiBase;
+
+            // 配信先が変わったらプレビューを止める / 再開する
+            if (prevActiveMode !== activeOutputMode) {
+                if (activeOutputMode === 'hls') {
+                    if (previewEnabled) initHlsPlayer();
+                } else {
+                    stopHlsPreview(destinationPreviewMessage());
+                }
+            }
 
             const quickUrl = document.getElementById('quickStreamUrl');
             const infoStream = document.getElementById('infoStreamUrl');
