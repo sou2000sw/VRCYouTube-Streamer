@@ -360,6 +360,62 @@ def test_failure_count_carries_over_between_calls():
     print("PASS: accumulated failures still reach the fallback condition.")
 
 
+def test_fallback_recovery_actually_retries_primary():
+    """★実障害由来の回帰防止（2026-08-28 topaz.chat 全ポート不通）。
+
+    HLSへ退避したあと、バックオフ後の復帰試行で本来の配信先を「実際に試す」こと。
+    以前は失敗計数が上限に張り付いたまま復帰処理へ入っていたため、
+    ensure_stream_sink() の試行ループが一度も回らず、接続を試さずに退避し直すだけの
+    空回りになっていた（＝相手が復旧しても永久にHLSのまま）。
+    """
+    print("\n--- 18. Recovery actually retries the primary destination ---")
+    core = make_core()
+    core.config["output_mode"] = "topaz"
+    core.config["topaz_stream_key"] = "R" * 40
+    core.config["rtmp_fallback_to_hls"] = True
+    core.config["rtmp_fallback_after_failures"] = 2
+
+    calls = []
+    core._start_sink = lambda mode: calls.append(mode) or (mode == "hls")
+
+    core._sink_force_restart = True
+    assert core.ensure_stream_sink() is True
+    assert calls.count("topaz") == 2, f"初回は規定回数試すこと: {calls}"
+    assert core.destination_fallback_active is True
+    first_backoff_at = core._sink_retry_at
+
+    # バックオフ満了をシミュレートして、ウォッチドッグ1回分を実行する
+    core._sink_retry_at = 0.0
+    core.hls_proc = None          # シンク突然死の分岐へ入らないようにする
+    core._destination_watchdog_tick()
+
+    assert calls.count("topaz") == 4, f"復帰試行で本来の配信先を実際に試すこと: {calls}"
+    assert core.destination_fallback_active is True, "まだ繋がらないなら再びHLSへ退避する"
+    assert core._sink_retry_at > 0
+
+    # バックオフは退避の周回数で伸びること（相手を叩き続けない）
+    assert core._sink_fallback_rounds == 2
+    print("PASS: recovery retries the primary destination and backs off per round.")
+
+
+def test_probe_timeout_is_bounded_across_address_families():
+    """名前解決が複数アドレスを返しても、到達性チェックの所要時間が倍増しないこと。
+
+    socket.create_connection() にホスト名を渡すと IPv4/IPv6 それぞれに満額の
+    タイムアウトを使うため、再生スレッドを止める時間が families 倍に伸びていた。
+    """
+    print("\n--- 19. Probe timeout is bounded ---")
+    import time as _time
+    core = make_core()
+    t0 = _time.time()
+    ok, reason = core.probe_rtmp_endpoint("rtmp://127.0.0.1:19350/live/key")
+    elapsed = _time.time() - t0
+    assert ok is False and reason
+    limit = streamer_core.RTMP_CONNECT_TIMEOUT_SECONDS + 2.0
+    assert elapsed < limit, f"到達性チェックに {elapsed:.1f}s かかった（上限 {limit}s）"
+    print(f"PASS: probe finished in {elapsed:.2f}s (limit {limit}s).")
+
+
 def test_backward_compatible_alias():
     """外部（プラグイン・既存テスト）が呼ぶ旧名を壊していないこと。"""
     print("\n--- 12. ensure_hls_receiver alias ---")

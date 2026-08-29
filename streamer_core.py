@@ -488,7 +488,8 @@ class StreamerCore:
         self.active_output_mode = self.get_output_mode()
         self.destination_fallback_active = False
         self.destination_last_error = ""
-        self._sink_fail_count = 0
+        self._sink_fail_count = 0        # 現在の再接続サイクル内での連続失敗数
+        self._sink_fallback_rounds = 0   # HLSへ退避した回数（バックオフ長の算出に使う）
         self._sink_started_at = 0.0
         self._sink_retry_at = 0.0
         self._sink_force_restart = False
@@ -620,6 +621,7 @@ class StreamerCore:
                 self.destination_fallback_active = False
                 self.destination_last_error = ""
                 self._sink_fail_count = 0
+                self._sink_fallback_rounds = 0
                 self._sink_retry_at = 0.0
                 self._sink_force_restart = True
                 self.ensure_stream_sink()
@@ -1017,16 +1019,39 @@ class StreamerCore:
         if not host:
             return False, "配信先URLにホスト名がありません"
 
+        # socket.create_connection() にホスト名を渡すと、解決された各アドレス
+        # （IPv4 / IPv6）へ順に「それぞれ満額のタイムアウト」で接続を試みる。
+        # 結果として所要時間が families 倍に伸び、その間ずっと再生スレッドを止めてしまう。
+        # ここでは自分で名前解決し、全体の締切を1本で管理する。
         try:
-            sock = socket.create_connection((host, port), timeout=RTMP_CONNECT_TIMEOUT_SECONDS)
-            sock.close()
-            return True, ""
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
         except socket.gaierror:
             return False, f"配信先ホストを解決できません ({host})"
-        except (socket.timeout, TimeoutError):
-            return False, f"配信先へ接続できません（タイムアウト: {host}:{port}）"
-        except OSError as e:
-            return False, f"配信先へ接続できません ({host}:{port}): {e}"
+        if not infos:
+            return False, f"配信先ホストを解決できません ({host})"
+
+        deadline = time.time() + RTMP_CONNECT_TIMEOUT_SECONDS
+        last_error = None
+        for family, socktype, proto, _canonname, sockaddr in infos:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            sock = socket.socket(family, socktype, proto)
+            try:
+                sock.settimeout(min(remaining, RTMP_CONNECT_TIMEOUT_SECONDS))
+                sock.connect(sockaddr)
+                return True, ""
+            except (socket.timeout, TimeoutError):
+                last_error = f"配信先へ接続できません（タイムアウト: {host}:{port}）"
+            except OSError as e:
+                last_error = f"配信先へ接続できません ({host}:{port}): {e}"
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+        return False, last_error or f"配信先へ接続できません（タイムアウト: {host}:{port}）"
 
     def build_sink_command(self, mode):
         """destination 別のシンクFFmpegコマンドを組み立てる。返り値は (cmd, 表示用の宛先)。
@@ -1159,9 +1184,14 @@ class StreamerCore:
         return True
 
     def _schedule_destination_retry(self):
-        """相手サーバーを叩き続けないよう、復帰試行は指数バックオフで間隔を空ける。"""
+        """相手サーバーを叩き続けないよう、復帰試行は指数バックオフで間隔を空ける。
+
+        間隔は「退避した回数」で決める。以前はサイクル内の失敗回数で決めていたが、
+        その値は復帰試行のたびに 0 へ戻す必要があるため、両者を兼ねられない。
+        """
+        self._sink_fallback_rounds += 1
         cap = max(10, int(self.config.get("rtmp_retry_backoff_max_seconds", 300)))
-        backoff = min(cap, 10 * (2 ** max(0, self._sink_fail_count - 1)))
+        backoff = min(cap, 10 * (2 ** max(0, self._sink_fallback_rounds - 1)))
         self._sink_retry_at = time.time() + backoff
         return backoff
 
@@ -1222,32 +1252,42 @@ class StreamerCore:
             time.sleep(2.0)
             if not self.is_running:
                 break
-            try:
-                proc = self.hls_proc
-                if proc is not None and proc.poll() is not None:
-                    lived = time.time() - getattr(self, "_sink_started_at", 0.0)
-                    log_print(f"[Sink] Destination sink died unexpectedly (rc={proc.returncode}, alive {lived:.1f}s). Restarting...")
-                    if self.active_output_mode in RTMP_OUTPUT_MODES:
-                        if lived >= SINK_STABLE_SECONDS:
-                            # 一度は安定して流れていた上での切断。単発の事故として計数をやり直す
-                            self._sink_fail_count = 0
-                        else:
-                            self._sink_fail_count += 1
-                    self._sink_force_restart = True
-                    if self.ensure_stream_sink():
-                        self.reload_stream_event.set()
-                    continue
+            self._destination_watchdog_tick()
 
-                if (getattr(self, "destination_fallback_active", False)
-                        and self.get_output_mode() in RTMP_OUTPUT_MODES
-                        and time.time() >= getattr(self, "_sink_retry_at", 0.0)):
-                    log_print("[Destination] Retrying primary destination after backoff...")
-                    self.destination_fallback_active = False
-                    self._sink_force_restart = True
-                    if self.ensure_stream_sink():
-                        self.reload_stream_event.set()
-            except Exception as e:
-                log_print(f"[Sink] Watchdog error: {e}")
+    def _destination_watchdog_tick(self):
+        """ウォッチドッグ1回分。ループと分けてあるのは単体テストから叩けるようにするため。"""
+        try:
+            proc = self.hls_proc
+            if proc is not None and proc.poll() is not None:
+                lived = time.time() - getattr(self, "_sink_started_at", 0.0)
+                log_print(f"[Sink] Destination sink died unexpectedly (rc={proc.returncode}, alive {lived:.1f}s). Restarting...")
+                if self.active_output_mode in RTMP_OUTPUT_MODES:
+                    if lived >= SINK_STABLE_SECONDS:
+                        # 一度は安定して流れていた上での切断。単発の事故として計数をやり直す
+                        self._sink_fail_count = 0
+                        self._sink_fallback_rounds = 0
+                    else:
+                        self._sink_fail_count += 1
+                self._sink_force_restart = True
+                if self.ensure_stream_sink():
+                    self.reload_stream_event.set()
+                return
+
+            if (getattr(self, "destination_fallback_active", False)
+                    and self.get_output_mode() in RTMP_OUTPUT_MODES
+                    and time.time() >= getattr(self, "_sink_retry_at", 0.0)):
+                log_print("[Destination] Retrying primary destination after backoff...")
+                self.destination_fallback_active = False
+                # 新しい再接続サイクルとして数え直す。ここを 0 に戻さないと
+                # ensure_stream_sink() の試行ループが一度も回らず、
+                # 「接続を試さずに即HLSへ退避し直す」だけの空回りになる
+                # （＝相手が復旧しても永久に戻らない）。
+                self._sink_fail_count = 0
+                self._sink_force_restart = True
+                if self.ensure_stream_sink():
+                    self.reload_stream_event.set()
+        except Exception as e:
+            log_print(f"[Sink] Watchdog error: {e}")
 
     def relay_stream_data(self, proc_to_read, stdin_to_write, stop_event, is_paced=True):
         """
