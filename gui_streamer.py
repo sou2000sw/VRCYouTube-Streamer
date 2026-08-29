@@ -52,7 +52,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.streamer_core = streamer_core
 
         self.title("Settings & API Reference / 設定・API仕様")
-        self.geometry("520x660")
+        self.geometry("520x560")
         self.minsize(480, 520)
 
         # 最前面表示とモーダル化
@@ -63,73 +63,35 @@ class SettingsWindow(ctk.CTkToplevel):
         self.scroll_container = ctk.CTkScrollableFrame(self)
         self.scroll_container.pack(fill="both", expand=True, padx=15, pady=(10, 5))
 
+        self._sections = []
+
         # タイトル
         title_lbl = ctk.CTkLabel(self.scroll_container, text="Streaming & Server Settings", font=ctk.CTkFont(size=16, weight="bold"))
         title_lbl.pack(pady=(5, 10))
 
-        # 設定フォームフレーム
-        form_frame = ctk.CTkFrame(self.scroll_container)
-        form_frame.pack(fill="x", padx=10, pady=(0, 10))
-
         cfg = self.streamer_core.config
 
-        # 1. サーバーポート
-        self.lbl_port = ctk.CTkLabel(form_frame, text="Server Port (サーバーポート):", anchor="w")
+        # 1. 🌐 サーバー / 接続
+        sec1_body = self._add_section("🌐 サーバー / 接続", opened=False)
+
+        self.lbl_port = ctk.CTkLabel(sec1_body, text="Server Port (サーバーポート):", anchor="w")
         self.lbl_port.pack(fill="x", padx=15, pady=(10, 0))
-        self.entry_port = ctk.CTkEntry(form_frame)
+        self.entry_port = ctk.CTkEntry(sec1_body)
         self.entry_port.insert(0, str(cfg.get("port", 8000)))
         self.entry_port.pack(fill="x", padx=15, pady=(2, 8))
 
-        # 2. HLSセグメント秒数 (バッファリング秒数)
-        self.lbl_seg = ctk.CTkLabel(form_frame, text="HLS Segment Duration [sec] (セグメント秒数):", anchor="w")
-        self.lbl_seg.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_seg = ctk.CTkEntry(form_frame)
-        self.entry_seg.insert(0, str(cfg.get("hls_segment_time", 3)))
-        self.entry_seg.pack(fill="x", padx=15, pady=(2, 8))
+        self.switch_tunnel = ctk.CTkSwitch(sec1_body, text="🌐 Enable Cloudflare Tunnel (トンネル自動起動)")
+        if cfg.get("enable_tunnel", True):
+            self.switch_tunnel.select()
+        self.switch_tunnel.pack(anchor="w", padx=15, pady=(2, 10))
 
-        # 3. 写真スライドショー表示秒数
-        self.lbl_photo_dur = ctk.CTkLabel(form_frame, text="Photo Display Duration [sec] (写真表示秒数):", anchor="w")
-        self.lbl_photo_dur.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_photo_dur = ctk.CTkEntry(form_frame)
-        self.entry_photo_dur.insert(0, str(cfg.get("image_display_duration", 15)))
-        self.entry_photo_dur.pack(fill="x", padx=15, pady=(2, 8))
+        # 2. 📡 配信先 (Destination)
+        sec2_body = self._add_section("📡 配信先 (Destination)", opened=False)
 
-        # 4. 動画切り替わり時の待機秒数
-        self.lbl_wait = ctk.CTkLabel(form_frame, text="Transition Wait Duration [sec] (動画切替待機秒数):", anchor="w")
-        self.lbl_wait.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_wait = ctk.CTkEntry(form_frame)
-        self.entry_wait.insert(0, str(cfg.get("video_transition_wait_seconds", 1)))
-        self.entry_wait.pack(fill="x", padx=15, pady=(2, 8))
+        self.lbl_dest_section = ctk.CTkLabel(sec2_body, text="📡 Destination (配信先/ストリーミング出力先):", font=ctk.CTkFont(weight="bold"), anchor="w")
 
-        # 5. プレイヤーバッファ保持セグメント数 (Live Sync Count)
-        self.lbl_sync = ctk.CTkLabel(form_frame, text="Web Player Live Sync Count (再生同期バッファ数):", anchor="w")
-        self.lbl_sync.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_sync = ctk.CTkEntry(form_frame)
-        self.entry_sync.insert(0, str(cfg.get("live_sync_duration_count", 4)))
-        self.entry_sync.pack(fill="x", padx=15, pady=(2, 10))
-
-        # 6. ループ再生 & シャッフル再生のデフォルト設定
-        self.switch_loop = ctk.CTkSwitch(form_frame, text="🔁 Loop Queue (キュー保持・繰り返し再生)")
-        if cfg.get("loop_queue", False):
-            self.switch_loop.select()
-        self.switch_loop.pack(anchor="w", padx=15, pady=(4, 6))
-
-        self.switch_shuffle = ctk.CTkSwitch(form_frame, text="🔀 Shuffle Play (シャッフル再生モード)")
-        if cfg.get("shuffle", False):
-            self.switch_shuffle.select()
-        self.switch_shuffle.pack(anchor="w", padx=15, pady=(2, 6))
-
-        self.switch_photo_advance = ctk.CTkSwitch(form_frame, text="⏱ Auto Advance Photos (写真の自動送り)")
-        if cfg.get("image_auto_advance", False):
-            self.switch_photo_advance.select()
-        self.switch_photo_advance.pack(anchor="w", padx=15, pady=(2, 6))
-
-        # 6.4 配信先 (Destination) 設定
-        self.lbl_dest_section = ctk.CTkLabel(form_frame, text="📡 Destination (配信先/ストリーミング出力先):", font=ctk.CTkFont(weight="bold"), anchor="w")
-        self.lbl_dest_section.pack(fill="x", padx=15, pady=(8, 2))
-
-        self.lbl_out_mode = ctk.CTkLabel(form_frame, text="配信先モード (output_mode):", anchor="w")
-        self.lbl_out_mode.pack(fill="x", padx=15, pady=(2, 0))
+        self.lbl_out_mode = ctk.CTkLabel(sec2_body, text="配信先モード (output_mode):", anchor="w")
+        self.lbl_out_mode.pack(fill="x", padx=15, pady=(10, 0))
 
         curr_out_mode = cfg.get("output_mode", "hls")
         if curr_out_mode == "topaz":
@@ -140,17 +102,17 @@ class SettingsWindow(ctk.CTkToplevel):
             out_mode_val = OUT_MODE_CHOICES["hls"]
 
         self.opt_output_mode = ctk.CTkOptionMenu(
-            form_frame,
+            sec2_body,
             values=list(OUT_MODE_CHOICES.values())
         )
         self.opt_output_mode.set(out_mode_val)
         self.opt_output_mode.pack(fill="x", padx=15, pady=(2, 6))
 
         # TopazChat Stream Key & Generate Button
-        self.lbl_topaz_key = ctk.CTkLabel(form_frame, text="🔑 TopazChat Stream Key:", anchor="w")
+        self.lbl_topaz_key = ctk.CTkLabel(sec2_body, text="🔑 TopazChat Stream Key:", anchor="w")
         self.lbl_topaz_key.pack(fill="x", padx=15, pady=(2, 0))
 
-        topaz_key_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        topaz_key_frame = ctk.CTkFrame(sec2_body, fg_color="transparent")
         topaz_key_frame.pack(fill="x", padx=15, pady=(2, 4))
 
         self.entry_topaz_key = ctk.CTkEntry(topaz_key_frame, show="*")
@@ -168,7 +130,7 @@ class SettingsWindow(ctk.CTkToplevel):
             "※ 映像は最大2Mbps・音声は最大320kbpsです。超過すると配信が強制切断されます。"
         )
         self.lbl_topaz_notice = ctk.CTkLabel(
-            form_frame,
+            sec2_body,
             text=topaz_notice_text,
             font=ctk.CTkFont(size=10),
             text_color="#94A3B8",
@@ -179,46 +141,93 @@ class SettingsWindow(ctk.CTkToplevel):
         self.lbl_topaz_notice.pack(fill="x", padx=15, pady=(0, 6))
 
         # Generic RTMP URL & Key
-        self.lbl_generic_rtmp_url = ctk.CTkLabel(form_frame, text="🌐 Generic RTMP URL (投稿先URL):", anchor="w")
+        self.lbl_generic_rtmp_url = ctk.CTkLabel(sec2_body, text="🌐 Generic RTMP URL (投稿先URL):", anchor="w")
         self.lbl_generic_rtmp_url.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_generic_rtmp_url = ctk.CTkEntry(form_frame, placeholder_text="rtmp://localhost/live")
+        self.entry_generic_rtmp_url = ctk.CTkEntry(sec2_body, placeholder_text="rtmp://localhost/live")
         if cfg.get("generic_rtmp_url"):
             self.entry_generic_rtmp_url.insert(0, str(cfg.get("generic_rtmp_url", "")))
         self.entry_generic_rtmp_url.pack(fill="x", padx=15, pady=(2, 6))
 
-        self.lbl_generic_rtmp_key = ctk.CTkLabel(form_frame, text="🔑 Generic RTMP Key (ストリームキー):", anchor="w")
+        self.lbl_generic_rtmp_key = ctk.CTkLabel(sec2_body, text="🔑 Generic RTMP Key (ストリームキー):", anchor="w")
         self.lbl_generic_rtmp_key.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_generic_rtmp_key = ctk.CTkEntry(form_frame, show="*")
+        self.entry_generic_rtmp_key = ctk.CTkEntry(sec2_body, show="*")
         if cfg.get("generic_rtmp_key"):
             self.entry_generic_rtmp_key.insert(0, str(cfg.get("generic_rtmp_key", "")))
         self.entry_generic_rtmp_key.pack(fill="x", padx=15, pady=(2, 6))
 
         # Bitrates (Video & Audio)
-        self.lbl_rtmp_vbitrate = ctk.CTkLabel(form_frame, text="📹 Video Bitrate [kbps] (映像ビットレート):", anchor="w")
+        self.lbl_rtmp_vbitrate = ctk.CTkLabel(sec2_body, text="📹 Video Bitrate [kbps] (映像ビットレート):", anchor="w")
         self.lbl_rtmp_vbitrate.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_rtmp_vbitrate = ctk.CTkEntry(form_frame)
+        self.entry_rtmp_vbitrate = ctk.CTkEntry(sec2_body)
         self.entry_rtmp_vbitrate.insert(0, str(cfg.get("rtmp_video_bitrate_kbps", 1500)))
         self.entry_rtmp_vbitrate.pack(fill="x", padx=15, pady=(2, 6))
 
-        self.lbl_rtmp_abitrate = ctk.CTkLabel(form_frame, text="🔊 Audio Bitrate [kbps] (音声ビットレート):", anchor="w")
+        self.lbl_rtmp_abitrate = ctk.CTkLabel(sec2_body, text="🔊 Audio Bitrate [kbps] (音声ビットレート):", anchor="w")
         self.lbl_rtmp_abitrate.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_rtmp_abitrate = ctk.CTkEntry(form_frame)
+        self.entry_rtmp_abitrate = ctk.CTkEntry(sec2_body)
         self.entry_rtmp_abitrate.insert(0, str(cfg.get("rtmp_audio_bitrate_kbps", 192)))
         self.entry_rtmp_abitrate.pack(fill="x", padx=15, pady=(2, 6))
 
         # Fallback Switch
-        self.switch_rtmp_fallback = ctk.CTkSwitch(form_frame, text="🛡 Auto Fallback to HLS (失敗時にHLSへ自動退避)")
+        self.switch_rtmp_fallback = ctk.CTkSwitch(sec2_body, text="🛡 Auto Fallback to HLS (失敗時にHLSへ自動退避)")
         if cfg.get("rtmp_fallback_to_hls", True):
             self.switch_rtmp_fallback.select()
-        self.switch_rtmp_fallback.pack(anchor="w", padx=15, pady=(2, 8))
+        self.switch_rtmp_fallback.pack(anchor="w", padx=15, pady=(2, 10))
 
-        # 6.5. BGM / ラジオモード設定 (音声のみ + 静止画低帯域配信)
-        self.switch_radio = ctk.CTkSwitch(form_frame, text="📻 Radio / BGM Mode (YouTube音声のみ+静止画・超低帯域配信)")
+        # 3. 🎬 再生 / キュー
+        sec3_body = self._add_section("🎬 再生 / キュー", opened=False)
+
+        self.lbl_seg = ctk.CTkLabel(sec3_body, text="HLS Segment Duration [sec] (セグメント秒数):", anchor="w")
+        self.lbl_seg.pack(fill="x", padx=15, pady=(10, 0))
+        self.entry_seg = ctk.CTkEntry(sec3_body)
+        self.entry_seg.insert(0, str(cfg.get("hls_segment_time", 3)))
+        self.entry_seg.pack(fill="x", padx=15, pady=(2, 8))
+
+        self.lbl_wait = ctk.CTkLabel(sec3_body, text="Transition Wait Duration [sec] (動画切替待機秒数):", anchor="w")
+        self.lbl_wait.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_wait = ctk.CTkEntry(sec3_body)
+        self.entry_wait.insert(0, str(cfg.get("video_transition_wait_seconds", 1)))
+        self.entry_wait.pack(fill="x", padx=15, pady=(2, 8))
+
+        self.lbl_sync = ctk.CTkLabel(sec3_body, text="Web Player Live Sync Count (再生同期バッファ数):", anchor="w")
+        self.lbl_sync.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_sync = ctk.CTkEntry(sec3_body)
+        self.entry_sync.insert(0, str(cfg.get("live_sync_duration_count", 4)))
+        self.entry_sync.pack(fill="x", padx=15, pady=(2, 10))
+
+        self.switch_loop = ctk.CTkSwitch(sec3_body, text="🔁 Loop Queue (キュー保持・繰り返し再生)")
+        if cfg.get("loop_queue", False):
+            self.switch_loop.select()
+        self.switch_loop.pack(anchor="w", padx=15, pady=(4, 6))
+
+        self.switch_shuffle = ctk.CTkSwitch(sec3_body, text="🔀 Shuffle Play (シャッフル再生モード)")
+        if cfg.get("shuffle", False):
+            self.switch_shuffle.select()
+        self.switch_shuffle.pack(anchor="w", padx=15, pady=(2, 10))
+
+        # 4. 🖼 写真・スライドショー
+        sec4_body = self._add_section("🖼 写真・スライドショー", opened=False)
+
+        self.lbl_photo_dur = ctk.CTkLabel(sec4_body, text="Photo Display Duration [sec] (写真表示秒数):", anchor="w")
+        self.lbl_photo_dur.pack(fill="x", padx=15, pady=(10, 0))
+        self.entry_photo_dur = ctk.CTkEntry(sec4_body)
+        self.entry_photo_dur.insert(0, str(cfg.get("image_display_duration", 15)))
+        self.entry_photo_dur.pack(fill="x", padx=15, pady=(2, 8))
+
+        self.switch_photo_advance = ctk.CTkSwitch(sec4_body, text="⏱ Auto Advance Photos (写真の自動送り)")
+        if cfg.get("image_auto_advance", False):
+            self.switch_photo_advance.select()
+        self.switch_photo_advance.pack(anchor="w", padx=15, pady=(2, 10))
+
+        # 5. 📻 ラジオ / BGM モード
+        sec5_body = self._add_section("📻 ラジオ / BGM モード", opened=False)
+
+        self.switch_radio = ctk.CTkSwitch(sec5_body, text="📻 Radio / BGM Mode (YouTube音声のみ+静止画・超低帯域配信)")
         if cfg.get("radio_mode", False):
             self.switch_radio.select()
-        self.switch_radio.pack(anchor="w", padx=15, pady=(4, 4))
+        self.switch_radio.pack(anchor="w", padx=15, pady=(10, 4))
 
-        self.lbl_radio_bg = ctk.CTkLabel(form_frame, text="📻 Radio Background (ラジオモード時の背景):", anchor="w")
+        self.lbl_radio_bg = ctk.CTkLabel(sec5_body, text="📻 Radio Background (ラジオモード時の背景):", anchor="w")
         self.lbl_radio_bg.pack(fill="x", padx=15, pady=(2, 2))
 
         curr_radio_bg = cfg.get("radio_bg_source", "card")
@@ -230,14 +239,14 @@ class SettingsWindow(ctk.CTkToplevel):
             radio_bg_val = "Card (サムネイル＆楽曲情報)"
 
         self.seg_radio_bg = ctk.CTkSegmentedButton(
-            form_frame,
+            sec5_body,
             values=["Card (サムネイル＆楽曲情報)", "Standby (待機画面・QR)", "Slideshow (写真スライドショー)"]
         )
         self.seg_radio_bg.set(radio_bg_val)
         self.seg_radio_bg.pack(fill="x", padx=15, pady=(2, 4))
 
         self.lbl_radio_info = ctk.CTkLabel(
-            form_frame,
+            sec5_body,
             text="💡 ラジオモード時は動画を落とさず帯域を約300kbps（通常比90%減）に極小化し、VRChatでのバッファ詰まりを防止します。",
             font=ctk.CTkFont(size=11),
             text_color="#34D399",
@@ -245,22 +254,23 @@ class SettingsWindow(ctk.CTkToplevel):
             wraplength=440,
             justify="left"
         )
-        self.lbl_radio_info.pack(fill="x", padx=15, pady=(0, 8))
+        self.lbl_radio_info.pack(fill="x", padx=15, pady=(0, 10))
 
-        # 6.5. 待機画面 (Standby Screen) 設定
-        self.lbl_standby_section = ctk.CTkLabel(form_frame, text="📺 Standby Screen (キュー空時の待機画面):", font=ctk.CTkFont(weight="bold"), anchor="w")
-        self.lbl_standby_section.pack(fill="x", padx=15, pady=(8, 2))
+        # 6. 📺 待機画面
+        sec6_body = self._add_section("📺 待機画面", opened=False)
+
+        self.lbl_standby_section = ctk.CTkLabel(sec6_body, text="📺 Standby Screen (キュー空時の待機画面):", font=ctk.CTkFont(weight="bold"), anchor="w")
 
         curr_standby_mode = cfg.get("standby_mode", "image")
         standby_mode_val = "QR Code Info (QR案内)" if curr_standby_mode == "qr" else "Custom Image (固定画像)"
-        self.seg_standby_mode = ctk.CTkSegmentedButton(form_frame, values=["Custom Image (固定画像)", "QR Code Info (QR案内)"])
+        self.seg_standby_mode = ctk.CTkSegmentedButton(sec6_body, values=["Custom Image (固定画像)", "QR Code Info (QR案内)"])
         self.seg_standby_mode.set(standby_mode_val)
-        self.seg_standby_mode.pack(fill="x", padx=15, pady=(2, 4))
+        self.seg_standby_mode.pack(fill="x", padx=15, pady=(10, 4))
 
         self.current_standby_img_path = cfg.get("standby_image_path", "")
 
-        standby_img_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
-        standby_img_frame.pack(fill="x", padx=15, pady=(2, 6))
+        standby_img_frame = ctk.CTkFrame(sec6_body, fg_color="transparent")
+        standby_img_frame.pack(fill="x", padx=15, pady=(2, 10))
 
         display_name = os.path.basename(self.current_standby_img_path) if self.current_standby_img_path else "(デフォルト画像)"
         self.lbl_standby_path = ctk.CTkLabel(standby_img_frame, text=f"待機画像: {display_name}", anchor="w", font=ctk.CTkFont(size=12))
@@ -272,31 +282,32 @@ class SettingsWindow(ctk.CTkToplevel):
         self.btn_reset_standby_img = ctk.CTkButton(standby_img_frame, text="初期化", width=60, fg_color="#64748B", hover_color="#475569", command=self.reset_standby_image)
         self.btn_reset_standby_img.pack(side="right", padx=(5, 0))
 
-        # 7. QRコード上書き表示 (ウォーターマーク) 設定
+        # 7. 🔲 オーバーレイ (QR / 時計)
+        sec7_body = self._add_section("🔲 オーバーレイ (QR / 時計)", opened=False)
+
         is_qr_on = bool(cfg.get("overlay_qr_enabled", False) or cfg.get("overlay_qr_video", False) or cfg.get("overlay_qr_image", False))
-        self.switch_qr_overlay = ctk.CTkSwitch(form_frame, text="🔲 QR Overlay (動画・写真にQR・URL上書き表示)")
+        self.switch_qr_overlay = ctk.CTkSwitch(sec7_body, text="🔲 QR Overlay (動画・写真にQR・URL上書き表示)")
         if is_qr_on:
             self.switch_qr_overlay.select()
-        self.switch_qr_overlay.pack(anchor="w", padx=15, pady=(2, 6))
+        self.switch_qr_overlay.pack(anchor="w", padx=15, pady=(10, 6))
 
-        # 7.5. 時計オーバーレイ設定
         is_clock_on = bool(cfg.get("overlay_clock_enabled", False) or cfg.get("overlay_clock_video", False))
-        self.switch_clock_overlay = ctk.CTkSwitch(form_frame, text="⏰ Clock Overlay (動画再生時にJST時刻をオーバーレイ表示)")
+        self.switch_clock_overlay = ctk.CTkSwitch(sec7_body, text="⏰ Clock Overlay (動画再生時にJST時刻をオーバーレイ表示)")
         if is_clock_on:
             self.switch_clock_overlay.select()
         self.switch_clock_overlay.pack(anchor="w", padx=15, pady=(2, 6))
 
-        self.lbl_qr_mode = ctk.CTkLabel(form_frame, text="📐 Overlay Layout (表示レイアウト):", anchor="w")
+        self.lbl_qr_mode = ctk.CTkLabel(sec7_body, text="📐 Overlay Layout (表示レイアウト):", anchor="w")
         self.lbl_qr_mode.pack(fill="x", padx=15, pady=(4, 2))
 
         curr_mode = cfg.get("overlay_qr_mode", "bottom-right")
         mode_val = "Fullscreen (フル画面)" if curr_mode == "fullscreen" else "Compact (右下に小さく)"
-        self.seg_qr_mode = ctk.CTkSegmentedButton(form_frame, values=["Compact (右下に小さく)", "Fullscreen (フル画面)"])
+        self.seg_qr_mode = ctk.CTkSegmentedButton(sec7_body, values=["Compact (右下に小さく)", "Fullscreen (フル画面)"])
         self.seg_qr_mode.set(mode_val)
         self.seg_qr_mode.pack(fill="x", padx=15, pady=(2, 4))
 
         self.lbl_qr_warn = ctk.CTkLabel(
-            form_frame,
+            sec7_body,
             text="⚠️ 注意: 動画オーバーレイ有効時はリアルタイム再エンコード処理のためバッファ（読み込み待ち）が発生しやすくなります。",
             font=ctk.CTkFont(size=11),
             text_color="#F59E0B",
@@ -304,39 +315,34 @@ class SettingsWindow(ctk.CTkToplevel):
             wraplength=440,
             justify="left"
         )
-        self.lbl_qr_warn.pack(fill="x", padx=15, pady=(0, 8))
+        self.lbl_qr_warn.pack(fill="x", padx=15, pady=(0, 10))
 
-        # 8. Cloudflare トンネル起動設定
-        self.switch_tunnel = ctk.CTkSwitch(form_frame, text="🌐 Enable Cloudflare Tunnel (トンネル自動起動)")
-        if cfg.get("enable_tunnel", True):
-            self.switch_tunnel.select()
-        self.switch_tunnel.pack(anchor="w", padx=15, pady=(2, 10))
+        # 8. 📱 Webリモコン (権限 / パスワード)
+        sec8_body = self._add_section("📱 Webリモコン (権限 / パスワード)", opened=False)
 
-        # 9. Webリモコン (外部ブラウザ/スマホ) 権限設定
-        self.lbl_web_perms = ctk.CTkLabel(form_frame, text="📱 Web Remote Permissions (ブラウザ操作権限):", font=ctk.CTkFont(weight="bold"), anchor="w")
-        self.lbl_web_perms.pack(fill="x", padx=15, pady=(8, 4))
+        self.lbl_web_perms = ctk.CTkLabel(sec8_body, text="📱 Web Remote Permissions (ブラウザ操作権限):", font=ctk.CTkFont(weight="bold"), anchor="w")
+        self.lbl_web_perms.pack(fill="x", padx=15, pady=(10, 4))
 
-        self.switch_web_add = ctk.CTkSwitch(form_frame, text="Allow Adding Media (スマホからの動画・写真追加を許可)")
+        self.switch_web_add = ctk.CTkSwitch(sec8_body, text="Allow Adding Media (スマホからの動画・写真追加を許可)")
         if cfg.get("allow_web_queue_add", True):
             self.switch_web_add.select()
         self.switch_web_add.pack(anchor="w", padx=15, pady=(2, 4))
 
-        self.switch_web_edit = ctk.CTkSwitch(form_frame, text="Allow Queue Edit (キューの削除・並び替えを許可)")
+        self.switch_web_edit = ctk.CTkSwitch(sec8_body, text="Allow Queue Edit (キューの削除・並び替えを許可)")
         if cfg.get("allow_web_queue_edit", True):
             self.switch_web_edit.select()
         self.switch_web_edit.pack(anchor="w", padx=15, pady=(2, 4))
 
-        self.switch_web_control = ctk.CTkSwitch(form_frame, text="Allow Playback Control (スキップ・ループ等の操作を許可)")
+        self.switch_web_control = ctk.CTkSwitch(sec8_body, text="Allow Playback Control (スキップ・ループ等の操作を許可)")
         if cfg.get("allow_web_playback_control", True):
             self.switch_web_control.select()
         self.switch_web_control.pack(anchor="w", padx=15, pady=(2, 8))
 
-        # 10. Webリモコン パスワード/PIN保護設定
-        self.lbl_web_pw = ctk.CTkLabel(form_frame, text="🔒 Web Remote Password / PIN (パスワード保護):", font=ctk.CTkFont(weight="bold"), anchor="w")
+        self.lbl_web_pw = ctk.CTkLabel(sec8_body, text="🔒 Web Remote Password / PIN (パスワード保護):", font=ctk.CTkFont(weight="bold"), anchor="w")
         self.lbl_web_pw.pack(fill="x", padx=15, pady=(8, 2))
 
         self.lbl_web_pw_desc = ctk.CTkLabel(
-            form_frame,
+            sec8_body,
             text="※空欄の場合は認証なし。PIN番号（例: 1234）やパスワードを設定すると、\n　認証したユーザーのみがリモコン画面の閲覧・操作を行えます（ホスト負荷防止）。",
             font=ctk.CTkFont(size=11),
             text_color="#95A5A6",
@@ -345,7 +351,7 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self.lbl_web_pw_desc.pack(fill="x", padx=15, pady=(0, 4))
 
-        pw_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        pw_frame = ctk.CTkFrame(sec8_body, fg_color="transparent")
         pw_frame.pack(fill="x", padx=15, pady=(2, 12))
 
         self.entry_web_password = ctk.CTkEntry(pw_frame, placeholder_text="未設定 (誰でもアクセス可能)", width=240, show="*")
@@ -448,6 +454,40 @@ class SettingsWindow(ctk.CTkToplevel):
 
         self.btn_cancel = ctk.CTkButton(btn_frame, text="Cancel / キャンセル", fg_color="#7F8C8D", hover_color="#707B7C", command=self.destroy)
         self.btn_cancel.pack(side="right")
+
+    def _add_section(self, title, opened=False):
+        """折りたたみ可能なセクションを作り、中身を入れるフレームを返す。
+
+        閉じている間もウィジェットは生存させる（pack_forget のみ）。
+        破棄すると save_settings() が読む属性が消え、設定が保存できなくなる。
+        """
+        state = {"open": bool(opened)}
+        btn = ctk.CTkButton(
+            self.scroll_container,
+            text="",
+            fg_color="#34495E",
+            hover_color="#2C3E50",
+            anchor="w",
+        )
+        btn.pack(fill="x", padx=10, pady=(5, 0))
+
+        body = ctk.CTkFrame(self.scroll_container)
+
+        def render():
+            btn.configure(text=f"{'▼' if state['open'] else '▶'} {title}")
+            if state["open"]:
+                body.pack(fill="x", padx=10, pady=(0, 8))
+            else:
+                body.pack_forget()
+
+        def toggle():
+            state["open"] = not state["open"]
+            render()
+
+        btn.configure(command=toggle)
+        render()
+        self._sections.append((title, btn, body, state))
+        return body
 
     def toggle_show_web_password(self):
         if self.chk_show_pw.get():
