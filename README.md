@@ -250,7 +250,7 @@ python gui_streamer.py --headless --port 8080
 
 | モード | 位置付け | VRChat側の遅延 | 備考 |
 | :--- | :--- | :---: | :--- |
-| `hls`（既定） | 外部サービス不要。他経路が失敗したときの退避先 | 約9〜12秒 | 従来どおりの動作 |
+| `hls`（既定） | **Cloudflare Quick Tunnel 経由**で配信。他経路が失敗したときの退避先 | 約9〜12秒 | 従来どおりの動作。トンネルを無効(`enable_tunnel: false`)にすると同一LAN内のみの配信になる |
 | `topaz` | TopazChat（VRChat向けRTMP→RTSP中継） | 約1〜2秒 | AVProプレイヤーで `rtspt://topaz.chat/live/<KEY>` を再生 |
 | `generic_rtmp` | 自前の nginx-rtmp / MediaMTX 等（上級者向け） | 任意 | URLとキーを手入力。規約・著作権の順守は利用者の責任 |
 

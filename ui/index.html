@@ -450,7 +450,7 @@
                             <h3 class="font-semibold text-xs text-zinc-200">📡 配信先（ストリーミング出力先）設定</h3>
                         </div>
                         <div id="destinationStatusBadge" class="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700 flex items-center gap-1.5">
-                            <span>ローカルHLS</span>
+                            <span>HLS / Cloudflare</span>
                         </div>
                     </div>
 
@@ -477,7 +477,7 @@
                         <div class="flex flex-col gap-2">
                             <label class="text-xs text-zinc-400 font-medium">配信先モード (output_mode)</label>
                             <select id="settingOutputMode" onchange="updateDestinationVisibility(); updateSettings();" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary">
-                                <option value="hls">ローカルHLS（既定・外部サービス不要 / 遅延 約9〜12秒）</option>
+                                <option value="hls">HLS / Cloudflare トンネル経由（既定・安定 / 遅延 約9〜12秒）</option>
                                 <option value="topaz">TopazChat（低遅延 約1〜2秒 / VRChat向け・AVPro必須）</option>
                                 <option value="generic_rtmp">汎用RTMP（上級者向け・自己責任）</option>
                             </select>
@@ -1849,12 +1849,17 @@
                 if (dest.fallback_active) {
                     const lastErr = dest.last_error ? `: ${dest.last_error}` : '';
                     badgeEl.className = 'text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-amber-950 text-amber-400 border border-amber-800 flex items-center gap-1.5';
-                    badgeEl.innerHTML = `<i class="ri-alert-line"></i><span>配信先に接続できないためローカルHLSへ退避中${escapeHtml(lastErr)}</span>`;
+                    badgeEl.innerHTML = `<i class="ri-alert-line"></i><span>配信先に接続できないためHLS経路へ退避中${escapeHtml(lastErr)}</span>`;
                     if (retryBtn) retryBtn.classList.remove('hidden');
                 } else {
-                    let modeLabel = 'ローカルHLS';
-                    if (activeMode === 'topaz') modeLabel = 'TopazChat';
-                    else if (activeMode === 'generic_rtmp') modeLabel = '汎用RTMP';
+                    // 表示名はサーバー側(get_output_mode_label)が正本。
+                    // hls は Cloudflare トンネル経由なので「ローカル」とは限らない。
+                    let modeLabel = dest.active_label_short || dest.label_short;
+                    if (!modeLabel) {
+                        modeLabel = 'HLS';
+                        if (activeMode === 'topaz') modeLabel = 'TopazChat';
+                        else if (activeMode === 'generic_rtmp') modeLabel = '汎用RTMP';
+                    }
 
                     badgeEl.className = 'text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-1.5';
                     badgeEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span><span>${modeLabel} 出力中</span>`;

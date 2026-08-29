@@ -95,7 +95,8 @@ def test_hls_sink_command_unchanged():
     assert cmd[cmd.index("-c:a") + 1] == "copy"
     assert "delete_segments+append_list" in cmd
     assert "libx264" not in cmd, "HLS路では再エンコードしない"
-    assert "local HLS" in target
+    # 表示・ログ文言は実態に合わせる（hls経路は Cloudflare トンネル経由であり「ローカル」ではない）
+    assert "HLS via" in target
     print("PASS: HLS sink still passes through without re-encoding.")
 
 

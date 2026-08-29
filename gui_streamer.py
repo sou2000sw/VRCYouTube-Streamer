@@ -37,6 +37,14 @@ if sys.platform == "win32":
     else:
         sys.stderr = DummyWriter()
 
+# 配信先の選択肢。hls は Cloudflare トンネルを経由するため「ローカル」とは書かない
+# （トンネルを無効にしたときだけ本当にローカル完結になる）。
+OUT_MODE_CHOICES = {
+    "hls": "HLS / Cloudflare トンネル経由 (既定・安定)",
+    "topaz": "TopazChat (低遅延/VRChat向け)",
+    "generic_rtmp": "Generic RTMP (上級者向け)",
+}
+
 # 設定ウィンドウ
 class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent, streamer_core):
@@ -125,15 +133,15 @@ class SettingsWindow(ctk.CTkToplevel):
 
         curr_out_mode = cfg.get("output_mode", "hls")
         if curr_out_mode == "topaz":
-            out_mode_val = "TopazChat (低遅延/VRChat向け)"
+            out_mode_val = OUT_MODE_CHOICES["topaz"]
         elif curr_out_mode == "generic_rtmp":
-            out_mode_val = "Generic RTMP (上級者向け)"
+            out_mode_val = OUT_MODE_CHOICES["generic_rtmp"]
         else:
-            out_mode_val = "Local HLS (既定/外部サービス不要)"
+            out_mode_val = OUT_MODE_CHOICES["hls"]
 
         self.opt_output_mode = ctk.CTkOptionMenu(
             form_frame,
-            values=["Local HLS (既定/外部サービス不要)", "TopazChat (低遅延/VRChat向け)", "Generic RTMP (上級者向け)"]
+            values=list(OUT_MODE_CHOICES.values())
         )
         self.opt_output_mode.set(out_mode_val)
         self.opt_output_mode.pack(fill="x", padx=15, pady=(2, 6))
@@ -501,12 +509,11 @@ class SettingsWindow(ctk.CTkToplevel):
                 radio_bg = "card"
 
             selected_out_mode = self.opt_output_mode.get()
-            if "TopazChat" in selected_out_mode:
-                output_mode = "topaz"
-            elif "Generic RTMP" in selected_out_mode:
-                output_mode = "generic_rtmp"
-            else:
-                output_mode = "hls"
+            output_mode = "hls"
+            for key, text in OUT_MODE_CHOICES.items():
+                if selected_out_mode == text:
+                    output_mode = key
+                    break
 
             try:
                 rtmp_vbitrate = int(self.entry_rtmp_vbitrate.get().strip())
@@ -1203,15 +1210,16 @@ class App(ctk.CTk):
         core = self.streamer_core
         mode = core.get_output_mode()
         active = core.get_active_output_mode()
-        mode_names = {"hls": "Local HLS", "topaz": "TopazChat", "generic_rtmp": "Generic RTMP"}
+        mode_label = core.get_output_mode_label(mode, short=True)
+        active_label = core.get_output_mode_label(active, short=True)
 
         if getattr(core, "destination_fallback_active", False):
             self.tunnel_title.configure(
-                text=f"🌍 ワールド用 動画URL  ⚠ {mode_names.get(mode, mode)} へ接続できず {mode_names['hls']} へ退避中:",
+                text=f"🌍 ワールド用 動画URL  ⚠ {mode_label} へ接続できず {active_label} へ退避中:",
                 text_color="#F39C12",
             )
         else:
-            self.tunnel_title.configure(text=f"🌍 ワールド用 動画URL ({mode_names.get(active, active)}):", text_color="gray")
+            self.tunnel_title.configure(text=f"🌍 ワールド用 動画URL ({active_label}):", text_color="gray")
 
         video_url = self.get_world_video_url(include_secrets=self.video_url_revealed)
         if not video_url:

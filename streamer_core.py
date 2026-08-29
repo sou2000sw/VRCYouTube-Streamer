@@ -909,6 +909,21 @@ class StreamerCore:
                 log_print(f"[Destination] Failed to persist generated stream key: {e}")
         return new_key
 
+    def get_output_mode_label(self, mode=None, short=False):
+        """配信先の表示名。GUI・Webリモコン・ログで同じ文言を使うためにここへ集約する。
+
+        hls 経路は Cloudflare Quick Tunnel を経由しており「外部サービス不要」ではない。
+        本当にローカル完結なのはトンネルを無効にしたときだけなので、表示を実態に追従させる。
+        """
+        mode = mode or self.get_output_mode()
+        if mode == "topaz":
+            return "TopazChat" if short else "TopazChat（RTMP → RTSP 中継）"
+        if mode == "generic_rtmp":
+            return "汎用RTMP" if short else "汎用RTMP（自前サーバー）"
+        if getattr(self, "enable_tunnel", True):
+            return "Cloudflare HLS" if short else "HLS（Cloudflare トンネル経由）"
+        return "ローカルHLS" if short else "HLS（ローカル配信のみ）"
+
     def get_rtmp_limits(self, mode=None):
         """destination ごとの (映像kbps上限, 音声kbps上限)。0 は上限なし。"""
         mode = mode or self.get_output_mode()
@@ -986,6 +1001,10 @@ class StreamerCore:
         return {
             "output_mode": mode,
             "active_output_mode": active,
+            "label": self.get_output_mode_label(mode),
+            "label_short": self.get_output_mode_label(mode, short=True),
+            "active_label": self.get_output_mode_label(active),
+            "active_label_short": self.get_output_mode_label(active, short=True),
             "fallback_active": bool(getattr(self, "destination_fallback_active", False)),
             "last_error": str(getattr(self, "destination_last_error", "")),
             "fail_count": int(getattr(self, "_sink_fail_count", 0)),
@@ -1113,7 +1132,8 @@ class StreamerCore:
             "-hls_segment_filename", os.path.join(HLS_DIR, "seg_%05d.ts"),
             os.path.join(HLS_DIR, "stream.m3u8"),
         ]
-        return cmd, f"local HLS (segment {seg_time}s / list {list_size})"
+        via = "Cloudflare tunnel" if getattr(self, "enable_tunnel", True) else "local only"
+        return cmd, f"HLS via {via} (segment {seg_time}s / list {list_size})"
 
     def _drain_sink_stderr(self, proc):
         """stderr を読み捨てないとパイプが詰まってFFmpegごと止まる。
@@ -1238,7 +1258,8 @@ class StreamerCore:
 
         backoff = self._schedule_destination_retry()
         self.destination_fallback_active = True
-        log_print(f"[Destination] Falling back to local HLS to keep the stream alive. Retrying '{mode}' in {backoff}s.")
+        log_print(f"[Destination] Falling back to HLS ({self.get_output_mode_label('hls', short=True)}) "
+                  f"to keep the stream alive. Retrying '{mode}' in {backoff}s.")
         return self._start_sink("hls")
 
     # 旧名。外部（テスト・プラグイン）からの呼び出し互換のために残す。
