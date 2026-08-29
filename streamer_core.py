@@ -150,6 +150,11 @@ STREAM_KEY_MIN_LENGTH = 32
 # 接続成功を意味しない（誰もlistenしていない宛先でも2秒間は平然と生きていた）。
 # そのため到達性は起動前にTCPで確かめ、起動後の生存確認は即死検知の保険として短く持つ。
 SINK_STARTUP_PROBE_SECONDS = 1.0
+
+# 中継の先読み秒数。HLSは手元にセグメントを溜める設計なので先行させるが、
+# RTMPはライブ投稿なので実時間に近づける（詰め込むと遅延と映像破綻を招く）。
+HLS_BUFFER_AHEAD_SECONDS = 15.0
+RTMP_BUFFER_AHEAD_SECONDS = 1.0
 RTMP_CONNECT_TIMEOUT_SECONDS = 3.0
 # この秒数以上生き延びたシンクの死は「一度は繋がった上での切断」とみなし、
 # 連続失敗カウントをリセットして再接続サイクルをやり直す。
@@ -1382,11 +1387,19 @@ class StreamerCore:
 
     def relay_stream_data(self, proc_to_read, stdin_to_write, stop_event, is_paced=True):
         """
-        送信側FFmpegから受信側HLS FFmpegへのストリーム中継。
-        is_paced=True の場合、初期バースト（約15秒分）を高速生成後、
-        実時間 + 先読みバッファ（15秒）を維持するようにデータ流量を制御する。
+        送信側FFmpegから配信先シンクへのストリーム中継。
+        is_paced=True の場合、実時間 + 先読みバッファを維持するようにデータ流量を制御する。
+
+        先読み秒数は配信先で変える。HLSは手元でセグメントを溜めてから配るので
+        15秒先行させておくと再生が途切れにくいが、RTMPは「今の映像を今送る」
+        ライブ投稿であり、同じことをすると相手サーバーへ一気に押し込むことになる。
+        ★実測(2026-08-30): 15秒先読みのままRTMPへ送ると、経過4秒の時点で
+        約14秒ぶんを送出していた（実時間の3.5倍）。低遅延のためにTopazChatを
+        使いながら15秒先行で詰め込む形になり、遅延も映像の乱れも招く。
+        OBS等の実配信と同じく、RTMP系では実時間に近いペースで送る。
         """
-        BUFFER_AHEAD_SECONDS = 15.0  # 先行バッファ秒数
+        rtmp_live = self.get_active_output_mode() in RTMP_OUTPUT_MODES
+        BUFFER_AHEAD_SECONDS = RTMP_BUFFER_AHEAD_SECONDS if rtmp_live else HLS_BUFFER_AHEAD_SECONDS
         base_pts = None
         current_stream_pos = 0.0
         max_relative_pts = 0.0

@@ -486,6 +486,27 @@ def test_pts_offset_is_applied_on_the_output_side():
     print("PASS: offset is emitted as an output option.")
 
 
+def test_rtmp_is_paced_close_to_realtime():
+    """★実測由来の回帰防止(2026-08-30)。
+
+    HLS用の先読み15秒をRTMPにも適用していたため、経過4秒の時点で約14秒ぶんを
+    送出していた（実時間の3.5倍）。低遅延のためにTopazChatを使いながら
+    相手サーバーへ詰め込む形になり、遅延も映像の破綻も招く。
+    OBS等の実配信と同じく、RTMP系では実時間に近いペースで送る。
+    """
+    print("\n--- 22. RTMPは実時間ペースで送る ---")
+    assert streamer_core.RTMP_BUFFER_AHEAD_SECONDS <= 2.0, "RTMPで先読みを溜めない"
+    assert streamer_core.HLS_BUFFER_AHEAD_SECONDS >= 10.0, "HLSは従来どおり先読みする"
+    assert streamer_core.RTMP_BUFFER_AHEAD_SECONDS < streamer_core.HLS_BUFFER_AHEAD_SECONDS
+
+    src = io.open("streamer_core.py", encoding="utf-8").read()
+    start = src.index("    def relay_stream_data(")
+    body = src[start:src.index("\n    def ", start + 10)]
+    assert "RTMP_BUFFER_AHEAD_SECONDS if rtmp_live else HLS_BUFFER_AHEAD_SECONDS" in body,         "中継の先読み秒数は配信先で切り替えること"
+    assert "BUFFER_AHEAD_SECONDS = 15.0" not in body, "15秒固定に戻してはいけない"
+    print("PASS: RTMP paces near realtime, HLS keeps its look-ahead.")
+
+
 def test_backward_compatible_alias():
     """外部（プラグイン・既存テスト）が呼ぶ旧名を壊していないこと。"""
     print("\n--- 12. ensure_hls_receiver alias ---")
