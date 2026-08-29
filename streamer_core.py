@@ -110,8 +110,10 @@ DEFAULT_CONFIG = {
     "max_video_height": 1080,
 
     # --- 配信先（destination）: タスク14 ---
-    # output_mode を切り替えるだけで出口（シンク）が変わる。既定は従来どおりローカルHLS。
-    "output_mode": "hls",
+    # output_mode を切り替えるだけで出口（シンク）が変わる。
+    # 既定は TopazChat（低遅延）。接続できない場合は自動でHLSへ退避するため、
+    # 相手サーバーが落ちていても配信自体は途切れない。
+    "output_mode": "topaz",
     # TopazChat のエンドポイントは個人運営でホスト変更・終了があり得るため、
     # ハードコードせず設定値として持つ（リビルドなしで追随できるようにする）。
     "topaz_rtmp_base": "rtmp://topaz.chat/live",

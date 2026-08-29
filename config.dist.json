@@ -28,7 +28,7 @@
   "web_password": "",
   "max_video_upload_mb": 200,
   "max_video_height": 1080,
-  "output_mode": "hls",
+  "output_mode": "topaz",
   "topaz_rtmp_base": "rtmp://topaz.chat/live",
   "topaz_rtsp_base": "rtspt://topaz.chat/live",
   "topaz_stream_key": "",

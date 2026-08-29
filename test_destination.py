@@ -66,11 +66,17 @@ def import_gui_streamer():
         sys.stdout, sys.stderr = saved_out, saved_err
 
 
-def test_defaults_keep_hls():
-    """既定値は必ず hls。配布ソフトが黙って他者のサーバーへ帯域を向けてはいけない。"""
-    print("\n--- 1. Default destination stays HLS ---")
-    assert DEFAULT_CONFIG["output_mode"] == "hls"
-    assert DEFAULT_CONFIG["topaz_stream_key"] == ""
+def test_default_destination_and_fallback_safety():
+    """既定は TopazChat（低遅延）。ただし安全側の担保は崩さないこと。
+
+    2026-08-30 に既定を hls から topaz へ変更した。相手は個人運営の無償サービスなので、
+    (1) ストリームキーを配布物へ焼き込まず初回に自動生成する、
+    (2) 繋がらなければHLSへ自動退避する、の2点が崩れていないことをここで守る。
+    """
+    print("\n--- 1. Default destination ---")
+    assert DEFAULT_CONFIG["output_mode"] == "topaz"
+    assert DEFAULT_CONFIG["topaz_stream_key"] == "", "キーを配布物へ焼き込まない"
+    assert DEFAULT_CONFIG["rtmp_fallback_to_hls"] is True, "退避を既定で無効にしない"
 
     core = make_core()
     core.config["output_mode"] = "hls"
@@ -79,7 +85,7 @@ def test_defaults_keep_hls():
     # 未知の値は fail-safe に hls へ落ちる
     core.config["output_mode"] = "youtube_live"
     assert core.get_output_mode() == "hls"
-    print("PASS: default and unknown output_mode both resolve to 'hls'.")
+    print("PASS: default is topaz, unknown values fall back to 'hls'.")
 
 
 def test_hls_sink_command_unchanged():
