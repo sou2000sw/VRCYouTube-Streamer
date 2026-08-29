@@ -1030,7 +1030,13 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             saved = self.streamer_core.save_config(body_json)
             if saved:
-                self.send_json_response(200, {"success": True, "config": self.streamer_core.config})
+                # 検証で弾いた項目があれば理由を返す（黙って無視すると、利用者は
+                # 「保存したのに反映されない」としか分からない）
+                self.send_json_response(200, {
+                    "success": True,
+                    "config": self.streamer_core.config,
+                    "warnings": list(getattr(self.streamer_core, "last_config_warnings", []))
+                })
             else:
                 self.send_json_response(500, {"success": False, "message": "Failed to save configuration"})
             return

@@ -495,6 +495,18 @@
                     <!-- TopazChat Settings Block -->
                     <div id="topazSettingsBlock" class="hidden flex flex-col gap-3 pt-2 border-t border-zinc-800/80">
                         <div class="flex flex-col gap-1.5">
+                            <div class="flex items-center justify-between gap-2">
+                                <label class="text-xs text-zinc-400 font-medium">TopazChat サーバー (投稿先RTMP / 再生RTSP)</label>
+                                <button type="button" id="btnResetTopazEndpoint" onclick="resetTopazEndpoint()" class="px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-[11px] transition shrink-0">
+                                    既定に戻す
+                                </button>
+                            </div>
+                            <input type="text" id="settingTopazRtmpBase" onchange="updateSettings()" placeholder="rtmp://topaz.chat/live" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-primary">
+                            <input type="text" id="settingTopazRtspBase" onchange="updateSettings()" placeholder="rtspt://topaz.chat/live" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-primary">
+                            <p class="text-[11px] text-zinc-500">※ サーバーが移転・増設された場合はここを書き換えます。投稿先は <span class="font-mono">rtmp://</span>、再生用は <span class="font-mono">rtspt://</span>（TCP強制）で始めてください。</p>
+                        </div>
+
+                        <div class="flex flex-col gap-1.5">
                             <label class="text-xs text-zinc-400 font-medium">TopazChat ストリームキー</label>
                             <div class="flex gap-2">
                                 <div class="relative flex-1">
@@ -890,6 +902,9 @@
         // 実際に今動いている出口。RTMP系(topaz / generic_rtmp)のときは
         // ローカルHLSを生成していないため、プレビューは原理的に成立しない。
         let activeOutputMode = 'hls';
+        // TopazChat の既定エンドポイント（「既定に戻す」用）。status から補充する。
+        let defaultTopazRtmpBase = '';
+        let defaultTopazRtspBase = '';
 
         // Password / PIN Modal Handlers
         function showPasswordModal(hasError = false) {
@@ -1819,6 +1834,17 @@
                 if (gurlEl && document.activeElement !== gurlEl) gurlEl.value = dest.generic_rtmp_url;
             }
 
+            if (dest.default_topaz_rtmp_base) defaultTopazRtmpBase = dest.default_topaz_rtmp_base;
+            if (dest.default_topaz_rtsp_base) defaultTopazRtspBase = dest.default_topaz_rtsp_base;
+
+            for (const [field, elId] of [['topaz_rtmp_base', 'settingTopazRtmpBase'],
+                                         ['topaz_rtsp_base', 'settingTopazRtspBase']]) {
+                const el = document.getElementById(elId);
+                if (el && document.activeElement !== el && dest[field] !== undefined) {
+                    el.value = dest[field];
+                }
+            }
+
             const topazKeyInput = document.getElementById('settingTopazKey');
             if (topazKeyInput && document.activeElement !== topazKeyInput) {
                 if (dest.topaz_stream_key_set) {
@@ -2494,6 +2520,15 @@
             }
         }
 
+        function resetTopazEndpoint() {
+            // 既定値はサーバー側(DEFAULT_CONFIG)が正本。status から受け取った値を使う。
+            const rtmpEl = document.getElementById('settingTopazRtmpBase');
+            const rtspEl = document.getElementById('settingTopazRtspBase');
+            if (rtmpEl) rtmpEl.value = defaultTopazRtmpBase || 'rtmp://topaz.chat/live';
+            if (rtspEl) rtspEl.value = defaultTopazRtspBase || 'rtspt://topaz.chat/live';
+            updateSettings();
+        }
+
         async function generateTopazKey() {
             if (!confirm('TopazChatのストリームキーを新規生成しますか？')) return;
             try {
@@ -2582,6 +2617,12 @@
                 rtmp_fallback_to_hls: fallback
             };
 
+            const topazRtmpVal = document.getElementById('settingTopazRtmpBase')?.value.trim() || '';
+            if (topazRtmpVal) payload.topaz_rtmp_base = topazRtmpVal;
+
+            const topazRtspVal = document.getElementById('settingTopazRtspBase')?.value.trim() || '';
+            if (topazRtspVal) payload.topaz_rtsp_base = topazRtspVal;
+
             const topazKeyVal = document.getElementById('settingTopazKey')?.value || '';
             if (topazKeyVal && !topazKeyVal.includes('*')) {
                 payload.topaz_stream_key = topazKeyVal;
@@ -2604,7 +2645,18 @@
                     body: JSON.stringify(payload)
                 });
                 if (res.ok) {
-                    showToast('設定を保存しました', 'success');
+                    // 検証で弾かれた項目があれば理由を出す。黙って無視すると
+                    // 「保存したのに反映されない」としか分からない。
+                    let warnings = [];
+                    try {
+                        const data = await res.json();
+                        warnings = data.warnings || [];
+                    } catch (e) {}
+                    if (warnings.length) {
+                        showToast(warnings[0], 'danger');
+                    } else {
+                        showToast('設定を保存しました', 'success');
+                    }
                 } else {
                     showToast('設定変更はホストのみ許可されています', 'danger');
                 }

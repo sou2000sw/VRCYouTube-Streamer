@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox
 import qrcode
 from PIL import Image
 
-from streamer_core import StreamerCore, CLOUDFLARED_EXE, log_print
+from streamer_core import StreamerCore, CLOUDFLARED_EXE, DEFAULT_CONFIG, log_print
 from api_server import APIServer
 
 # PyInstallerの --noconsole 対策: sys.stdout / sys.stderr が None になる場合のダミーライター
@@ -107,6 +107,32 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self.opt_output_mode.set(out_mode_val)
         self.opt_output_mode.pack(fill="x", padx=15, pady=(2, 6))
+
+        # TopazChat エンドポイント（個人運営でホストが変わり得るため利用者が変更可能）
+        self.lbl_topaz_endpoint = ctk.CTkLabel(
+            sec2_body,
+            text="🛰 TopazChat サーバー (投稿先RTMP / 再生RTSP):",
+            anchor="w"
+        )
+        self.lbl_topaz_endpoint.pack(fill="x", padx=15, pady=(4, 0))
+
+        self.entry_topaz_rtmp = ctk.CTkEntry(sec2_body, placeholder_text=DEFAULT_CONFIG["topaz_rtmp_base"])
+        self.entry_topaz_rtmp.insert(0, str(cfg.get("topaz_rtmp_base", DEFAULT_CONFIG["topaz_rtmp_base"])))
+        self.entry_topaz_rtmp.pack(fill="x", padx=15, pady=(2, 4))
+
+        self.entry_topaz_rtsp = ctk.CTkEntry(sec2_body, placeholder_text=DEFAULT_CONFIG["topaz_rtsp_base"])
+        self.entry_topaz_rtsp.insert(0, str(cfg.get("topaz_rtsp_base", DEFAULT_CONFIG["topaz_rtsp_base"])))
+        self.entry_topaz_rtsp.pack(fill="x", padx=15, pady=(0, 4))
+
+        self.btn_reset_topaz_endpoint = ctk.CTkButton(
+            sec2_body,
+            text="既定のサーバーに戻す",
+            width=140,
+            fg_color="#64748B",
+            hover_color="#475569",
+            command=self.reset_topaz_endpoint
+        )
+        self.btn_reset_topaz_endpoint.pack(anchor="w", padx=15, pady=(0, 6))
 
         # TopazChat Stream Key & Generate Button
         self.lbl_topaz_key = ctk.CTkLabel(sec2_body, text="🔑 TopazChat Stream Key:", anchor="w")
@@ -476,7 +502,9 @@ class SettingsWindow(ctk.CTkToplevel):
         def render():
             btn.configure(text=f"{'▼' if state['open'] else '▶'} {title}")
             if state["open"]:
-                body.pack(fill="x", padx=10, pady=(0, 8))
+                # after=btn を付けないと、pack の順序は「pack を呼んだ順」になるため
+                # 見出しの直下ではなくウィンドウ最下部（他の見出しより後ろ）に開いてしまう。
+                body.pack(fill="x", padx=10, pady=(0, 8), after=btn)
             else:
                 body.pack_forget()
 
@@ -517,6 +545,13 @@ class SettingsWindow(ctk.CTkToplevel):
             self.api_ref_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
             self.api_toggle_btn.configure(text="▼ API 仕様・引数リファレンス (表示 / 折りたたみ)")
             self.is_api_ref_open = True
+
+    def reset_topaz_endpoint(self):
+        """公式既定のサーバーへ戻す（入力欄のみ。保存は Save で確定する）。"""
+        self.entry_topaz_rtmp.delete(0, "end")
+        self.entry_topaz_rtmp.insert(0, DEFAULT_CONFIG["topaz_rtmp_base"])
+        self.entry_topaz_rtsp.delete(0, "end")
+        self.entry_topaz_rtsp.insert(0, DEFAULT_CONFIG["topaz_rtsp_base"])
 
     def generate_topaz_key_gui(self):
         try:
@@ -615,6 +650,21 @@ class SettingsWindow(ctk.CTkToplevel):
                 "rtmp_audio_bitrate_kbps": rtmp_abitrate,
                 "rtmp_fallback_to_hls": rtmp_fallback
             }
+
+            topaz_rtmp = self.entry_topaz_rtmp.get().strip()
+            topaz_rtsp = self.entry_topaz_rtsp.get().strip()
+            # 空欄なら既定値へ戻す（TopazChat のエンドポイントは空にできない）
+            new_cfg["topaz_rtmp_base"] = topaz_rtmp or DEFAULT_CONFIG["topaz_rtmp_base"]
+            new_cfg["topaz_rtsp_base"] = topaz_rtsp or DEFAULT_CONFIG["topaz_rtsp_base"]
+
+            invalid = []
+            for field, value in (("topaz_rtmp_base", new_cfg["topaz_rtmp_base"]),
+                                 ("topaz_rtsp_base", new_cfg["topaz_rtsp_base"])):
+                _normalized, reason = self.streamer_core.validate_endpoint(field, value)
+                if reason:
+                    invalid.append(reason)
+            if invalid:
+                raise ValueError("\n".join(invalid))
 
             topaz_key = self.entry_topaz_key.get().strip()
             if topaz_key:

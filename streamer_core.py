@@ -488,6 +488,7 @@ class StreamerCore:
         self.active_output_mode = self.get_output_mode()
         self.destination_fallback_active = False
         self.destination_last_error = ""
+        self.last_config_warnings = []   # 直近の設定保存で弾いた値の理由（UIへ返す）
         self._sink_fail_count = 0        # 現在の再接続サイクル内での連続失敗数
         self._sink_fallback_rounds = 0   # HLSへ退避した回数（バックオフ長の算出に使う）
         self._sink_started_at = 0.0
@@ -602,6 +603,30 @@ class StreamerCore:
                 k in new_config and new_config.get(k) != self.config.get(k)
                 for k in DESTINATION_CONFIG_KEYS
             )
+        endpoint_errors = []
+        if new_config:
+            for field in self.ENDPOINT_SCHEMES:
+                if field not in new_config:
+                    continue
+                normalized, reason = self.validate_endpoint(field, new_config.get(field))
+                if reason:
+                    # 不正な値は採用しない（黙って壊れた設定を保存しない）
+                    endpoint_errors.append(reason)
+                    log_print(f"[Destination] Rejected invalid endpoint: {reason}")
+                    new_config = dict(new_config)
+                    new_config.pop(field, None)
+                elif not normalized and field.startswith("topaz_"):
+                    # TopazChat のエンドポイントは空にできない。既定値へ戻す
+                    new_config = dict(new_config)
+                    new_config[field] = DEFAULT_CONFIG[field]
+                else:
+                    new_config = dict(new_config)
+                    new_config[field] = normalized
+
+        # 検証エラーは「接続状態」とは別物として持つ。destination_last_error に入れると
+        # シンクの起動成功で即座に消されてしまい、利用者に理由が届かない。
+        self.last_config_warnings = list(endpoint_errors)
+
         if new_config:
             self.config.update(new_config)
             if "enable_tunnel" in new_config:
@@ -924,6 +949,29 @@ class StreamerCore:
             return "Cloudflare HLS" if short else "HLS（Cloudflare トンネル経由）"
         return "ローカルHLS" if short else "HLS（ローカル配信のみ）"
 
+    ENDPOINT_SCHEMES = {
+        "topaz_rtmp_base": ("rtmp://", "rtmps://"),
+        "topaz_rtsp_base": ("rtsp://", "rtspt://"),
+        "generic_rtmp_url": ("rtmp://", "rtmps://"),
+    }
+
+    @classmethod
+    def validate_endpoint(cls, field, value):
+        """配信先エンドポイントの検証。返り値は (正規化後の値, エラー理由)。
+
+        TopazChat は個人運営でホストが変わり得るため利用者が書き換えられるようにするが、
+        スキームを間違えた値をそのまま保存すると、接続できない理由が分からなくなる。
+        """
+        schemes = cls.ENDPOINT_SCHEMES.get(field, ())
+        text = str(value or "").strip().rstrip("/")
+        if not text:
+            return "", ""
+        if schemes and not text.lower().startswith(schemes):
+            return "", f"{field} は {' / '.join(schemes)} で始まる必要があります: {text}"
+        if " " in text:
+            return "", f"{field} に空白が含まれています: {text}"
+        return text, ""
+
     def get_rtmp_limits(self, mode=None):
         """destination ごとの (映像kbps上限, 音声kbps上限)。0 は上限なし。"""
         mode = mode or self.get_output_mode()
@@ -1011,6 +1059,10 @@ class StreamerCore:
             "video_url": self.get_video_url(include_secrets=include_secrets),
             "topaz_stream_key": topaz_key if include_secrets else self.mask_stream_key(topaz_key),
             "topaz_stream_key_set": bool(topaz_key),
+            "topaz_rtmp_base": str(self.config.get("topaz_rtmp_base", "") or ""),
+            "topaz_rtsp_base": str(self.config.get("topaz_rtsp_base", "") or ""),
+            "default_topaz_rtmp_base": DEFAULT_CONFIG["topaz_rtmp_base"],
+            "default_topaz_rtsp_base": DEFAULT_CONFIG["topaz_rtsp_base"],
             "generic_rtmp_url": str(self.config.get("generic_rtmp_url", "") or ""),
             "generic_rtmp_key": generic_key if include_secrets else self.mask_stream_key(generic_key),
             "generic_rtmp_key_set": bool(generic_key),

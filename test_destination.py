@@ -417,6 +417,45 @@ def test_probe_timeout_is_bounded_across_address_families():
     print(f"PASS: probe finished in {elapsed:.2f}s (limit {limit}s).")
 
 
+def test_topaz_endpoint_is_configurable_and_validated():
+    """TopazChat のサーバーは利用者が変更できること。ただし不正な値は採用しない。
+
+    個人運営でホストの移転・増設があり得るため書き換え可能にしているが、
+    スキームを取り違えた値を保存してしまうと「繋がらない理由が分からない」状態になる。
+    """
+    print("\n--- 20. TopazChat endpoint form ---")
+    core = make_core()
+
+    # 正常系: 別サーバーへ変更でき、末尾スラッシュは正規化される
+    core.save_config({"topaz_rtmp_base": "rtmp://jp2.topaz.chat/live/",
+                      "topaz_rtsp_base": "rtspt://jp2.topaz.chat/live"})
+    assert core.config["topaz_rtmp_base"] == "rtmp://jp2.topaz.chat/live"
+    assert core.config["topaz_rtsp_base"] == "rtspt://jp2.topaz.chat/live"
+    assert not core.last_config_warnings
+
+    core.config["output_mode"] = "topaz"
+    core.config["topaz_stream_key"] = "E" * 40
+    assert core.get_rtmp_publish_url("topaz") == "rtmp://jp2.topaz.chat/live/" + "E" * 40
+    assert core.get_video_url(include_secrets=True) == "rtspt://jp2.topaz.chat/live/" + "E" * 40
+
+    # 異常系: スキーム違いは採用せず、理由を残す（直前の値は維持）
+    core.save_config({"topaz_rtmp_base": "http://example.com/live"})
+    assert core.config["topaz_rtmp_base"] == "rtmp://jp2.topaz.chat/live", "不正値で上書きしてはいけない"
+    assert core.last_config_warnings, "弾いた理由を返すこと"
+
+    # 空欄は既定のサーバーへ戻す（空のまま保存させない）
+    core.save_config({"topaz_rtmp_base": "", "topaz_rtsp_base": ""})
+    assert core.config["topaz_rtmp_base"] == DEFAULT_CONFIG["topaz_rtmp_base"]
+    assert core.config["topaz_rtsp_base"] == DEFAULT_CONFIG["topaz_rtsp_base"]
+
+    # UI の「既定に戻す」用に、既定値と現在値の両方を返していること
+    info = core.get_destination_info()
+    for key in ("topaz_rtmp_base", "topaz_rtsp_base",
+                "default_topaz_rtmp_base", "default_topaz_rtsp_base"):
+        assert info.get(key), f"destination 情報に {key} が無い"
+    print("PASS: endpoint is editable, normalized, validated and resettable.")
+
+
 def test_backward_compatible_alias():
     """外部（プラグイン・既存テスト）が呼ぶ旧名を壊していないこと。"""
     print("\n--- 12. ensure_hls_receiver alias ---")

@@ -120,6 +120,34 @@ def test_sections_are_collapsed_by_default_and_toggle(settings_window):
     print(f"PASS: {len(sections)} セクションすべて既定で閉じ、開閉も動作。")
 
 
+def test_section_opens_directly_under_its_own_header(settings_window):
+    """開いた中身が「その見出しの直下」に出ること。
+
+    pack は呼んだ順に積まれるため、after= を付けないと中身がウィンドウ最下部
+    （他のセクション見出しより後ろ）に現れる。どの見出しを押しても一番下に開く、
+    という分かりにくい挙動になっていた。
+    """
+    print("\n--- 4. 見出しの直下に開く ---")
+    win, root = settings_window
+    sections = win._sections
+
+    for index in (0, len(sections) // 2, len(sections) - 1):
+        title, btn, body, _state = sections[index]
+        btn.invoke()
+        root.update()
+
+        slaves = list(win.scroll_container.pack_slaves())
+        assert body in slaves, f"'{title}' の中身が配置されていない"
+        assert slaves.index(body) == slaves.index(btn) + 1, (
+            f"'{title}' の中身が見出しの直下にない "
+            f"(見出し={slaves.index(btn)} / 中身={slaves.index(body)} / 全{len(slaves)}要素)"
+        )
+
+        btn.invoke()
+        root.update()
+    print("PASS: どのセクションも自分の見出しの直下に開く。")
+
+
 def test_saving_while_collapsed_keeps_settings(settings_window):
     """閉じたまま保存しても設定が失われないこと。
 
