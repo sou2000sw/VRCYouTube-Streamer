@@ -166,7 +166,32 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self.lbl_topaz_notice.pack(fill="x", padx=15, pady=(0, 6))
 
+        self.sep_dest_topaz = self._add_separator(sec2_body)
+
         # Generic RTMP URL & Key
+        self.lbl_generic_rtmp_head = ctk.CTkLabel(
+            sec2_body,
+            text="🌐 Generic RTMP (自前サーバーへ送る / 上級者向け)",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w"
+        )
+        self.lbl_generic_rtmp_head.pack(fill="x", padx=15, pady=(0, 2))
+
+        self.lbl_generic_rtmp_desc = ctk.CTkLabel(
+            sec2_body,
+            text=("自分で立てた中継サーバー（MediaMTX / nginx-rtmp 等）へ配信するための枠です。\n"
+                  "投稿先URLとストリームキーは配信先サーバーの設定に合わせて入力してください。\n"
+                  "※ 再生用URLはサーバー構成に依存するため自動生成できません。\n"
+                  "※ 配信先の規約・著作権の順守は利用者の責任です。他者の動画を公開ライブへ\n"
+                  "　 再送出すると、アカウント停止の対象になり得ます。"),
+            font=ctk.CTkFont(size=10),
+            text_color="#94A3B8",
+            anchor="w",
+            wraplength=440,
+            justify="left"
+        )
+        self.lbl_generic_rtmp_desc.pack(fill="x", padx=15, pady=(0, 6))
+
         self.lbl_generic_rtmp_url = ctk.CTkLabel(sec2_body, text="🌐 Generic RTMP URL (投稿先URL):", anchor="w")
         self.lbl_generic_rtmp_url.pack(fill="x", padx=15, pady=(2, 0))
         self.entry_generic_rtmp_url = ctk.CTkEntry(sec2_body, placeholder_text="rtmp://localhost/live")
@@ -181,7 +206,17 @@ class SettingsWindow(ctk.CTkToplevel):
             self.entry_generic_rtmp_key.insert(0, str(cfg.get("generic_rtmp_key", "")))
         self.entry_generic_rtmp_key.pack(fill="x", padx=15, pady=(2, 6))
 
-        # Bitrates (Video & Audio)
+        self.sep_dest_generic = self._add_separator(sec2_body)
+
+        # Bitrates (Video & Audio) — TopazChat / 汎用RTMP 共通の設定
+        self.lbl_bitrate_head = ctk.CTkLabel(
+            sec2_body,
+            text="🎚 ビットレート (RTMP系の配信先で共通)",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w"
+        )
+        self.lbl_bitrate_head.pack(fill="x", padx=15, pady=(0, 4))
+
         self.lbl_rtmp_vbitrate = ctk.CTkLabel(sec2_body, text="📹 Video Bitrate [kbps] (映像ビットレート):", anchor="w")
         self.lbl_rtmp_vbitrate.pack(fill="x", padx=15, pady=(2, 0))
         self.entry_rtmp_vbitrate = ctk.CTkEntry(sec2_body)
@@ -480,6 +515,12 @@ class SettingsWindow(ctk.CTkToplevel):
 
         self.btn_cancel = ctk.CTkButton(btn_frame, text="Cancel / キャンセル", fg_color="#7F8C8D", hover_color="#707B7C", command=self.destroy)
         self.btn_cancel.pack(side="right")
+
+    def _add_separator(self, parent, pady=(8, 6)):
+        """設定項目のまとまりを視覚的に切る細い横線。"""
+        line = ctk.CTkFrame(parent, height=1, fg_color="#3F4A5A")
+        line.pack(fill="x", padx=15, pady=pady)
+        return line
 
     def _add_section(self, title, opened=False):
         """折りたたみ可能なセクションを作り、中身を入れるフレームを返す。

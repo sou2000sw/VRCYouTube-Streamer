@@ -542,6 +542,13 @@
 
                     <!-- Generic RTMP Settings Block -->
                     <div id="genericRtmpBlock" class="hidden flex flex-col gap-3 pt-2 border-t border-zinc-800/80">
+                        <div class="flex flex-col gap-1">
+                            <h4 class="text-xs font-semibold text-zinc-200">🌐 汎用RTMP（自前サーバーへ送る / 上級者向け）</h4>
+                            <p class="text-[11px] text-zinc-500 leading-relaxed">
+                                自分で立てた中継サーバー（MediaMTX / nginx-rtmp 等）へ配信するための枠です。投稿先URLとストリームキーは配信先サーバーの設定に合わせて入力してください。再生用URLはサーバー構成に依存するため自動生成できません。
+                            </p>
+                        </div>
+
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div class="flex flex-col gap-1.5">
                                 <label class="text-xs text-zinc-400 font-medium">RTMP 投稿先URL</label>
@@ -564,7 +571,10 @@
                     </div>
 
                     <!-- Bitrate Settings Block (Common) -->
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-zinc-800/80">
+                    <div class="pt-2 border-t border-zinc-800/80">
+                        <h4 class="text-xs font-semibold text-zinc-200 mb-2">🎚 ビットレート（RTMP系の配信先で共通）</h4>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div class="flex flex-col gap-1.5">
                             <label class="text-xs text-zinc-400 font-medium">映像ビットレート (kbps)</label>
                             <input type="number" id="settingRtmpVideoBitrate" min="100" max="20000" step="100" value="1500" onchange="updateSettings()" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 font-mono focus:outline-none focus:border-primary">
