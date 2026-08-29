@@ -121,6 +121,11 @@ def test_topaz_sink_command_reencodes_within_limits():
 
     # -c copy の素通しでは上限超過も切替時の切断も防げないため再エンコードする
     assert cmd[cmd.index("-c:v") + 1] == "libx264"
+
+    # ★実測(2026-08-30): -tune zerolatency はBフレームと先読みを止め、同じ1500kbpsで
+    # PSNR を約1dB落としていた（ビットレートを2000kへ増やすのと同等の劣化を無償で被る）。
+    # 稼げるレイテンシは数フレームで、中継とプレイヤーのバッファに比べて無視できる。
+    assert "zerolatency" not in cmd, "画質を1dB犠牲にする tune は付けない"
     assert cmd[cmd.index("-c:a") + 1] == "aac"
     assert cmd[cmd.index("-b:v") + 1] == "1500k"
     assert cmd[cmd.index("-b:a") + 1] == "192k"
@@ -454,6 +459,31 @@ def test_topaz_endpoint_is_configurable_and_validated():
                 "default_topaz_rtmp_base", "default_topaz_rtsp_base"):
         assert info.get(key), f"destination 情報に {key} が無い"
     print("PASS: endpoint is editable, normalized, validated and resettable.")
+
+
+def test_pts_offset_is_applied_on_the_output_side():
+    """★実測由来の回帰防止(2026-08-30)。
+
+    -output_ts_offset は「出力」オプションで、-i より前に置くと黙って無視される
+    （実測: 10秒指定しても出力PTSは素通しだった）。無視されると再生アイテムが
+    切り替わるたびにPTSが 0 付近へ巻き戻り、受信側で
+    「DTS out of order」「Packet corrupt」を起こす。HLSは寛容で表面化しないが、
+    RTMP経路では再エンコード入力が壊れる。
+    """
+    print("\n--- 21. PTS offset は出力側に置く ---")
+    core = make_core()
+    core.accumulated_pts = 12.5
+    opts = core._ts_offset_opts()
+    assert opts == ["-output_ts_offset", "12.500"]
+
+    core.accumulated_pts = 0.0
+    assert core._ts_offset_opts() == [], "オフセット0のときは付けない"
+
+    # 送出コマンドの中で、入力(-i)より後ろ・出力指定(pipe:1)より前にあること
+    src = io.open("streamer_core.py", encoding="utf-8").read()
+    assert "_ts_offset_opts(), \"-f\", \"mpegts\", \"pipe:1\"" in src,         "オフセットは出力フォーマット指定の直前へ置くこと"
+    assert '"-output_ts_offset", f"{self.accumulated_pts:.3f}"])' not in src,         "入力側(-i より前)に -output_ts_offset を戻してはいけない（黙って無視される）"
+    print("PASS: offset is emitted as an output option.")
 
 
 def test_backward_compatible_alias():

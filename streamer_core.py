@@ -866,6 +866,19 @@ class StreamerCore:
         log_print("[Core] No previous item in history.")
         return False
 
+    def _ts_offset_opts(self):
+        """累積PTSオフセットの出力オプション。
+
+        ★実測(2026-08-30): -output_ts_offset は「出力」オプションであり、
+        -i より前に置くと黙って無視される（10秒指定しても出力PTSは素通しだった）。
+        アイテム切替のたびにPTSが 0 付近へ戻るため、受信側は
+        「DTS out of order」「Packet corrupt」を起こす。HLSは寛容で表面化しなかったが、
+        RTMP経路では再エンコード入力が壊れ、音声は無事なのに映像だけが乱れる。
+        """
+        if self.accumulated_pts > 0:
+            return ["-output_ts_offset", f"{self.accumulated_pts:.3f}"]
+        return []
+
     # ------------------------------------------------------------------
     # 配信先（destination）: タスク14
     #
@@ -1158,7 +1171,12 @@ class StreamerCore:
             )
             cmd = head + [
                 "-vf", vf,
-                "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+                # ★実測(2026-08-30): -tune zerolatency はBフレームと先読みを止めるため、
+                # 同じ1500kbpsで SSIM 0.9751→0.9806 / PSNR 36.61→37.58dB と明確に画質を落とす
+                # （ビットレートを2000kまで上げるのと同等の劣化を、帯域を増やさず被っていた）。
+                # 稼ぐはずのレイテンシは数フレーム分で、TopazChatの中継とAVProのバッファに
+                # 比べて無視できるため外す。エンコード速度も 8.6x→9.2x で悪化しない。
+                "-c:v", "libx264", "-preset", "veryfast",
                 "-profile:v", "main", "-pix_fmt", "yuv420p",
                 "-b:v", f"{v_kbps}k", "-maxrate", f"{v_kbps}k", "-bufsize", f"{v_kbps * 2}k",
                 "-g", gop, "-keyint_min", gop, "-sc_threshold", "0",
@@ -2020,8 +2038,6 @@ class StreamerCore:
         has_qr = bool(overlay_radio and qr_overlay_file and os.path.exists(qr_overlay_file))
 
         cmd = [get_ffmpeg_cmd()]
-        if self.accumulated_pts > 0:
-            cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
         cmd.extend(video_input_opts)           # [0] = 静止画 or concat
         cmd.extend(input_opts)
         cmd.extend(["-i", audio_url])           # [1] = YouTube音声
@@ -2079,7 +2095,7 @@ class StreamerCore:
             # 受信側FFmpegへ流し込んでいた。受信側HLS multiplexerはそこで
             # セグメント出力を停止し、配信が固まっていた。
             "-max_interleave_delta", "0",
-            "-f", "mpegts", "pipe:1"
+            *self._ts_offset_opts(), "-f", "mpegts", "pipe:1"
         ])
 
         try:
@@ -2183,8 +2199,6 @@ class StreamerCore:
         clock_filter = get_clock_filter_for_config(self.config) if has_clock else None
 
         cmd = [get_ffmpeg_cmd(), "-fflags", "+genpts"]
-        if self.accumulated_pts > 0:
-            cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
         cmd.extend(input_opts)
         cmd.extend(["-i", video_url])
         if audio_url:
@@ -2240,7 +2254,7 @@ class StreamerCore:
                 "-muxdelay", "0",
                 "-muxpreload", "0",
                 "-max_interleave_delta", "0",
-                "-f", "mpegts", "pipe:1"
+                *self._ts_offset_opts(), "-f", "mpegts", "pipe:1"
             ])
         else:
             cmd.extend(["-map", "0:v:0"])
@@ -2253,7 +2267,7 @@ class StreamerCore:
                         "-af", "aresample=async=1", "-shortest",
                         "-fflags", "+nobuffer+flush_packets", "-flush_packets", "1",
                         "-muxdelay", "0", "-muxpreload", "0", "-max_interleave_delta", "0",
-                        "-f", "mpegts", "pipe:1"])
+                        *self._ts_offset_opts(), "-f", "mpegts", "pipe:1"])
 
         try:
             proc = subprocess.Popen(
@@ -2543,8 +2557,6 @@ class StreamerCore:
         cmd = [
             get_ffmpeg_cmd(), "-re",
         ]
-        if self.accumulated_pts > 0:
-            cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
         cmd.extend([
             "-loop", "1", "-i", os.path.abspath(playback_image_path),
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
@@ -2571,7 +2583,7 @@ class StreamerCore:
             "-flush_packets", "1",
             "-muxdelay", "0",
             "-muxpreload", "0",
-            "-f", "mpegts", "pipe:1"
+            *self._ts_offset_opts(), "-f", "mpegts", "pipe:1"
         ])
 
         try:
@@ -3168,8 +3180,6 @@ class StreamerCore:
             cmd = [
                 get_ffmpeg_cmd(), "-re",
             ]
-            if self.accumulated_pts > 0:
-                cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
             cmd.extend([
                 "-loop", "1", "-i", os.path.abspath(STANDBY_IMAGE_PATH),
                 "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
@@ -3196,7 +3206,7 @@ class StreamerCore:
                 "-flush_packets", "1",
                 "-muxdelay", "0",
                 "-muxpreload", "0",
-                "-f", "mpegts", "pipe:1"
+                *self._ts_offset_opts(), "-f", "mpegts", "pipe:1"
             ])
 
             try:
