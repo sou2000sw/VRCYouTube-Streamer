@@ -26,7 +26,7 @@
 | **16** | 🎨 GUI刷新 | **ホストソフトGUIのモダン化・リデザイン** (Host GUI Modernization) | 未定 | 🔵 **検討中 📋** |
 | **17** | 🎵 ラジオ | **ラジオモード時のクロスフェード・滑らか切り替え** (Smooth Crossfade) | 未定 | ⚪ **実装予定 📝** |
 | **18** | ⚡ 性能 | **FFmpeg ハードウェアエンコード（NVENC / QSV / AMF）対応** (HW Encoding) | 未定 | ⚪ **実装予定 📝** |
-| **19** | 🛠️ CLI | **CLI 引数・環境設定オーバーライド機構の総点検・堅牢化** (CLI Overrides Overhaul) | 未定 | ⚪ **実装予定 📝** |
+| **19** | 🛠️ CLI | **CLI 引数・環境設定オーバーライド機構の総点検・堅牢化** (CLI Overrides Overhaul) | **v2.9.0** | 🟢 **実装完了 ✅** |
 | **20** | 🌐 UI/権限 | **通常ブラウザ利用時のサーバー操作ボタン（再起動・起動）非表示化** (Button Visibility) | v2.6.0 | 🟢 **実装完了 ✅** |
 | **21** | 🛡️ Web制御 | **Webリモコン機能の無効化・ホスト専用スタンドアロンモード** (Disable Web Remote / Host-Only Mode) | 未定 | ⚪ **実装予定 📝** |
 
@@ -543,7 +543,7 @@ YouTube側のプレイヤー仕様変更や暗号化シグネチャ変更（n-si
 
 ---
 
-## 19. 🛠️ CLI 引数・環境設定オーバーライド機構の総点検・堅牢化 (CLI Arguments & Config Overrides Overhaul) 【実装予定 📝】
+## 19. 🛠️ CLI 引数・環境設定オーバーライド機構の総点検・堅牢化 (CLI Arguments & Config Overrides Overhaul) 【実装完了 ✅】
 
 ### 概要
 CLI 引数（`--port`, `--host`, `--no-tunnel`, `--resolution`, `--bitrate` 等）や `StreamerCore` 初期化時のオーバーライド引数（`override_port`, `override_host`, `override_enable_tunnel` 等）が、設定ファイル（`config.json`）の読み込み・保存や GUI / Web API（`/api/config`）からの動的設定更新と干渉し、CLI による一時指定が意図せず上書きされたり無効化される問題の総点検と再設計。
@@ -567,6 +567,78 @@ CLI 引数（`--port`, `--host`, `--no-tunnel`, `--resolution`, `--bitrate` 等�
 - `streamer_core.py`（設定管理クラス / `_cli_overrides` メカニズムの刷新、`get_config` / `update_config` の整理）
 - `gui_streamer.py`（CLI 引数パースと `StreamerCore` へのオーバーライド伝達の統合）
 - `tests/test_config_overrides.py`（オーバーライド優先順位と永続化分離の単体テスト）
+
+### 実装記録（2026-08-31 / ブランチ `feature/task19-config-overrides`）
+
+#### ★着手前の調査で確定した不具合2件
+
+- **GUIの設定保存が、CLI一時指定を config.json へ焼き付けていた**（設計意図と実装の食い違い）
+  - `StreamerCore.__init__` のコメントは「CLI指定は焼き付けない」と宣言していたが、
+    その担保は「保存直前に元の値へ戻す」`_cli_override_baseline` 方式だった。
+  - GUIの設定画面はフォーム**全体**を送り返す（`gui_streamer.py` の `new_cfg`）。
+    ウィジェットにはCLI上書き後の**実効値**が入っているため、`save_config()` の
+    `for key in [k for k in baseline if k in new_config]: del baseline[key]` が
+    「利用者が変更した」と誤認し、baseline から外して永続化していた。
+  - 再現: `Local Test.bat`（`--no-tunnel`）で起動 → 設定画面で無関係な項目を1つ変える →
+    保存 → `enable_tunnel: false` が config.json に永久に残る。
+  - 実際に手元の `config.json` がこの状態になっていた。**README が「起動するだけで
+    外部アクセス可能なURLが自動生成」と書いている挙動と矛盾する**（EXE直起動時）。
+- **単体テストが利用者の実 `config.json` を書き換えていた**
+  - `CONFIG_FILE` がモジュール定数の絶対パスで、`StreamerCore` が実ファイルへ保存していた。
+  - 証拠: `standby_image_path` に `pytest-of-soufm/pytest-82/.../custom_test.png` という
+    存在しない一時パスが焼き付いていた（テスト実行のたびに番号が進んでいた）。
+
+#### 実装した設計
+
+- **3層構造 `LayeredConfig`（`dict` のサブクラス）**
+  優先順位は **CLI/環境変数 > `config.json` > `DEFAULT_CONFIG`**。
+  `self.config` の参照が全体で212箇所あるため dict 自体は差し替えず、
+  中身を常に「実効値」に保つサブクラスにした。既存の読み書きは無修正で動く。
+  - `cfg[key] = value` … 利用者の設定変更 → 永続層へ記録
+  - `set_override(key, value, source)` … その起動限りの指定 → 永続層に触れない
+  - `persistable()` … `config.json` へ書く内容。**上書きは構造的に含まれない**ので、
+    「保存直前に戻す」細工が不要になった（`_cli_override_baseline` は廃止）。
+- **エコー判定**（Bug-1 の恒久対策）
+  `save_config()` の入口で、上書き中のキーが**実効値と同じ値**で返ってきたら
+  「利用者は触っていない」とみなして永続化しない。異なる値なら意図的な変更として
+  永続化し、その起動でも反映されるよう当該キーの上書きを解除する。
+- **`enable_tunnel` を property 化**。3箇所で代入されており設定と食い違う余地があった。
+- **`config_path` を差し替え可能に**。テスト汚染の根本原因。
+- **`config_overrides.py` を新設**（GUI非依存）。`--config` / `--output-mode` /
+  `--resolution WxH` / `--bitrate` / `--fps` / `--radio` / `--no-radio` /
+  `--set KEY=VALUE`、および環境変数 `VRCMS_*` を追加。
+  - `--set` は `DEFAULT_CONFIG` の型で変換し、**未知のキーは通さない**。
+    設定名の打ち間違いが「指定したのに効かない」という最も分かりにくい形で出るため。
+  - **bool は int の派生**なので判定順を固定（逆にすると `loop_queue=true` が壊れる）。
+  - `topaz_stream_key` / `generic_rtmp_key` / `web_password` は **`--set` では拒否**。
+    コマンドライン引数はプロセス一覧から第三者に見えるため、環境変数のみ受け付ける。
+  - 環境変数の未知キー・変換失敗は**そのキーだけ無視**（偶然の衝突で起動を止めない）。
+- **`conftest.py` を新設**し、autouse フィクスチャで `config.json` をテスト専用の
+  一時ファイルへ差し替える。個々のテストに `config_path=` を書き足す方法では
+  **新しく書かれたテストが同じ穴を再び開ける**ため、共通フィクスチャで塞いだ。
+
+#### 隔離して初めて露見した既存テストの問題
+
+`test_destination.py` の `make_core()` が**開発者の手元の `config.json`（`output_mode: hls`）に
+依存**していた。既定値（`topaz`）で走らせると、配信先キーを含む `save_config()` のたびに
+実在しないホストへの到達性チェックが走って退避状態に入り、`get_video_url()` がHLSのURLを
+返してURL組み立ての検証が別要因で落ちる。`make_core()` を `hls` 起点に固定して解消。
+既定値そのものは `test_default_destination_and_fallback_safety` が `DEFAULT_CONFIG` に
+対して直接検証しているため、カバレッジは失われていない。
+
+#### テスト
+
+`test_config_overrides.py` を新設（21件）。全90件通過（新規21 + 既存69）。
+主な検証: エコー値を永続化しないこと / 明示的変更は永続化かつ即反映すること /
+上書きが `persistable()` に混ざらないこと / 秘匿キーが `--set` で拒否されること /
+別の `config_path` を指定したコアが既定の `config.json` を触らないこと。
+
+#### この対応で解決しないもの（別途判断が必要）
+
+- **`config.dist.json` の `enable_tunnel: false`**。機構は直ったが、配布物の**既定値**を
+  どうするかは方針の決定であって実装の問題ではない。EXE を直接起動した場合は
+  依然としてトンネルが立たない（`(Normal).bat` は `--tunnel` を渡すので立つ）。
+- **`config.dist.json` の `output_mode: topaz` と README の「`hls`（既定）」の食い違い**。
 
 ---
 

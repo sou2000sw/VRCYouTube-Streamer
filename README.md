@@ -137,6 +137,40 @@ python gui_streamer.py --headless --port 8080
 | `--tunnel` | Cloudflareトンネルを明示的に有効化 | 有効 (デフォルト) |
 | `--port` / `-p` | APIサーバーおよびHLS配信サーバーのポート番号 | `8000` (または `config.json`) |
 | `--host` | サーバーのホストアドレス (LAN内共有時は `0.0.0.0`) | `127.0.0.1` |
+| `--config` | 使用する `config.json` のパス | 実行ファイルと同じ場所 |
+| `--output-mode` | 配信先を一時的に指定 (`hls` / `topaz` / `generic_rtmp`) | `config.json` の値 |
+| `--resolution` | RTMP出力の解像度 (`1280x720` 形式) | `1280x720` |
+| `--bitrate` | RTMP映像ビットレート (kbps) | `1500` |
+| `--fps` | RTMP出力のフレームレート | `30` |
+| `--radio` / `--no-radio` | BGM/ラジオモードで起動する / しない | `config.json` の値 |
+| `--set KEY=VALUE` | `config.json` の任意の項目を一時的に上書き（複数回指定可） | なし |
+
+#### 設定の優先順位
+
+**CLI引数 ＞ 環境変数 ＞ `config.json` ＞ 既定値** の順で強く、上の層が下の層を上書きします。
+
+> [!IMPORTANT]
+> **CLI引数・環境変数で指定した値は「その起動限り」で、`config.json` には保存されません。**
+> `--no-tunnel` でローカル検証したあと設定画面から別の項目を保存しても、トンネル設定が
+> 書き換わることはありません。逆に、設定画面でその項目自体を明示的に変更した場合は
+> 通常どおり保存され、その起動中も変更が反映されます。
+
+環境変数は `VRCMS_` に続けて設定キーを大文字にした名前で指定します
+（例: `VRCMS_PORT=8080`、`VRCMS_ENABLE_TUNNEL=0`）。
+
+> [!WARNING]
+> ストリームキーやWebリモコンのパスワード（`topaz_stream_key` / `generic_rtmp_key` /
+> `web_password`）は **`--set` では指定できません**。コマンドライン引数はOSのプロセス一覧から
+> 他の利用者に見えてしまうためです。これらは環境変数
+> （`VRCMS_TOPAZ_STREAM_KEY` 等）でのみ指定できます。
+
+```bash
+# 例: ローカル検証用に、ポートと配信先だけをその場で変える
+VRC_Media_Streamer.exe --no-tunnel --port 8080 --output-mode hls
+
+# 例: config.json の任意の項目を一時的に上書きする
+VRC_Media_Streamer.exe --set loop_queue=true --set image_display_duration=30
+```
 
 ---
 
