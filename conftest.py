@@ -1,0 +1,44 @@
+# -*- coding: utf-8 -*-
+"""pytest 共通設定。
+
+**テストが利用者の実 config.json を書き換えないようにする。**
+
+`streamer_core.CONFIG_FILE` はモジュール定数の絶対パスなので、素directoryのままテストを
+走らせると `StreamerCore` が実ファイルへ保存してしまう。実際に
+`standby_image_path` へ pytest の一時ディレクトリのパスが焼き付いた状態で見つかった。
+
+個々のテストに `config_path=` を書き足す方法もあるが、それだと**新しく書かれた
+テストが同じ穴を再び開ける**。ここで autouse フィクスチャとして塞いでおく。
+"""
+
+import json
+import sys
+
+import pytest
+
+import streamer_core
+
+
+@pytest.fixture(autouse=True)
+def isolated_config_file(tmp_path, monkeypatch):
+    """各テストの config.json をテスト専用の一時ファイルへ差し替える。"""
+    real_path = streamer_core.CONFIG_FILE
+    temp_path = str(tmp_path / "config.json")
+
+    # 既定値で種を蒔いておく。「config.json は存在する」前提で書かれたテストがあるため。
+    # 利用者の実設定をコピーしないのは、テスト結果が手元の設定に左右されないようにするため。
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(streamer_core.DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+
+    monkeypatch.setattr(streamer_core, "CONFIG_FILE", temp_path, raising=False)
+
+    # `from streamer_core import CONFIG_FILE` 相当で自前の束縛を持っているテストモジュールも
+    # 追随させる。放っておくと「コアは一時ファイルへ書くのに、テストは実ファイルを読む」
+    # という食い違いになる。
+    for name, module in list(sys.modules.items()):
+        if not name.startswith("test_") or module is None:
+            continue
+        if getattr(module, "CONFIG_FILE", None) == real_path:
+            monkeypatch.setattr(module, "CONFIG_FILE", temp_path, raising=False)
+
+    yield temp_path

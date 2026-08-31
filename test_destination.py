@@ -40,7 +40,17 @@ def teardown_module(module):
 
 
 def make_core():
-    return StreamerCore(override_port=8997, override_enable_tunnel=False)
+    """URL組み立て等の単体検証用コア。既定の配信先(topaz)ではなく hls から始める。
+
+    既定のまま作ると、配信先キーを含む save_config() のたびにシンクが作り直され、
+    存在しないホストへの到達性チェックが走って退避状態に入る。すると
+    get_video_url() がHLSのURLを返し、URL組み立ての検証が別要因で落ちる。
+    既定値そのものは test_default_destination_and_fallback_safety が
+    DEFAULT_CONFIG に対して直接検証している。
+    """
+    core = StreamerCore(override_port=8997, override_enable_tunnel=False)
+    core.config["output_mode"] = "hls"
+    return core
 
 
 def import_gui_streamer():

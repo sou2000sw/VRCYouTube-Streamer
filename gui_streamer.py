@@ -11,6 +11,7 @@ import qrcode
 from PIL import Image
 
 from streamer_core import StreamerCore, CLOUDFLARED_EXE, DEFAULT_CONFIG, log_print
+from config_overrides import add_config_arguments, build_overrides, describe_overrides
 from api_server import APIServer
 
 # PyInstallerの --noconsole 対策: sys.stdout / sys.stderr が None になる場合のダミーライター
@@ -1562,22 +1563,21 @@ def main():
     parser.add_argument("--no-tunnel", "-nt", action="store_true", help="Disable Cloudflare tunnel (run in local test mode)")
     parser.add_argument("--port", "-p", type=int, default=None, help="Port for API and HLS server (default: 8000 or config.json)")
     parser.add_argument("--host", type=str, default=None, help="Host address to bind (default: 127.0.0.1 or config.json)")
+    add_config_arguments(parser)
 
     args = parser.parse_args()
 
-    # トンネル有効/無効の判定
-    override_tunnel = None
-    if args.tunnel:
-        override_tunnel = True
-    elif args.no_tunnel:
-        override_tunnel = False
+    # CLI引数と環境変数(VRCMS_*)を「その起動限りの上書き」としてまとめる。
+    # config.json へは書かれない（LayeredConfig の上書き層に載る）。
+    try:
+        overrides = build_overrides(args)
+    except ValueError as e:
+        parser.error(str(e))
+    if overrides:
+        log_print(f"[Config] Session overrides: {describe_overrides(overrides)}")
 
     # コアの初期化
-    core = StreamerCore(
-        override_port=args.port,
-        override_host=args.host,
-        override_enable_tunnel=override_tunnel
-    )
+    core = StreamerCore(overrides=overrides, config_path=args.config)
 
     # cloudflared.exeの存在確認 (トンネル有効時のみ必須)
     if core.enable_tunnel and not os.path.exists(CLOUDFLARED_EXE):
