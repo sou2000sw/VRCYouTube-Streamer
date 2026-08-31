@@ -160,6 +160,39 @@ def test_config_path_isolation(tmp_path):
     assert after == before, "別の config_path を指定したコアが既定の config.json を書き換えた"
 
 
+def test_tunnel_active_reflects_reality_not_config(tmp_path):
+    """UIのトンネル表示は「実際に張れているか」を見ること。
+
+    `start_tunnel()` はトンネル無効時に `tunnel_raw_url` へ localhost を代入する。
+    そのため `bool(tunnel_raw_url)` でも `bool(tunnel_url)` でも判定できず、
+    UI が Local Test 起動でも常に「Active」と誤表示していた。
+    """
+    core, _ = make_core(tmp_path, overrides={"enable_tunnel": (False, "cli"),
+                                             "port": (8099, "cli")})
+    core.start_tunnel()
+    assert core.get_status_data()["tunnel_active"] is False,         "--no-tunnel なのに Active と報告してはいけない"
+    # localhost が入るのは従来どおり（URL欄の表示用）。判定に使わないことが要点。
+    assert core.get_status_data()["tunnel_url"]
+
+    core.config.clear_override("enable_tunnel")
+    core.config["enable_tunnel"] = True
+    core.tunnel_raw_url = ""
+    assert core.get_status_data()["tunnel_active"] is False, "接続前を Active にしない"
+
+    core.tunnel_raw_url = "https://example.trycloudflare.com"
+    assert core.get_status_data()["tunnel_active"] is True
+
+
+def test_status_reports_app_version(tmp_path):
+    """バージョンは version.py 一箇所を出所にし、UI は /api/status から受け取る。
+
+    以前は ui/index.html にハードコードされていて、2リリース分古い値が出ていた。
+    """
+    from version import APP_VERSION
+    core, _ = make_core(tmp_path)
+    assert core.get_status_data()["app_version"] == APP_VERSION
+
+
 # ------------------------------------------------------------------
 # 5, 6, 11: 環境変数
 # ------------------------------------------------------------------

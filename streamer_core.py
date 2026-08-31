@@ -867,9 +867,11 @@ class StreamerCore:
             "status_detail": self.status_detail,
             "app_version": APP_VERSION,
             "tunnel_url": public_url,
-            # tunnel_url は --no-tunnel のとき localhost へフォールバックするため、
-            # 「トンネルが立っているか」の判定には使えない（UIが常に Active と表示していた）。
-            "tunnel_active": bool(self.tunnel_raw_url),
+            # 「Cloudflareトンネルが実際に張れているか」。UIのトンネル表示はこれを見る。
+            # tunnel_url / tunnel_raw_url は --no-tunnel のとき start_tunnel() が
+            # localhost を代入するため、どちらも真偽判定には使えない
+            # （UIが Local Test 起動でも常に Active と表示していた原因）。
+            "tunnel_active": bool(self.enable_tunnel and self.tunnel_raw_url),
             "stream_url": stream_url,
             "video_url": video_url,
             "remote_url": public_url,
