@@ -461,24 +461,153 @@ def extract_pts_from_ts_chunk(chunk):
         return None
     return min(found)
 
+class LayeredConfig(dict):
+    """3層（既定値 < config.json < CLI/環境変数）の設定を、単一の dict として見せる。
+
+    `self.config[...]` の参照箇所がコード全体で200箇所を超えるため、dict を別の型へ
+    差し替えず dict のサブクラスにしている。dict としての中身は常に「実効値」
+    （3層をマージした結果）なので、既存の読み取り・書き込みは無修正で動く。
+
+    書き込みには意味の異なる2種類があり、混ぜると壊れる:
+      - ``cfg[key] = value`` : 利用者が設定を変えた → 永続層(user)へ記録する。
+        ただし CLI で上書き中のキーは、その起動中の実効値を CLI 値のまま保つ。
+      - ``set_override(key, value)`` : その起動限りの指定 → 永続層には絶対に触れない。
+
+    以前は「CLI値を実効設定へ直接載せ、保存直前に元の値へ戻す」方式だったが、
+    GUI の設定画面がフォーム全体（＝CLI上書き後の実効値）を送り返すため、
+    「利用者が変更した」と誤認して CLI 値が config.json へ焼き付いていた。
+    """
+
+    def __init__(self, defaults=None):
+        super().__init__()
+        self._defaults = dict(defaults or {})
+        self._user = {}
+        self._overrides = {}
+        self._override_sources = {}
+        self._recompute()
+
+    # --- 層の入れ替え ---------------------------------------------------
+    def load_user(self, data):
+        """config.json から読んだ内容を永続層として据える（実効値は再計算）。"""
+        self._user = dict(data or {})
+        self._recompute()
+
+    def set_override(self, key, value, source="cli"):
+        """その起動限りの上書きを設定する。永続層には触れない。"""
+        self._overrides[key] = value
+        self._override_sources[key] = source
+        self._recompute()
+
+    def clear_override(self, key):
+        """上書きを解除する（利用者がその項目を明示的に変更したとき）。"""
+        existed = self._overrides.pop(key, None) is not None
+        self._override_sources.pop(key, None)
+        if existed:
+            self._recompute()
+        return existed
+
+    # --- 参照 -----------------------------------------------------------
+    def is_overridden(self, key):
+        return key in self._overrides
+
+    def override_source(self, key):
+        """上書きの出所（"cli" / "env" / "api" 等）。上書きが無ければ None。"""
+        return self._override_sources.get(key)
+
+    def overrides(self):
+        return dict(self._overrides)
+
+    def override_sources(self):
+        return dict(self._override_sources)
+
+    def persistable(self):
+        """config.json へ書き出すべき内容（既定値＋利用者設定。上書きは含めない）。
+
+        既定値も含めるのは、従来どおり人が読める完全な config.json を保つため。
+        含めなくても動作は同じだが、既存ファイルの項目が保存のたびに消えてしまう。
+        """
+        merged = dict(self._defaults)
+        merged.update(self._user)
+        return merged
+
+    def defaults(self):
+        return dict(self._defaults)
+
+    # --- 書き込み（＝永続層への記録） -----------------------------------
+    def __setitem__(self, key, value):
+        self._user[key] = value
+        self._recompute_key(key)
+
+    def __delitem__(self, key):
+        self._user.pop(key, None)
+        self._recompute_key(key)
+
+    def pop(self, key, *args):
+        current = self.get(key, *args) if args else self[key]
+        self._user.pop(key, None)
+        self._recompute_key(key)
+        return current
+
+    def update(self, *args, **kwargs):
+        incoming = dict(*args, **kwargs)
+        for key, value in incoming.items():
+            self[key] = value
+
+    def setdefault(self, key, default=None):
+        if key in self:
+            return self[key]
+        self[key] = default
+        return self[key]
+
+    def clear(self):
+        self._user = {}
+        self._recompute()
+
+    # --- 実効値の再計算 --------------------------------------------------
+    def _effective(self, key):
+        if key in self._overrides:
+            return self._overrides[key]
+        if key in self._user:
+            return self._user[key]
+        return self._defaults.get(key)
+
+    def _recompute_key(self, key):
+        if key in self._overrides or key in self._user or key in self._defaults:
+            dict.__setitem__(self, key, self._effective(key))
+        else:
+            dict.pop(self, key, None)
+
+    def _recompute(self):
+        dict.clear(self)
+        merged = dict(self._defaults)
+        merged.update(self._user)
+        merged.update(self._overrides)
+        dict.update(self, merged)
+
+
 class StreamerCore:
-    def __init__(self, override_port=None, override_host=None, override_enable_tunnel=None):
-        self.config = DEFAULT_CONFIG.copy()
+    def __init__(self, override_port=None, override_host=None, override_enable_tunnel=None,
+                 overrides=None, config_path=None):
+        # config.json のパスは差し替え可能にしてある。モジュール定数のまま固定すると
+        # 単体テストが利用者の実ファイルを書き換えてしまう（実際に汚染が起きた）。
+        self.config_path = config_path or CONFIG_FILE
+        self.config = LayeredConfig(DEFAULT_CONFIG)
         self.load_config()
-        # コマンドライン引数による上書きは「その起動限りの指定」であり、config.json には焼き付けない。
-        # 以前は self.config に直接載せていたため、UI から何か設定を変えて save_config() が走るたびに
-        # --port / --host / --no-tunnel の値が config.json に永続化されていた。
-        # これが「開発者がローカルテストした設定がそのまま配布物の既定値になる」原因だった。
-        self._cli_override_baseline = {}
+        # コマンドライン引数・環境変数による上書きは「その起動限りの指定」であり、
+        # config.json には焼き付けない。LayeredConfig の上書き層に載せることで、
+        # 実効値としては最優先されつつ、保存対象からは構造的に外れる。
         for key, value in (("port", override_port), ("host", override_host)):
             if value is not None:
-                self._cli_override_baseline[key] = self.config.get(key)
-                self.config[key] = value
+                self.config.set_override(key, value, "cli")
         if override_enable_tunnel is not None:
-            self._cli_override_baseline["enable_tunnel"] = self.config.get("enable_tunnel")
-            self.config["enable_tunnel"] = bool(override_enable_tunnel)
-
-        self.enable_tunnel = bool(self.config.get("enable_tunnel", True))
+            self.config.set_override("enable_tunnel", bool(override_enable_tunnel), "cli")
+        # 汎用の上書き（--set / 環境変数 / 追加CLI引数）。{key: (value, source)} 形式。
+        for key, entry in (overrides or {}).items():
+            if isinstance(entry, tuple):
+                value, source = entry
+            else:
+                value, source = entry, "cli"
+            self.config.set_override(key, value, source)
 
         os.makedirs(HLS_DIR, exist_ok=True)
         self.clean_hls_dir(all_files=True, preserve_images=False)
@@ -574,32 +703,51 @@ class StreamerCore:
                 log_print(f"[Core] Warning cleaning HLS dir: {e}")
                 time.sleep(0.2)
 
+    @property
+    def enable_tunnel(self):
+        """設定の写しを別途持たない。以前は3箇所で代入しており、設定と食い違う余地があった。"""
+        return bool(self.config.get("enable_tunnel", True))
+
+    @enable_tunnel.setter
+    def enable_tunnel(self, value):
+        # 利用者による変更として永続層へ記録する。CLI で上書き中なら
+        # その起動中の実効値は CLI 値のまま（LayeredConfig 側で保証）。
+        self.config["enable_tunnel"] = bool(value)
+
     def load_config(self):
-        if os.path.exists(CONFIG_FILE):
+        path = getattr(self, "config_path", CONFIG_FILE)
+        if os.path.exists(path):
             try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                with open(path, "r", encoding="utf-8") as f:
                     saved = json.load(f)
                     if isinstance(saved, dict):
-                        self.config.update(saved)
-                log_print(f"[Core] Loaded config from {CONFIG_FILE}")
+                        # 永続層として据える。update() だと利用者の変更として扱われ、
+                        # CLI上書きとの区別がつかなくなる。
+                        self.config.load_user(saved)
+                log_print(f"[Core] Loaded config from {path}")
             except Exception as e:
                 log_print(f"[Core] Error reading config: {e}")
 
     def _write_config_file(self):
-        """config.json への書き出し本体。CLI由来の一時上書きは保存前に元の値へ戻す。"""
-        baseline = getattr(self, "_cli_override_baseline", {})
-        persisted = dict(self.config)
-        for key, original in baseline.items():
-            if original is None:
-                persisted.pop(key, None)
-            else:
-                persisted[key] = original
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(persisted, f, indent=2, ensure_ascii=False)
+        """config.json への書き出し本体。CLI/環境変数由来の上書きは構造的に含まれない。"""
+        path = getattr(self, "config_path", CONFIG_FILE)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.config.persistable(), f, indent=2, ensure_ascii=False)
 
     def save_config(self, new_config=None):
-        baseline = getattr(self, "_cli_override_baseline", {})
         destination_changed = False
+        if new_config:
+            # CLI/環境変数で上書き中のキーが「実効値と同じ値」で返ってきた場合は、
+            # 利用者が触ったのではなく設定画面がフォーム全体をそのまま送り返しただけ。
+            # ここで弾かないと、--no-tunnel で起動して別項目を保存しただけで
+            # enable_tunnel:false が config.json に焼き付く（実際に起きていた）。
+            echoed = [
+                k for k, v in new_config.items()
+                if self.config.is_overridden(k) and v == self.config.get(k)
+            ]
+            if echoed:
+                new_config = {k: v for k, v in new_config.items() if k not in echoed}
+                log_print(f"[Config] Ignored echoed override values (not persisted): {', '.join(sorted(echoed))}")
         if new_config:
             # UI/GUI が表示用のマスク値をそのまま送り返してきた場合、本物のキーを潰さない
             for key_field in ("topaz_stream_key", "generic_rtmp_key"):
@@ -636,11 +784,12 @@ class StreamerCore:
 
         if new_config:
             self.config.update(new_config)
-            if "enable_tunnel" in new_config:
-                self.enable_tunnel = bool(new_config["enable_tunnel"])
-            # 利用者が明示的に変更した項目は、CLI上書きの対象から外して永続化する
-            for key in [k for k in baseline if k in new_config]:
-                del baseline[key]
+            # 利用者が明示的に「別の値」へ変更した項目は、その起動中も変更を反映させる。
+            # （エコー分は上で除外済みなので、ここに残るのは意図的な変更だけ）
+            for key in list(new_config.keys()):
+                if self.config.is_overridden(key):
+                    self.config.clear_override(key)
+                    log_print(f"[Config] Override for '{key}' released by explicit change.")
         try:
             # 上限超過の設定値は「接続した瞬間に切断される」ため、保存前にクランプする
             self.clamp_rtmp_bitrates()
