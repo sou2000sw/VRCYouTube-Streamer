@@ -15,7 +15,7 @@ if sys.platform == "win32" and sys.stdout is not None:
     except Exception:
         pass
 
-APP_VERSION = "2.9.0"
+from version import APP_VERSION  # バージョンの正本は version.py（UI表記もここから配る）
 
 # 配布物に含めてはいけない実行時生成物・作業ファイル。
 # hls_output/ には利用者がアップロードした写真が溜まるため、同梱するとプライバシー漏洩になる。
@@ -222,6 +222,9 @@ def create_versioned_release(version=APP_VERSION):
     doc_candidates = [
         ["README.txt", "dist/README.txt"],
         ["FFmpeg_LICENSE.txt", "dist/FFmpeg_LICENSE.txt"],
+        # v2.1.0 以降このファイルが配布物から抜けていた。README の「内容物」には
+        # 載ったままで、同梱ライブラリの帰属表示が配布物に無い状態だった。
+        ["THIRD_PARTY_LICENSES.txt", "dist/THIRD_PARTY_LICENSES.txt"],
         ["CHANGELOG.md"],
         ["README.md"],
     ]

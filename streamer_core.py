@@ -31,6 +31,8 @@ else:
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
     APP_DIR = BASE_PATH
 
+from version import APP_VERSION
+
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 HLS_DIR = os.path.join(APP_DIR, "hls_output")
 IMAGE_CACHE_DIR = os.path.join(HLS_DIR, "images")
@@ -863,7 +865,11 @@ class StreamerCore:
         return {
             "status": self.status,
             "status_detail": self.status_detail,
+            "app_version": APP_VERSION,
             "tunnel_url": public_url,
+            # tunnel_url は --no-tunnel のとき localhost へフォールバックするため、
+            # 「トンネルが立っているか」の判定には使えない（UIが常に Active と表示していた）。
+            "tunnel_active": bool(self.tunnel_raw_url),
             "stream_url": stream_url,
             "video_url": video_url,
             "remote_url": public_url,
