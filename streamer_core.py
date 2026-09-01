@@ -291,6 +291,14 @@ MAX_PLAYLIST_ITEMS = 50
 MAX_QUEUE_CAPACITY = 200
 MAX_PHOTO_CAPACITY = 200
 
+# ストリーム再構築要求のデバウンス。
+# 写真の追加/削除は1枚ごとに再構築を要求するため、GUIから70枚まとめて追加すると
+# 約22秒（実測309ms/枚）にわたり毎回 ffmpeg が kill→再起動され、HLSセグメントが
+# 安定して出力されず配信が停止する。最後の要求から静穏になるまで待って1回だけ再構築する。
+RELOAD_DEBOUNCE_SECONDS = 1.0
+# 要求が途切れず続く場合でも、この秒数を超えたら反映する（際限なく先送りしない）。
+RELOAD_MAX_DEFER_SECONDS = 10.0
+
 def is_safe_url(url):
     """URLが安全か（http/https、SSRF・ローカルアドレス拒否）を検証"""
     if not url or not isinstance(url, str):
@@ -702,7 +710,26 @@ class StreamerCore:
         self.skip_event = threading.Event()
         self.video_done_event = threading.Event()
         self.reload_stream_event = threading.Event()
+        self.reload_requested_at = 0.0       # 直近の要求時刻（デバウンス判定用）
+        self.reload_first_requested_at = 0.0 # 未処理の要求列の先頭時刻（先送り上限用）
         self.current_video_start_time = None
+
+    def request_stream_reload(self):
+        """ストリームの再構築を要求する。連続呼び出しはデバウンスされ1回にまとまる。"""
+        now = time.time()
+        if not self.reload_stream_event.is_set():
+            self.reload_first_requested_at = now
+        self.reload_requested_at = now
+        self.reload_stream_event.set()
+
+    def _reload_due(self):
+        """再構築要求が「もう静穏になった」か。監視ループ側から呼ぶ。"""
+        if not self.reload_stream_event.is_set():
+            return False
+        now = time.time()
+        if now - self.reload_first_requested_at >= RELOAD_MAX_DEFER_SECONDS:
+            return True
+        return (now - self.reload_requested_at) >= RELOAD_DEBOUNCE_SECONDS
 
     def clean_hls_dir(self, all_files=False, preserve_images=False):
         """HLS出力ディレクトリのクリーンアップ。
@@ -847,7 +874,7 @@ class StreamerCore:
                 self._sink_retry_at = 0.0
                 self._sink_force_restart = True
                 self.ensure_stream_sink()
-                self.reload_stream_event.set()
+                self.request_stream_reload()
 
             # 最新設定でQRオーバーレイ・待機画像を即座に再生成
             self.generate_qr_overlay_image()
@@ -865,7 +892,7 @@ class StreamerCore:
             elif is_playing:
                 # 動画または写真の再生中なら、即座に現在のストリームをホットリロード
                 log_print("[Core] Triggering hot-reload of active stream with updated settings...")
-                self.reload_stream_event.set()
+                self.request_stream_reload()
 
             return True
         except Exception as e:
@@ -968,7 +995,7 @@ class StreamerCore:
         self.config["playback_mode"] = mode
         self.config["radio_mode"] = (mode == "radio")
         self.save_config()
-        self.reload_stream_event.set()
+        self.request_stream_reload()
         log_print(f"[Core] Playback mode set to: {mode}")
         return mode
 
@@ -1564,7 +1591,7 @@ class StreamerCore:
                         self._sink_fail_count += 1
                 self._sink_force_restart = True
                 if self.ensure_stream_sink():
-                    self.reload_stream_event.set()
+                    self.request_stream_reload()
                 return
 
             if (getattr(self, "destination_fallback_active", False)
@@ -1579,7 +1606,7 @@ class StreamerCore:
                 self._sink_fail_count = 0
                 self._sink_force_restart = True
                 if self.ensure_stream_sink():
-                    self.reload_stream_event.set()
+                    self.request_stream_reload()
         except Exception as e:
             log_print(f"[Sink] Watchdog error: {e}")
 
@@ -2652,7 +2679,7 @@ class StreamerCore:
         with self.photo_lock:
             self.photo_pool.append(item)
         log_print(f"[Core] Added photo to pool: {title} (id: {photo_id}, {duration}s)")
-        self.reload_stream_event.set()
+        self.request_stream_reload()
         return item
 
     def add_image_bytes(self, image_bytes, original_filename="photo.jpg"):
@@ -2681,7 +2708,7 @@ class StreamerCore:
         with self.photo_lock:
             self.photo_pool.append(item)
         log_print(f"[Core] Added uploaded photo to pool: {title} (id: {photo_id}, {duration}s)")
-        self.reload_stream_event.set()
+        self.request_stream_reload()
         return item
 
     def get_photos(self):
@@ -2713,7 +2740,7 @@ class StreamerCore:
                     except Exception:
                         pass
                 log_print(f"[Core] Removed photo from pool: {removed.get('title')}")
-                self.reload_stream_event.set()
+                self.request_stream_reload()
                 return True
             return False
 
@@ -2739,7 +2766,7 @@ class StreamerCore:
             self.photo_pool.clear()
             self.slideshow_index = 0
             log_print("[Core] Cleared all photos from photo pool.")
-            self.reload_stream_event.set()
+            self.request_stream_reload()
             return True
 
     def play_image(self, image_info):
@@ -3442,7 +3469,7 @@ class StreamerCore:
 
             url_updated = False
             while self.is_running and not self.skip_event.is_set():
-                if self.reload_stream_event.is_set():
+                if self._reload_due():
                     self.reload_stream_event.clear()
                     break
 
@@ -3529,7 +3556,7 @@ class StreamerCore:
                             break
 
                         # 設定変更・写真更新ホットリロード要求
-                        if self.reload_stream_event.is_set():
+                        if self._reload_due():
                             self.reload_stream_event.clear()
                             log_print("[Monitor] Hot-reloading slideshow photo stream...")
                             stop_event.set()
@@ -3645,7 +3672,7 @@ class StreamerCore:
                         break
 
                     # 設定変更による即時ホットリロード要求
-                    if self.reload_stream_event.is_set():
+                    if self._reload_due():
                         self.reload_stream_event.clear()
                         seek = max(0, time.time() - (self.current_video_start_time or time.time()))
                         is_radio_now = (self.get_playback_mode() == "radio")

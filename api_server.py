@@ -1078,7 +1078,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 core._sink_retry_at = 0.0
                 core._sink_force_restart = True
                 ok = core.ensure_stream_sink()
-                core.reload_stream_event.set()
+                core.request_stream_reload()
                 self.send_json_response(200, {
                     "success": bool(ok),
                     "destination": core.get_destination_info(include_secrets=True)
