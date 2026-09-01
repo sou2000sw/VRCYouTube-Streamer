@@ -1,5 +1,24 @@
 # 更新履歴 (CHANGELOG)
 
+## [2.9.1] - 2026-09-01
+
+### 🐛 外付けHDD/USB上の長尺MP4を取り込むとフリーズしうる問題を修正
+- **尺取得(probe)がタイムアウト後に永久ブロックしうる**: `subprocess.run(timeout=5)` は
+  TimeoutExpired を投げる前に `kill()` してから**タイムアウト無しの** `communicate()` を呼ぶ。
+  子プロセスが低速な外付けHDD/USB/NASのI/O待ちで停止していると `TerminateProcess` は
+  即座に効かず、この2回目の `communicate()` が戻らない。呼び出し元スレッドがそこで刺さる。
+  reap 側にもタイムアウトを置き、kill が効かない場合は子を捨てて必ず戻る `_run_probe()` を新設。
+- **タイムアウト5秒が短すぎた**: スピンダウンした外付けHDDは**起動だけで5〜15秒**かかる。
+  ffprobe を 20秒 / ffmpeg フォールバックを 30秒 に延長。実測では ffprobe 約0.3秒に対し
+  `ffmpeg -i` フォールバックはローカルSSDでも約3.1秒かかっており、遅いメディアでは
+  従来の5秒を容易に超えていた。尺が取れなかった場合はログに残す。
+- **🐛 配布物に `ffprobe.exe` が同梱されていなかった**: `ffmpeg.exe` のみを配布していたため、
+  PATH に ffmpeg を持たない環境では必ず11倍遅い `ffmpeg -i` フォールバックに落ちていた。
+  `build_exe.py` を修正し、dist/ ・ releases/ ・ plugin/bin/ の3箇所すべてで ffmpeg と対で配布する。
+- **🐛 `--noconsole` ビルドで stdin ハンドルが無効**: ffmpeg は対話コマンド用に stdin を読むため、
+  ウィンドウモードのPyInstallerビルドでは無効ハンドルの継承が固まる原因になりうる。
+  ffmpeg / cloudflared を起動する5箇所に `stdin=subprocess.DEVNULL` を追加。
+
 ## [2.9.0] - 2026-08-28 (開発中)
 
 ### 🛠️ CLI 引数・環境設定オーバーライド機構の総点検・堅牢化 (Task 19)

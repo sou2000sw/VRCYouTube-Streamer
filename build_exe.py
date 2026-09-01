@@ -112,23 +112,47 @@ def generate_root_shortcuts():
                 'python gui_streamer.py --tunnel\r\n'
                 'pause\r\n')
 
+def _find_bundled_tool(name):
+    """ローカル / dist / PATH の順に <name>.exe を探す"""
+    local = os.path.abspath(f"{name}.exe")
+    if os.path.exists(local):
+        return local
+    dist_local = os.path.abspath(f"dist/{name}.exe")
+    if os.path.exists(dist_local):
+        return dist_local
+    found = shutil.which(name)
+    if found:
+        if sys.platform == "win32" and not found.lower().endswith(".exe"):
+            found_exe = found + ".exe"
+            if os.path.exists(found_exe):
+                return found_exe
+        if os.path.exists(found):
+            return found
+    return None
+
 def get_ffmpeg_source():
     """ローカルまたはPATH内のffmpeg.exeパスを取得"""
-    local_ffmpeg = os.path.abspath("ffmpeg.exe")
-    if os.path.exists(local_ffmpeg):
-        return local_ffmpeg
-    dist_ffmpeg = os.path.abspath("dist/ffmpeg.exe")
-    if os.path.exists(dist_ffmpeg):
-        return dist_ffmpeg
-    ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path:
-        if sys.platform == "win32" and not ffmpeg_path.lower().endswith(".exe"):
-            ffmpeg_path_exe = ffmpeg_path + ".exe"
-            if os.path.exists(ffmpeg_path_exe):
-                return ffmpeg_path_exe
-        if os.path.exists(ffmpeg_path):
-            return ffmpeg_path
-    return None
+    return _find_bundled_tool("ffmpeg")
+
+def get_ffprobe_source():
+    """ローカルまたはPATH内のffprobe.exeパスを取得。
+
+    ffprobe が同梱されていないと streamer_core は `ffmpeg -i` フォールバックに
+    落ちる。実測でローカルSSDでも約3秒（ffprobe は約0.3秒）かかり、外付けHDDや
+    USB上の長尺ファイルでは probe タイムアウトに達して尺が取れなくなるため、
+    ffmpeg と必ず対で配布する。
+    """
+    return _find_bundled_tool("ffprobe")
+
+def copy_media_tools(target_dir, label):
+    """ffmpeg.exe / ffprobe.exe を配布先へコピーする"""
+    for name, finder in (("ffmpeg", get_ffmpeg_source), ("ffprobe", get_ffprobe_source)):
+        src_path = finder()
+        if src_path and os.path.exists(src_path):
+            shutil.copy2(src_path, os.path.join(target_dir, f"{name}.exe"))
+            print(f"[OK] Copied {name}.exe -> {label}", flush=True)
+        else:
+            print(f"[WARN] {name}.exe was not found to package.", flush=True)
 
 def package_plugin(version=APP_VERSION):
     """plugin/ フォルダの資材を整理し、VRCBeacon用プラグインZIPパッケージを生成"""
@@ -156,10 +180,7 @@ def package_plugin(version=APP_VERSION):
         shutil.copy2(src_exe, os.path.join(plugin_bin, "VRC_Media_Streamer.exe"))
         print("[OK] Copied VRC_Media_Streamer.exe -> plugin/bin/", flush=True)
 
-    ffmpeg_src = get_ffmpeg_source()
-    if ffmpeg_src and os.path.exists(ffmpeg_src):
-        shutil.copy2(ffmpeg_src, os.path.join(plugin_bin, "ffmpeg.exe"))
-        print(f"[OK] Copied ffmpeg.exe -> plugin/bin/", flush=True)
+    copy_media_tools(plugin_bin, "plugin/bin/")
 
     # プラグインは VRCBeacon がローカルでプロセス起動するため、
     # plugin.json の --port 8000 に合わせつつトンネルは既定で無効にする。
@@ -205,12 +226,7 @@ def create_versioned_release(version=APP_VERSION):
         print("[WARN] dist/VRC_Media_Streamer.exe not found!", flush=True)
 
     # 2. ffmpeg.exe のコピー
-    ffmpeg_src = get_ffmpeg_source()
-    if ffmpeg_src and os.path.exists(ffmpeg_src):
-        shutil.copy2(ffmpeg_src, os.path.join(target_dir, "ffmpeg.exe"))
-        print(f"[OK] Copied ffmpeg.exe from {ffmpeg_src}", flush=True)
-    else:
-        print("[WARN] ffmpeg.exe was not found to package.", flush=True)
+    copy_media_tools(target_dir, os.path.basename(target_dir) + "/")
 
     # 3. config.json の生成 (配布用テンプレート config.dist.json から)
     if write_dist_config(os.path.join(target_dir, "config.json")):
@@ -433,12 +449,10 @@ def build(version=APP_VERSION):
     # dist フォルダの更新
     generate_startup_shortcuts(os.path.abspath("dist"))
     generate_root_shortcuts()
-    ffmpeg_src = get_ffmpeg_source()
-    if ffmpeg_src and os.path.exists(ffmpeg_src):
-        try:
-            shutil.copy2(ffmpeg_src, os.path.abspath("dist/ffmpeg.exe"))
-        except Exception:
-            pass
+    try:
+        copy_media_tools(os.path.abspath("dist"), "dist/")
+    except Exception:
+        pass
 
     # バージョン別配布用パッケージ (releases/VRC_Media_Streamer_v<version>/) の生成
     create_versioned_release(version)

@@ -363,43 +363,82 @@ def is_video_url_or_file(path_or_url):
     clean = path_or_url.split("?")[0].split("#")[0].lower()
     return clean.endswith((".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".ts", ".flv"))
 
+def _run_probe(cmd, timeout):
+    """probe用の外部プロセスを実行し、呼び出し元を絶対に永久ブロックさせない。
+
+    subprocess.run(timeout=...) は TimeoutExpired を投げる前に kill() したうえで
+    タイムアウト無しの communicate() を呼ぶ。子プロセスが低速な外付けHDD/USB/
+    ネットワークドライブの I/O 待ちで止まっていると TerminateProcess は即座には
+    効かず、この2回目の communicate() が戻らない。呼び出し元スレッドはそこで
+    永久に刺さる。そのため reap 側にもタイムアウトを置き、最後は子を捨てて必ず戻る。
+
+    戻り値: (stdout, stderr) いずれも str。失敗時は ("", "")。
+    """
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,   # --noconsole ビルドでは stdin ハンドルが無効。
+                                        # ffmpeg は対話コマンド用に stdin を読むため必須。
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+            creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
+    except Exception:
+        return "", ""
+
+    try:
+        return proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log_print(f"[Probe] Timed out after {timeout}s: {os.path.basename(str(cmd[-1]))}")
+    except Exception:
+        pass
+
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        # kill が効かない（I/O待ちで停止中）場合でもここで諦めて戻る。
+        # 子はデーモン扱いで放置し、OSがドライブ復帰後に回収する。
+        proc.communicate(timeout=2)
+    except Exception:
+        pass
+    return "", ""
+
+
 def get_video_file_duration(file_path):
     """ffprobe または ffmpeg を用いてローカル動画の再生時間（秒）を取得"""
     if not file_path or not os.path.exists(file_path):
         return 0.0
+
+    # 外付けHDD/USB/NAS 上のファイルはシーク1回が数秒かかる。
+    # ffprobe は 0.3秒前後で終わるが、ffmpeg -i へのフォールバックは
+    # ローカルSSDでも約3秒かかる（実測）ため、遅いメディアを想定した秒数にする。
     try:
-        cmd = [
+        out, _ = _run_probe([
             get_ffprobe_cmd(),
             "-v", "error",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",
             file_path
-        ]
-        res = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, timeout=5,
-            creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            val = float(res.stdout.strip())
+        ], timeout=20)
+        if out.strip():
+            val = float(out.strip())
             if val > 0:
                 return val
     except Exception:
         pass
 
     try:
-        cmd = [get_ffmpeg_cmd(), "-i", file_path]
-        res = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, timeout=5,
-            creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
-        )
-        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", res.stderr)
+        _, err = _run_probe([get_ffmpeg_cmd(), "-i", file_path], timeout=30)
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", err)
         if m:
             hours, minutes, seconds = float(m.group(1)), float(m.group(2)), float(m.group(3))
             return hours * 3600 + minutes * 60 + seconds
     except Exception:
         pass
+
+    log_print(f"[Probe] Could not determine duration: {os.path.basename(str(file_path))}")
     return 0.0
 
 def extract_pts_from_ts_chunk(chunk):
@@ -2272,7 +2311,7 @@ class StreamerCore:
 
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE,
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, bufsize=0,
                 creationflags=CREATE_NO_WINDOW
             )
@@ -2443,7 +2482,7 @@ class StreamerCore:
 
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE,
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, bufsize=0,
                 creationflags=CREATE_NO_WINDOW
             )
@@ -2760,7 +2799,7 @@ class StreamerCore:
 
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE,
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, bufsize=0,
                 creationflags=CREATE_NO_WINDOW
             )
@@ -3383,7 +3422,7 @@ class StreamerCore:
 
             try:
                 proc = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE,
+                    cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL, bufsize=0,
                     creationflags=CREATE_NO_WINDOW
                 )
@@ -3707,7 +3746,8 @@ class StreamerCore:
         cmd = [os.path.abspath(CLOUDFLARED_EXE), "tunnel", "--url", f"http://localhost:{port}"]
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                cmd, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace",
                 creationflags=CREATE_NO_WINDOW
             )
