@@ -42,5 +42,6 @@
   "rtmp_gop_seconds": 2,
   "rtmp_fallback_to_hls": true,
   "rtmp_fallback_after_failures": 3,
-  "rtmp_retry_backoff_max_seconds": 300
+  "rtmp_retry_backoff_max_seconds": 300,
+  "host_ui": "web"
 }

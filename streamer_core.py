@@ -110,6 +110,10 @@ DEFAULT_CONFIG = {
     "web_password": "",
     "max_video_upload_mb": 200,
     "max_video_height": 1080,
+    # ホスト画面の種類。"web" = Webリモコンと同じモダンUIを WebView2 で表示、
+    # "classic" = 従来の CustomTkinter 画面。WebView2 が使えない環境では
+    # "web" を指定していても自動的に classic へ落ちる（gui_streamer.main）。
+    "host_ui": "web",
 
     # --- 配信先（destination）: タスク14 ---
     # output_mode を切り替えるだけで出口（シンク）が変わる。

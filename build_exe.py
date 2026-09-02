@@ -2,6 +2,7 @@ import os
 import sys
 import io
 import json
+import re
 import time
 import argparse
 import subprocess
@@ -173,6 +174,20 @@ def package_plugin(version=APP_VERSION):
     if os.path.exists(src_ui):
         shutil.copy2(src_ui, os.path.join(plugin_ui_dir, "index.html"))
         print("[OK] Copied ui/index.html -> plugin/ui/index.html", flush=True)
+
+    # index.html は Tailwind / RemixIcon / hls.js を ./vendor/ から読む。
+    # ここを同期し忘れると、プラグイン配布側だけ CDN フォールバックに落ち、
+    # オフライン環境で UI が素の HTML になる（症状が出るのは配布後）。
+    src_vendor = os.path.abspath(os.path.join("ui", "vendor"))
+    if os.path.isdir(src_vendor):
+        dst_vendor = os.path.join(plugin_ui_dir, "vendor")
+        if os.path.isdir(dst_vendor):
+            shutil.rmtree(dst_vendor, ignore_errors=True)
+        shutil.copytree(src_vendor, dst_vendor)
+        print(f"[OK] Copied ui/vendor/ -> plugin/ui/vendor/ "
+              f"({len(os.listdir(dst_vendor))} files)", flush=True)
+    else:
+        print("[WARN] ui/vendor/ not found; plugin UI will fall back to CDN.", flush=True)
 
     # 2. dist/ から plugin/bin/ へバイナリを同期
     src_exe = os.path.abspath("dist/VRC_Media_Streamer.exe")
@@ -360,7 +375,28 @@ def verify_release(target_dir, port=8991, timeout=45):
             print(f"[FAIL] Access-Control-Allow-Origin appears {len(acao)} times (must be exactly 1).", flush=True)
             return False
 
+        # 4. 同梱アセット (Tailwind / RemixIcon / hls.js) が EXE から配信できるか
+        #    v2.6.0 の「UI が EXE に入っていなかった」と同じ事故が vendor/ でも起こり得る。
+        #    こちらは CDN フォールバックがあるぶん online では気付けず、
+        #    オフラインの利用者環境でだけ UI が崩れるので、ビルド時に必ず確かめる。
+        vendor_refs = sorted(set(re.findall(r"\./vendor/([A-Za-z0-9_.-]+)", expected_ui)))
+        if not vendor_refs:
+            print("[FAIL] ui/index.html does not reference any ./vendor/ asset "
+                  "(reverted to CDN links?).", flush=True)
+            return False
+        for name in vendor_refs:
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/vendor/{name}", timeout=5) as r:
+                    size = len(r.read())
+                    if r.status != 200 or size < 1024:
+                        print(f"[FAIL] Vendor asset /vendor/{name}: status={r.status}, {size} bytes.", flush=True)
+                        return False
+            except Exception as e:
+                print(f"[FAIL] Vendor asset /vendor/{name} is not served: {e}", flush=True)
+                return False
+
         print(f"[OK] Served UI: {len(served)} chars, script tags balanced ({opens}/{closes}).", flush=True)
+        print(f"[OK] Bundled vendor assets served: {', '.join(vendor_refs)}", flush=True)
         print(f"[OK] CORS headers are not duplicated.", flush=True)
         print(f"[OK] Release package verified.", flush=True)
         return True
@@ -421,18 +457,43 @@ def build(version=APP_VERSION):
         except Exception as e:
             print(f"Failed to install PyInstaller: {e}", flush=True)
             sys.exit(1)
-        
+
+    # モダンUI（WebView2 ホスト画面）の依存。無いまま黙ってビルドすると、
+    # 配布物だけが従来の CustomTkinter 画面に落ちる——しかも起動はするので
+    # 気付けない。ここで止めるか入れるかを必ず決める。
+    try:
+        import webview  # noqa: F401
+        print("pywebview is already installed (modern host UI enabled)", flush=True)
+    except ImportError:
+        print("pywebview is not installed. Installing it via pip...", flush=True)
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "pywebview"], check=True)
+            print("Successfully installed pywebview.", flush=True)
+        except Exception as e:
+            print(f"Failed to install pywebview: {e}", flush=True)
+            print("      -> The build would silently fall back to the classic UI. Aborting.", flush=True)
+            sys.exit(1)
+
     cmd = [
         "pyinstaller",
         "--onefile",
         "--noconsole",
         "--name", "VRC_Media_Streamer",
+        # EXE / タスクバー / Alt+Tab のアイコン。WebViewホスト画面のウィンドウアイコンも
+        # ここから来る（pywebview 側で個別指定する経路が無いため）。
+        "--icon", os.path.abspath(os.path.join("assets", "app_icon.ico")),
         "--add-data", "cloudflared.exe;.",
         "--add-data", "ui;ui",
         "--add-data", "assets;assets",
         "--collect-all", "customtkinter",
         "--collect-all", "qrcode",
         "--collect-all", "PIL",
+        # モダンUI（WebView2 ホスト画面）。pywebview は実行時に
+        # webview.platforms.winforms と pythonnet(clr) を動的 import するため、
+        # 明示しないと EXE に入らず、配布物だけ従来画面へ落ちる。
+        "--collect-all", "webview",
+        "--collect-all", "clr_loader",
+        "--hidden-import", "clr",
         "--clean",
         "gui_streamer.py"
     ]

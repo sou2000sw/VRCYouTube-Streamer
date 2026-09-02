@@ -10,7 +10,7 @@ from tkinter import filedialog, messagebox
 import qrcode
 from PIL import Image
 
-from streamer_core import StreamerCore, CLOUDFLARED_EXE, DEFAULT_CONFIG, log_print
+from streamer_core import StreamerCore, CLOUDFLARED_EXE, DEFAULT_CONFIG, log_print, BASE_PATH
 from config_overrides import add_config_arguments, build_overrides, describe_overrides
 from api_server import APIServer
 
@@ -782,6 +782,18 @@ class App(ctk.CTk):
         # 動画URLとWebリモコンURLの2段表示ぶん、既定の高さを広げてある
         self.geometry("680x680")
         self.minsize(540, 520)
+
+        # ウィンドウアイコン。EXE ではビルド時の --icon が効くが、
+        # ソースから起動した場合は Python の既定アイコンになってしまうため明示する。
+        try:
+            icon_path = os.path.join(BASE_PATH, "assets", "app_icon.ico")
+            if not os.path.exists(icon_path):
+                icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "app_icon.ico")
+            if os.path.exists(icon_path):
+                self.iconbitmap(icon_path)
+        except Exception:
+            # アイコンが無い/読めないだけでアプリを止める理由は無い
+            pass
 
         # ウィンドウの✕ボタンでも on_closing() を通す。
         # これが無いと shutdown() が呼ばれず、cloudflared / ffmpeg の子プロセスが孤児化する。
@@ -1563,6 +1575,8 @@ def main():
     parser.add_argument("--no-tunnel", "-nt", action="store_true", help="Disable Cloudflare tunnel (run in local test mode)")
     parser.add_argument("--port", "-p", type=int, default=None, help="Port for API and HLS server (default: 8000 or config.json)")
     parser.add_argument("--host", type=str, default=None, help="Host address to bind (default: 127.0.0.1 or config.json)")
+    parser.add_argument("--classic-ui", action="store_true",
+                        help="Use the legacy CustomTkinter window instead of the modern WebView host UI")
     add_config_arguments(parser)
 
     args = parser.parse_args()
@@ -1605,6 +1619,19 @@ def main():
     if args.headless:
         run_headless_mode(core, server)
     else:
+        # 既定はモダンUI（Webリモコンと同じ画面を WebView2 で表示する）。
+        # WebView2 が使えない環境や --classic-ui 指定時は従来の CustomTkinter 画面へ落ちる。
+        # 「起動したのに何も出ない」を避けるため、判断はここ一箇所に集約している。
+        use_classic = args.classic_ui or str(core.config.get("host_ui", "web")).lower() == "classic"
+        if not use_classic:
+            try:
+                from host_window import run_host_window
+                if run_host_window(core, server):
+                    sys.exit(0)
+                log_print("[GUI] Modern host window unavailable. Falling back to the classic UI.")
+            except Exception as e:
+                log_print(f"[GUI] Modern host window failed ({e}). Falling back to the classic UI.")
+
         app = App(core, server)
         app.mainloop()
 

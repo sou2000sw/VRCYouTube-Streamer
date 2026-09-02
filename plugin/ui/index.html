@@ -4,12 +4,31 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VRC_Media_Streamer & Web Remote</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Remix Icon CDN -->
-    <link href="https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css" rel="stylesheet">
-    <!-- Hls.js for Live Stream Inline Preview -->
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <link rel="icon" type="image/png" href="/app-icon.png?v=__APP_VERSION__">
+    <!-- 3rd party assets: ローカル同梱（ui/vendor/）が正、CDN はフォールバック。
+         ホストPCがオフラインでも CDN が塞がれた回線でも UI が崩れないよう、
+         v2.9.4 で CDN 直リンクから同梱配信へ切り替えた。
+         vendor/ が欠けている場合だけ、従来どおり CDN から取り直す（fail-safe）。 -->
+    <script>
+        // CSS だけは document.write が使えないので、読み込み失敗時に CDN の <link> を足す。
+        window.__vendorCssFallback = function (href) {
+            var l = document.createElement('link');
+            l.rel = 'stylesheet';
+            l.href = href;
+            document.head.appendChild(l);
+        };
+    </script>
+    <!-- Tailwind CSS (vendored: tailwindcss 3.4.16 play CDN build) -->
+    <script src="./vendor/tailwind.min.js?v=__APP_VERSION__"></script>
+    <!-- 下2行で 'scr'+'ipt' と分割しているのは意図的。リリース検証(build_exe.py)は
+         配信されたHTML中のスクリプト開始タグと終了タグの個数一致で破損を検知しており、
+         文字列リテラルの中に生のタグが混じると偽陽性で落ちる。繋げて書き直さないこと。 -->
+    <script>window.tailwind || document.write('<scr' + 'ipt src="https://cdn.tailwindcss.com"></scr' + 'ipt>');</script>
+    <!-- Remix Icon (vendored: remixicon 4.2.0 / woff2+woff のみ同梱) -->
+    <link href="./vendor/remixicon.css?v=__APP_VERSION__" rel="stylesheet" onerror="window.__vendorCssFallback('https://cdn.jsdelivr.net/npm/remixicon@4.2.0/fonts/remixicon.css')">
+    <!-- Hls.js for Live Stream Inline Preview (vendored: hls.js 1.5.17) -->
+    <script src="./vendor/hls.min.js?v=__APP_VERSION__"></script>
+    <script>window.Hls || document.write('<scr' + 'ipt src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></scr' + 'ipt>');</script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -74,7 +93,7 @@
     <header class="h-12 bg-card border-b border-border px-3 sm:px-4 flex items-center justify-between shrink-0 z-20">
         <div class="flex items-center gap-2 sm:gap-3 min-w-0">
             <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
-                <i class="ri-youtube-fill text-red-500 text-xl"></i>
+                <img src="/app-mark.png" alt="" width="20" height="20" class="w-5 h-5 shrink-0">
                 <span class="font-bold text-sm tracking-wide text-zinc-100 hidden xs:inline">VRC_Media_Streamer</span>
                 <span id="appVersionBadge" class="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700 font-mono">--</span>
             </div>
@@ -105,6 +124,12 @@
                 <span class="hidden sm:inline">サーバー終了</span>
             </button>
 
+            <!-- Exit Button (Host window only) -->
+            <button id="btnHostExit" onclick="hostExitApp()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-red-950/60 text-zinc-300 hover:text-red-400 border border-zinc-700 rounded text-xs transition" title="配信を停止してアプリを終了します">
+                <i class="ri-shut-down-line text-sm"></i>
+                <span class="hidden sm:inline">終了</span>
+            </button>
+
             <!-- Restart Button (When Online & Local) -->
             <button id="btnHeaderRestart" onclick="handleRestartServer()" class="hidden flex items-center gap-1.5 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="VRC_Media_Streamer サーバーを再起動します">
                 <i class="ri-refresh-line text-sm"></i>
@@ -114,7 +139,7 @@
             <!-- Toggle Live Preview -->
             <button id="btnTogglePreview" onclick="toggleLivePreview()" class="flex items-center gap-1 px-2 sm:px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="インラインプレイヤーの表示/非表示">
                 <i class="ri-tv-2-line text-sm text-primary"></i>
-                <span class="hidden sm:inline" id="previewBtnLabel">プレビュー</span>
+                <span class="hidden sm:inline" id="previewBtnLabel">プレビュー表示</span>
             </button>
 
             <!-- Logout / Lock Button (When Password Protected) -->
@@ -188,7 +213,7 @@
             <div id="tab-player" class="tab-pane flex flex-col gap-4">
 
                 <!-- 1. Live Stream Inline HLS Preview Player Card (Collapsible) -->
-                <div id="previewCard" class="bg-card border border-border rounded-lg p-3 sm:p-4 flex flex-col gap-2.5 transition">
+                <div id="previewCard" class="hidden bg-card border border-border rounded-lg p-3 sm:p-4 flex-col gap-2.5 transition">
                     <div class="flex items-center justify-between">
                         <div class="flex items-center gap-2">
                             <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
@@ -259,6 +284,10 @@
                         <input id="quickStreamUrl" readonly class="bg-zinc-900 border border-zinc-700/80 rounded px-2 py-0.5 text-xs text-zinc-200 font-mono w-full truncate focus:outline-none focus:border-primary" value="取得中...">
                     </div>
                     <div class="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                        <button id="btnHostRevealUrl" onclick="hostToggleRevealUrl()" class="hidden flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition" title="ストリームキーを含む本物のURLを表示します（画面共有中は注意）">
+                            <i class="ri-eye-line"></i>
+                            <span id="btnHostRevealUrlLabel">表示</span>
+                        </button>
                         <button onclick="copyStreamUrl()" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded text-xs transition">
                             <i class="ri-file-copy-line"></i>
                             <span>コピー</span>
@@ -299,7 +328,7 @@
 
                         <div class="flex gap-2">
                             <div class="relative flex-1">
-                                <i class="ri-youtube-line absolute left-3 top-2.5 text-zinc-500 text-sm"></i>
+                                <i class="ri-link absolute left-3 top-2.5 text-zinc-500 text-sm"></i>
                                 <input id="inputVideoUrl" type="text" placeholder="https://www.youtube.com/watch?v=... または プレイリストURL" 
                                     class="w-full bg-zinc-900 border border-zinc-700 rounded pl-9 pr-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-primary transition"
                                     onkeydown="if(event.key==='Enter') addVideoUrl()">
@@ -336,6 +365,23 @@
                             <span class="text-xs text-zinc-300 font-medium">タップして写真/動画を選択 / ドロップ</span>
                             <span class="text-[10px] text-zinc-500">画像 (JPEG, PNG, WebP) / 動画 (MP4, MOV, WebM)</span>
                             <input type="file" id="fileInput" multiple accept="image/*,video/mp4,video/webm,video/quicktime,video/*" class="hidden" onchange="handleImageFiles(this.files)">
+                        </div>
+
+                        <!-- ホストウィンドウ専用: OSのファイル選択から直接追加する。
+                             アップロード経路と違いファイルをコピーせず元の場所を参照するため、
+                             容量上限が無い（外付けHDD上の長尺MP4もそのまま配信できる）。 -->
+                        <div id="hostFilePicker" class="hidden flex flex-col gap-2 pt-1">
+                            <div class="flex items-center gap-2">
+                                <button onclick="hostAddVideoFiles()" class="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-zinc-700 rounded text-xs font-medium transition">
+                                    <i class="ri-film-line text-primary"></i>
+                                    <span>PCから動画を追加</span>
+                                </button>
+                                <button onclick="hostAddPhotoFiles()" class="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 border border-zinc-700 rounded text-xs font-medium transition">
+                                    <i class="ri-image-line text-emerald-400"></i>
+                                    <span>PCから写真を追加</span>
+                                </button>
+                            </div>
+                            <span class="text-[10px] text-zinc-500">※ホストPCから直接追加する経路です。ファイルをコピーしないため<b class="text-zinc-400">容量上限はありません</b>。</span>
                         </div>
                     </div>
                 </div>
@@ -657,6 +703,118 @@
                     </div>
                 </div>
 
+                <!-- ホスト専用設定: ホストPC(localhost)からのみ表示・変更できる。
+                     ゲストのブラウザに出すと「押せるのに403で保存できない」ので、UIごと隠す。 -->
+                <div id="hostSettingsCard" class="hidden bg-card border border-border rounded-lg p-4 flex-col gap-4">
+                    <div class="flex items-center gap-2 pb-2 border-b border-border">
+                        <i class="ri-computer-line text-primary text-base"></i>
+                        <h3 class="font-semibold text-xs text-zinc-200">ホスト専用設定（このPCからのみ）</h3>
+                        <button onclick="loadHostSettings()" class="ml-auto flex items-center gap-1 px-2 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-[11px] transition" title="設定ファイルから読み直します">
+                            <i class="ri-refresh-line"></i>
+                            <span>再読込</span>
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">サーバーポート</label>
+                            <input type="number" id="hostPort" min="1" max="65535" class="w-32 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary font-mono">
+                            <p class="text-[11px] text-zinc-500">※変更は<b class="text-zinc-400">次回起動時</b>に反映されます。</p>
+                        </div>
+
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">Cloudflare トンネル</label>
+                            <label class="flex items-center gap-2 cursor-pointer mt-1">
+                                <input type="checkbox" id="hostEnableTunnel" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                                <span class="text-xs text-zinc-200">外部公開URLを自動発行する</span>
+                            </label>
+                            <p class="text-[11px] text-zinc-500">※無効にすると、このPCのローカル配信のみになります。</p>
+                        </div>
+
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">HLS セグメント秒数</label>
+                            <input type="number" id="hostHlsSegment" min="1" max="10" class="w-24 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary font-mono">
+                            <p class="text-[11px] text-zinc-500">※短いほど低遅延、長いほど途切れにくくなります。</p>
+                        </div>
+
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">動画切り替え待機秒数</label>
+                            <input type="number" id="hostTransitionWait" min="0" max="30" class="w-24 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary font-mono">
+                        </div>
+
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">Web Player 同期バッファ数</label>
+                            <input type="number" id="hostLiveSync" min="1" max="20" class="w-24 bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary font-mono">
+                        </div>
+
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">待機画面</label>
+                            <select id="hostStandbyMode" class="bg-zinc-900 border border-zinc-700 rounded px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary">
+                                <option value="image">🖼 待機画像を表示</option>
+                                <option value="qr">📱 QRコードを表示</option>
+                            </select>
+                            <div id="hostStandbyImageRow" class="hidden flex flex-col gap-1">
+                                <button onclick="hostSelectStandbyImage()" class="self-start flex items-center gap-1.5 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded text-xs transition">
+                                    <i class="ri-image-add-line text-emerald-400"></i>
+                                    <span>待機画像を選ぶ</span>
+                                </button>
+                                <span id="hostStandbyImagePath" class="text-[11px] text-zinc-500 font-mono truncate">（未設定：既定の待機画面）</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-border">
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" id="hostLoopQueue" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                            <span class="text-xs text-zinc-200">🔁 起動時からループ再生を有効にする</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" id="hostShuffle" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                            <span class="text-xs text-zinc-200">🔀 起動時からシャッフル再生を有効にする</span>
+                        </label>
+                    </div>
+
+                    <div class="flex flex-col gap-3 pt-3 border-t border-border">
+                        <div class="flex items-center gap-2">
+                            <i class="ri-shield-user-line text-amber-400 text-base"></i>
+                            <span class="text-xs font-semibold text-zinc-200">Webリモコン（フレンド）に許可する操作</span>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" id="hostAllowAdd" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                                <span class="text-xs text-zinc-200">キューへの追加</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" id="hostAllowEdit" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                                <span class="text-xs text-zinc-200">並び替え・削除</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" id="hostAllowControl" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                                <span class="text-xs text-zinc-200">スキップ等の再生操作</span>
+                            </label>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <label class="text-xs text-zinc-400">Webリモコン パスワード / PIN</label>
+                            <div class="flex items-center gap-2">
+                                <input type="password" id="hostWebPassword" placeholder="空欄で認証なし" class="flex-1 max-w-xs bg-zinc-900 border border-zinc-700 rounded px-3 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-primary font-mono">
+                                <button onclick="hostToggleWebPassword()" class="flex items-center gap-1 px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded text-xs transition">
+                                    <i class="ri-eye-line"></i>
+                                    <span id="hostWebPasswordLabel">表示</span>
+                                </button>
+                            </div>
+                            <p class="text-[11px] text-zinc-500">※空欄にすると、URLを知っている人は誰でも操作できます。ホストPC（この画面）は常に認証不要です。</p>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-2 pt-3 border-t border-border">
+                        <span id="hostSettingsHint" class="text-[11px] text-zinc-500 mr-auto"></span>
+                        <button onclick="saveHostSettings()" class="flex items-center gap-1.5 px-4 py-1.5 bg-primary hover:bg-primary-hover text-zinc-950 font-semibold rounded text-xs transition">
+                            <i class="ri-save-line"></i>
+                            <span>ホスト設定を保存</span>
+                        </button>
+                    </div>
+                </div>
+
                 <div class="bg-card border border-border rounded-lg p-4 flex flex-col gap-4">
                     <div class="flex items-center gap-2 pb-2 border-b border-border">
                         <i class="ri-server-line text-amber-400 text-base"></i>
@@ -908,7 +1066,10 @@
         let draggedItemIndex = null;
         let currentStatusData = null;
         let hlsInstance = null;
-        let previewEnabled = true;
+        // プレビューは既定で閉じておく。開いていると HLS セグメントを取り続けるため、
+        // 画面を見ていないだけで帯域とCPUを食う（ホスト画面は起動しっぱなしで使われる）。
+        // 見たいときにヘッダーの「プレビュー表示」で開く。
+        let previewEnabled = false;
         // 実際に今動いている出口。RTMP系(topaz / generic_rtmp)のときは
         // ローカルHLSを生成していないため、プレビューは原理的に成立しない。
         let activeOutputMode = 'hls';
@@ -1152,7 +1313,12 @@
             checkServerHealth(true);
             setInterval(() => checkServerHealth(false), 2000);
             setupDragAndDrop();
-            initHlsPlayer();
+            // プレビューは既定で閉じているので、ここでは HLS を掴まない。
+            // 開いた時点で toggleLivePreview() が initHlsPlayer() を呼ぶ。
+            if (previewEnabled) initHlsPlayer();
+            // ホスト専用設定は localhost からのみ読める。WebViewホスト画面でも
+            // ブラウザで localhost を開いた場合でも同じように出す。
+            loadHostSettings();
         });
 
         function updateClock() {
@@ -1436,6 +1602,7 @@
             previewEnabled = !previewEnabled;
             if (previewEnabled) {
                 card.classList.remove('hidden');
+                card.classList.add('flex');
                 if (label) label.innerText = 'プレビュー';
                 if (hlsInstance) {
                     // 閉じている間に積み上がった待機を捨て、表示も初期状態へ戻す。
@@ -1479,6 +1646,7 @@
                 }
             } else {
                 card.classList.add('hidden');
+                card.classList.remove('flex');
                 if (label) label.innerText = 'プレビュー表示';
                 if (video) video.pause();
                 // 閉じている間もセグメントを取得し続けると帯域を無駄にし、
@@ -1621,7 +1789,9 @@
             const ipcAvailable = isIpcAvailable();
             if (isLocal) {
                 document.getElementById('btnHeaderLaunch').classList.add('hidden');
-                document.getElementById('btnHeaderStop').classList.remove('hidden');
+                // ホストウィンドウ（WebView）の中でサーバーだけ止めると、
+                // 操作不能の画面が残る。終了は「終了」ボタンに一本化する。
+                document.getElementById('btnHeaderStop').classList.toggle('hidden', isHostWindow());
                 if (ipcAvailable) {
                     document.getElementById('btnHeaderRestart').classList.remove('hidden');
                 } else {
@@ -1699,8 +1869,10 @@
             const infoTunnel = document.getElementById('infoTunnelUrl');
             const shareQr = document.getElementById('shareQrImg');
 
-            if (quickUrl) quickUrl.value = streamUrl;
-            if (infoStream) infoStream.value = streamUrl;
+            realStreamUrl = streamUrl;
+            const shownStreamUrl = displayStreamUrl(streamUrl);
+            if (quickUrl) quickUrl.value = shownStreamUrl;
+            if (infoStream) infoStream.value = shownStreamUrl;
             if (infoTunnel) infoTunnel.value = tunnelUrl;
             if (shareQr) refreshShareQr(tunnelUrl);
 
@@ -1879,7 +2051,7 @@
 
             const destUrl = dest.video_url || data.video_url || '';
             const destUrlEl = document.getElementById('destinationVideoUrl');
-            if (destUrlEl) destUrlEl.value = destUrl || '-';
+            if (destUrlEl) destUrlEl.value = displayStreamUrl(destUrl) || '-';
 
             const badgeEl = document.getElementById('destinationStatusBadge');
             const retryBtn = document.getElementById('btnRetryDestination');
@@ -2720,8 +2892,30 @@
             setTimeout(() => handleLaunchServer(), 1500);
         }
 
+        // ストリームキーは実質パスワードで、画面共有や配信に映り込むと配信を乗っ取られる。
+        // 従来のデスクトップ画面は既定でマスクしていたので、ホスト画面でも同じ扱いにする。
+        // （表示だけを伏せ、コピーには常に本物を渡す。ここも従来画面と同じ。）
+        function maskStreamUrlForDisplay(url) {
+            if (!url || !url.includes('://')) return url;
+            // 鍵を持つのは RTMP / RTSP 系だけ。HLS の .m3u8 URL に秘密は無いので、
+            // ここでマスクすると「ワールドに貼るURLが読めない」だけの害になる。
+            if (!/^rtmps?:|^rtsp[st]?:/i.test(url)) return url;
+            const cut = url.lastIndexOf('/');
+            if (cut < 0) return url;
+            const head = url.slice(0, cut + 1);
+            const key = url.slice(cut + 1);
+            // 拡張子付き（stream.m3u8 等）は鍵ではない
+            if (key.length < 8 || key.includes('.')) return url;
+            return head + key.slice(0, 2) + '*'.repeat(Math.max(4, key.length - 4)) + key.slice(-2);
+        }
+
+        function displayStreamUrl(url) {
+            return (isHostWindow() && !hostUrlRevealed) ? maskStreamUrlForDisplay(url) : url;
+        }
+
         function copyStreamUrl() {
-            const url = document.getElementById('quickStreamUrl').value;
+            // マスク表示中でもコピーされるのは本物のURL
+            const url = realStreamUrl || document.getElementById('quickStreamUrl').value;
             if (!url || url === '取得中...') return;
             navigator.clipboard.writeText(url);
             showToast('VRChat用ストリームURLをコピーしました', 'success');
@@ -2751,6 +2945,235 @@
             const m = Math.floor(sec / 60);
             const s = Math.floor(sec % 60);
             return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        // ===================== ホストウィンドウ連携 =====================
+        // このアプリのホスト画面は、同じ ui/index.html を WebView2 で開いたもの。
+        // ブラウザには無いネイティブ機能（容量無制限のファイル追加・待機画像の選択・
+        // アプリ終了・ストリームキーの平文取得）だけが window.pywebview.api として生える。
+        // 通常のブラウザでは undefined なので、対応するUIはそもそも出さない。
+        let hostApi = null;
+        let hostUrlRevealed = false;
+        let realStreamUrl = '';
+
+        function isHostWindow() {
+            return Boolean(hostApi);
+        }
+
+        function applyHostWindowMode() {
+            const picker = document.getElementById('hostFilePicker');
+            if (picker) picker.classList.toggle('hidden', !isHostWindow());
+            const revealBtn = document.getElementById('btnHostRevealUrl');
+            if (revealBtn) revealBtn.classList.toggle('hidden', !isHostWindow());
+            const exitBtn = document.getElementById('btnHostExit');
+            if (exitBtn) exitBtn.classList.toggle('hidden', !isHostWindow());
+            const standbyRow = document.getElementById('hostStandbyImageRow');
+            if (standbyRow) standbyRow.classList.toggle('hidden', !isHostWindow());
+            // ホストウィンドウの中で「サーバー終了」を押すと、画面だけ残って何も操作できなくなる。
+            // 終了は「終了」ボタン（プロセスごと閉じる）に一本化する。
+            const stopBtn = document.getElementById('btnHeaderStop');
+            if (stopBtn && isHostWindow()) stopBtn.classList.add('hidden');
+        }
+
+        window.addEventListener('pywebviewready', () => {
+            hostApi = (window.pywebview && window.pywebview.api) || null;
+            applyHostWindowMode();
+            loadHostSettings();
+        });
+
+        async function hostAddVideoFiles() {
+            if (!hostApi) return;
+            try {
+                const res = await hostApi.add_video_files();
+                if (res && res.selected > 0) showToast(`${res.selected}件の動画を追加しています...`, 'success');
+            } catch (e) {
+                showToast('ファイル選択に失敗しました', 'danger');
+            }
+        }
+
+        async function hostAddPhotoFiles() {
+            if (!hostApi) return;
+            try {
+                const res = await hostApi.add_photo_files();
+                if (res && res.selected > 0) showToast(`${res.selected}件の写真を追加しています...`, 'success');
+            } catch (e) {
+                showToast('ファイル選択に失敗しました', 'danger');
+            }
+        }
+
+        async function hostSelectStandbyImage() {
+            if (!hostApi) return;
+            try {
+                const res = await hostApi.select_standby_image();
+                if (res && res.selected > 0) {
+                    const el = document.getElementById('hostStandbyImagePath');
+                    if (el) el.innerText = res.path || '';
+                    showToast('待機画像を設定しました', 'success');
+                }
+            } catch (e) {
+                showToast('待機画像の設定に失敗しました', 'danger');
+            }
+        }
+
+        async function hostToggleRevealUrl() {
+            if (!hostApi) return;
+            const label = document.getElementById('btnHostRevealUrlLabel');
+            const icon = document.querySelector('#btnHostRevealUrl i');
+            if (hostUrlRevealed) {
+                hostUrlRevealed = false;
+                if (label) label.innerText = '表示';
+                if (icon) icon.className = 'ri-eye-line';
+                applyStreamUrlDisplay();
+                return;
+            }
+            // 通常は /api/status の値をそのまま出せばよいが、まだ届いていない場合に備えて
+            // ネイティブ側からも取れるようにしてある（ホスト画面だけの経路）。
+            if (!realStreamUrl) {
+                try {
+                    const res = await hostApi.reveal_video_url();
+                    if (res && res.url) realStreamUrl = res.url;
+                } catch (e) {}
+            }
+            if (!realStreamUrl) {
+                showToast('URLがまだ準備できていません', 'warning');
+                return;
+            }
+            hostUrlRevealed = true;
+            if (label) label.innerText = '隠す';
+            if (icon) icon.className = 'ri-eye-off-line';
+            applyStreamUrlDisplay();
+        }
+
+        function applyStreamUrlDisplay() {
+            const shown = displayStreamUrl(realStreamUrl);
+            for (const id of ['quickStreamUrl', 'infoStreamUrl', 'destinationVideoUrl']) {
+                const el = document.getElementById(id);
+                if (el && el.value && el.value !== '-') el.value = shown;
+            }
+        }
+
+        async function hostExitApp() {
+            if (!hostApi) return;
+            if (!confirm('配信を停止して VRC_Media_Streamer を終了します。よろしいですか？')) return;
+            try {
+                await hostApi.exit_app();
+            } catch (e) {
+                // ウィンドウが閉じる過程で呼び出しが切れることがある。閉じられていれば成功。
+            }
+        }
+
+        function hostToggleWebPassword() {
+            const input = document.getElementById('hostWebPassword');
+            const label = document.getElementById('hostWebPasswordLabel');
+            if (!input) return;
+            const reveal = input.type === 'password';
+            input.type = reveal ? 'text' : 'password';
+            if (label) label.innerText = reveal ? '隠す' : '表示';
+        }
+
+        // ホスト専用設定は /api/status には載っていないので、設定ファイルから直接読む。
+        // このエンドポイントは localhost 限定（ゲストには 403）。
+        async function loadHostSettings() {
+            const card = document.getElementById('hostSettingsCard');
+            if (!card) return;
+            if (!isLocalEnvironment()) {
+                card.classList.add('hidden');
+                return;
+            }
+            try {
+                const res = await fetch(`${apiBase}/api/config`);
+                if (!res.ok) {
+                    card.classList.add('hidden');
+                    return;
+                }
+                const cfg = await res.json();
+                card.classList.remove('hidden');
+                card.classList.add('flex');
+
+                const set = (id, value) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    if (el.type === 'checkbox') el.checked = Boolean(value);
+                    else el.value = value === undefined || value === null ? '' : value;
+                };
+                set('hostPort', cfg.port);
+                set('hostEnableTunnel', cfg.enable_tunnel);
+                set('hostHlsSegment', cfg.hls_segment_time);
+                set('hostTransitionWait', cfg.video_transition_wait_seconds);
+                set('hostLiveSync', cfg.live_sync_duration_count);
+                set('hostStandbyMode', cfg.standby_mode || 'image');
+                set('hostLoopQueue', cfg.loop_queue);
+                set('hostShuffle', cfg.shuffle);
+                set('hostAllowAdd', cfg.allow_web_queue_add);
+                set('hostAllowEdit', cfg.allow_web_queue_edit);
+                set('hostAllowControl', cfg.allow_web_playback_control);
+                set('hostWebPassword', cfg.web_password || '');
+
+                const pathEl = document.getElementById('hostStandbyImagePath');
+                if (pathEl) pathEl.innerText = cfg.standby_image_path || '（未設定：既定の待機画面）';
+                applyHostWindowMode();
+            } catch (e) {
+                card.classList.add('hidden');
+            }
+        }
+
+        async function saveHostSettings() {
+            const num = (id, fallback) => {
+                const el = document.getElementById(id);
+                const v = parseInt(el ? el.value : '', 10);
+                return Number.isFinite(v) ? v : fallback;
+            };
+            const bool = (id) => {
+                const el = document.getElementById(id);
+                return el ? Boolean(el.checked) : false;
+            };
+
+            const port = num('hostPort', 8000);
+            if (port < 1 || port > 65535) {
+                showToast('ポートは 1〜65535 で指定してください', 'danger');
+                return;
+            }
+
+            const payload = {
+                port: port,
+                enable_tunnel: bool('hostEnableTunnel'),
+                hls_segment_time: num('hostHlsSegment', 3),
+                video_transition_wait_seconds: num('hostTransitionWait', 1),
+                live_sync_duration_count: num('hostLiveSync', 4),
+                standby_mode: (document.getElementById('hostStandbyMode') || {}).value || 'image',
+                loop_queue: bool('hostLoopQueue'),
+                shuffle: bool('hostShuffle'),
+                allow_web_queue_add: bool('hostAllowAdd'),
+                allow_web_queue_edit: bool('hostAllowEdit'),
+                allow_web_playback_control: bool('hostAllowControl'),
+                web_password: (document.getElementById('hostWebPassword') || {}).value || ''
+            };
+
+            try {
+                const res = await fetch(`${apiBase}/api/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) {
+                    showToast('設定変更はホストPCからのみ許可されています', 'danger');
+                    return;
+                }
+                let warnings = [];
+                try {
+                    const data = await res.json();
+                    warnings = data.warnings || [];
+                } catch (e) {}
+                const hint = document.getElementById('hostSettingsHint');
+                if (warnings.length) {
+                    showToast(warnings[0], 'danger');
+                } else {
+                    showToast('ホスト設定を保存しました', 'success');
+                    if (hint) hint.innerText = 'ポートの変更は次回起動時に反映されます。';
+                }
+            } catch (e) {
+                showToast('設定の保存に失敗しました', 'danger');
+            }
         }
 
         function escapeHtml(str) {

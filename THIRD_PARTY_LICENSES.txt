@@ -120,6 +120,27 @@ Source  : https://github.com/python-websockets/websockets
 License : Apache License 2.0 / BSD 2-Clause（デュアルライセンス）
 Source  : https://github.com/pypa/packaging
 
+--------------------------------------------------
+15. Tailwind CSS  （Webリモコンに同梱 / ui/vendor/tailwind.min.js / v3.4.16）
+--------------------------------------------------
+Copyright (c) Tailwind Labs, Inc.
+License : MIT License
+Source  : https://github.com/tailwindlabs/tailwindcss
+
+--------------------------------------------------
+16. Remix Icon  （Webリモコンに同梱 / ui/vendor/remixicon.* / v4.2.0）
+--------------------------------------------------
+Copyright (c) RemixIcon.com
+License : Apache License, Version 2.0
+Source  : https://github.com/Remix-Design/RemixIcon
+
+--------------------------------------------------
+17. hls.js  （Webリモコンに同梱 / ui/vendor/hls.min.js / v1.5.17）
+--------------------------------------------------
+Copyright (c) Dailymotion (video-dev community)
+License : Apache License, Version 2.0
+Source  : https://github.com/video-dev/hls.js
+
 ==================================================
  MIT / BSD ライセンスの全文について
 ==================================================
