@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """pytest 共通設定。
 
-**テストが利用者の実 config.json を書き換えないようにする。**
+**テストが利用者の実ファイル（config.json / ログ）を書き換えないようにする。**
 
 `streamer_core.CONFIG_FILE` はモジュール定数の絶対パスなので、素directoryのままテストを
 走らせると `StreamerCore` が実ファイルへ保存してしまう。実際に
@@ -42,3 +42,17 @@ def isolated_config_file(tmp_path, monkeypatch):
             monkeypatch.setattr(module, "CONFIG_FILE", temp_path, raising=False)
 
     yield temp_path
+
+
+@pytest.fixture(autouse=True)
+def isolated_log_file(tmp_path, monkeypatch):
+    """各テストのログ出力先をテスト専用の一時ファイルへ差し替える。
+
+    `streamer_core.LOG_FILE_PATH` も CONFIG_FILE と同じくモジュール定数の絶対パスで、
+    素のまま走らせるとテストの出力が配布物と同じ場所の実ログへ延々と追記される。
+    実際に pytest 1回で 289行が実ログへ流れ込み、利用者の操作履歴が埋もれた。
+    """
+    monkeypatch.setattr(
+        streamer_core, "LOG_FILE_PATH", str(tmp_path / "test.log"), raising=False
+    )
+    yield

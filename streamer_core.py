@@ -173,9 +173,29 @@ DESTINATION_CONFIG_KEYS = (
     "rtmp_video_width", "rtmp_video_height", "rtmp_fps", "rtmp_gop_seconds",
 )
 
+# ★--noconsole ビルドでは sys.stdout がダミーに差し替わり、print はどこにも残らない。
+# 配布先で起きた事象を後から追う手段が無くなるため、ファイルへも必ず書く。
+# 無制限に太らせると配布先のディスクを埋めるので、上限を超えたら1世代だけ退避する。
+LOG_FILE_PATH = os.path.join(APP_DIR, "vrc_media_streamer.log")
+LOG_FILE_MAX_BYTES = 2 * 1024 * 1024
+_log_file_lock = threading.Lock()
+
+
 def log_print(msg):
     try:
         print(msg, flush=True)
+    except Exception:
+        pass
+    # ログ出力の失敗で本処理を止めない（配信中に例外を上げる価値は無い）
+    try:
+        with _log_file_lock:
+            try:
+                if os.path.getsize(LOG_FILE_PATH) > LOG_FILE_MAX_BYTES:
+                    os.replace(LOG_FILE_PATH, LOG_FILE_PATH + ".1")
+            except OSError:
+                pass
+            with open(LOG_FILE_PATH, "a", encoding="utf-8", errors="replace") as f:
+                print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}", file=f)
     except Exception:
         pass
 
@@ -448,6 +468,90 @@ def get_video_file_duration(file_path):
 
     log_print(f"[Probe] Could not determine duration: {os.path.basename(str(file_path))}")
     return 0.0
+
+
+# ストリームコピーを許す画素フォーマット。yuvj420p はレンジ表記が違うだけの同一構造。
+# 4:2:2 / 10bit は AVPro 側で再生できない環境があるため通さない。
+COPY_SAFE_PIX_FMTS = frozenset({"yuv420p", "yuvj420p"})
+
+
+def probe_video_stream_params(file_path):
+    """ローカル動画の映像ストリーム諸元を取得する。取得できなければ None。
+
+    ここで見るのは「再エンコードせずにそのまま流せるか」の判断に必要な項目だけ。
+    低速メディアで固まらないよう、必ず _run_probe 経由で叩く。
+    """
+    if not file_path or not os.path.exists(file_path):
+        return None
+    try:
+        out, _ = _run_probe([
+            get_ffprobe_cmd(),
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name,pix_fmt,height,r_frame_rate,avg_frame_rate",
+            "-of", "default=noprint_wrappers=1",
+            file_path
+        ], timeout=20)
+    except Exception:
+        return None
+
+    params = {}
+    for line in out.splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            params[k.strip()] = v.strip()
+    return params or None
+
+
+def _parse_fps(value):
+    """ffprobe の "30000/1001" 形式を float にする。不明なら 0.0。"""
+    try:
+        num, _, den = str(value).partition("/")
+        den = float(den) if den else 1.0
+        return float(num) / den if den else 0.0
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def can_stream_copy_local_video(params, max_height):
+    """再エンコードせずにそのまま送出してよいローカル動画かを判定する。
+
+    ローカルファイルを無条件に再エンコードすると、URL追加なら無劣化で届く映像が
+    アップロードした途端に作り直される（実測: 4.76Mbps の原本が 2500kbps へ再圧縮され
+    SSIM 1.000 → 0.9918）。**同じ品質で出す**には、安全に通せるものは通すしかない。
+
+    通す条件は「受信側FFmpegとAVProがそのまま扱える形であること」に限る:
+      - H.264 / yuv420p 系（HEVC・VP9・10bit・4:2:2 は再生できない環境がある）
+      - 配信上限の高さ以内（4K をそのまま投げても VRChat 側で扱えない）
+      - CFR であること。スマホ動画に多い VFR をコピーすると、
+        タイムスタンプがそのまま下流へ渡って音ズレの原因になる。
+    判定できない項目が一つでもあれば「通さない」に倒す（fail-closed）。
+    """
+    if not params:
+        return False, "probe failed"
+    if params.get("codec_name") != "h264":
+        return False, f"codec={params.get('codec_name')}"
+    if params.get("pix_fmt") not in COPY_SAFE_PIX_FMTS:
+        return False, f"pix_fmt={params.get('pix_fmt')}"
+    try:
+        height = int(params.get("height") or 0)
+    except (TypeError, ValueError):
+        height = 0
+    if height <= 0:
+        return False, "height unknown"
+    if max_height and height > max_height:
+        return False, f"height={height}>{max_height}"
+
+    r_fps = _parse_fps(params.get("r_frame_rate"))
+    avg_fps = _parse_fps(params.get("avg_frame_rate"))
+    if r_fps <= 0 or avg_fps <= 0:
+        return False, "fps unknown"
+    # 1%を超えて食い違うものは可変フレームレートとみなす
+    if abs(r_fps - avg_fps) / max(r_fps, avg_fps) > 0.01:
+        return False, f"vfr({r_fps:.2f}/{avg_fps:.2f})"
+
+    return True, f"h264 {height}p {avg_fps:.2f}fps"
+
 
 def extract_pts_from_ts_chunk(chunk):
     """MPEG-TSチャンクから再生位置PTS（秒）を抽出する。
@@ -2302,6 +2406,13 @@ class StreamerCore:
                 "-map", "0:v:0",
                 "-map", "1:a:0",
             ])
+        # ★送出経路ごとに画質が大きく違う（ラジオ200k / 写真1500k / 動画2500k）。
+        # VRC側で「これだけ汚い」と感じたとき、どの経路を通ったのかが
+        # 分からないと切り分けができないため、必ず名前とビットレートを残す。
+        log_print(
+            f"[Player] Encoder path=radio 1920x1080@2fps v=200k(max250k/buf200k) "
+            f"baseline/ultrafast bg={'slideshow' if is_slideshow else self.config.get('radio_bg_source', 'card')}"
+        )
         cmd.extend([
             "-c:v", "libx264",
             "-preset", "ultrafast",
@@ -2446,7 +2557,20 @@ class StreamerCore:
         has_qr = bool(overlay_video and qr_overlay_file and os.path.exists(qr_overlay_file))
         has_clock = bool(clock_video)
 
-        if has_qr or has_clock or is_local:
+        # ローカルファイルを無条件に再エンコードしていたため、URL追加なら無劣化で
+        # 届く映像が、アップロードした瞬間に作り直されていた。そのまま流せるものは
+        # 流す。判定はファイルごとに1度だけ（低速メディアで毎回プローブを走らせない）。
+        needs_reencode_local = False
+        if is_local:
+            if "can_stream_copy" not in video_info:
+                params = probe_video_stream_params(video_info.get("path") or video_url)
+                ok, why = can_stream_copy_local_video(params, self.get_max_video_height())
+                video_info["can_stream_copy"] = ok
+                video_info["stream_copy_reason"] = why
+                log_print(f"[Player] Local video passthrough {'OK' if ok else 'NG'}: {why}")
+            needs_reencode_local = not video_info.get("can_stream_copy")
+
+        if has_qr or has_clock or needs_reencode_local:
             if has_qr:
                 qr_idx = 2 if audio_url else 1
                 cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])
@@ -2468,6 +2592,11 @@ class StreamerCore:
                 cmd.extend(["-map", "1:a:0"])
             else:
                 cmd.extend(["-map", "0:a:0?"])
+            reason = ",".join(k for k, v in (("qr", has_qr), ("clock", has_clock),
+                                             ("local:" + str(video_info.get("stream_copy_reason", "?")),
+                                              needs_reencode_local)) if v)
+            log_print(f"[Player] Encoder path=video/reencode v=2500k(max3000k/buf2000k) "
+                      f"baseline/ultrafast reason={reason}")
             cmd.extend([
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
@@ -2500,6 +2629,7 @@ class StreamerCore:
                 cmd.extend(["-map", "1:a:0"])
             else:
                 cmd.extend(["-map", "0:a:0?"])
+            log_print("[Player] Encoder path=video/copy (no re-encode, source quality preserved)")
             # コピー経路ではIDR位置を制御できない（受信側がキーフレームで分割する）。
             cmd.extend(["-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
                         "-af", "aresample=async=1", "-shortest",
@@ -2555,17 +2685,30 @@ class StreamerCore:
         output_path = os.path.join(IMAGE_CACHE_DIR, output_filename)
 
         try:
+            src_bytes = None
             if isinstance(img_input, str):
                 img = Image.open(img_input)
+                try:
+                    src_bytes = os.path.getsize(img_input)
+                except OSError:
+                    pass
             elif isinstance(img_input, (bytes, bytearray)):
                 img = Image.open(io.BytesIO(img_input))
+                src_bytes = len(img_input)
             elif isinstance(img_input, Image.Image):
                 img = img_input
             else:
                 return None
 
+            # ★受け取った時点の素性を必ず残す。ホスト追加とWebアップは
+            # ここから先が完全に同じ経路なので、画質差を疑うときに
+            # 「届いた画像が既に小さいのか」を切り分けられるのはこのログだけ。
+            # exif_transpose は新しい画像を返して format を失うため、先に控える。
+            src_format = getattr(img, "format", None) or "?"
+
             # EXIF回転補正
             img = ImageOps.exif_transpose(img)
+            src_size = img.size
 
             # RGBモードに変換
             if img.mode != "RGB":
@@ -2580,6 +2723,12 @@ class StreamerCore:
             ratio = min(target_w / src_w, target_h / src_h)
             new_w = max(1, int(src_w * ratio))
             new_h = max(1, int(src_h * ratio))
+
+            log_print(
+                f"[Core] Image source: {src_size[0]}x{src_size[1]} {src_format}"
+                f"{f' ({src_bytes / 1024:.0f}KB)' if src_bytes else ''}"
+                f" -> {new_w}x{new_h} on {target_w}x{target_h} (scale x{ratio:.2f})"
+            )
 
             img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
@@ -2649,6 +2798,7 @@ class StreamerCore:
             log_print(f"[Core] Failed to save uploaded video file: {e}")
             return None
 
+        log_print(f"[Core] Uploaded video received: {original_filename} ({len(video_bytes) / (1024 * 1024):.1f}MB)")
         return self.add_video_file(saved_path, original_filename=original_filename, is_uploaded=True)
 
     def add_image_file(self, file_path, title=None):
@@ -2801,6 +2951,7 @@ class StreamerCore:
         ])
         if has_clock and clock_filter:
             cmd.extend(["-vf", clock_filter])
+        log_print("[Player] Encoder path=image 1920x1080@30fps v=1500k(buf1000k) baseline/ultrafast g=30")
         cmd.extend([
             "-c:v", "libx264",
             "-preset", "ultrafast",
