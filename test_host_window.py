@@ -122,11 +122,16 @@ def test_stream_key_is_masked_on_host_screen():
         html = f.read()
     assert "function maskStreamUrlForDisplay" in html, "マスク関数が無い"
     assert "function displayStreamUrl" in html, "表示切替の関数が無い"
-    # 表示は displayStreamUrl 経由であること（生の streamUrl を直接入れない）
-    assert "quickUrl.value = shownStreamUrl" in html, "クイックバーがマスクを通っていない"
-    assert "infoStream.value = shownStreamUrl" in html, "接続タブがマスクを通っていない"
-    # コピーは本物
+    # 表示は displayStreamUrl 経由であること（生の streamUrl を直接入れない）。
+    # setMaskableUrlValue が「表示はマスク / dataset.realValue に本物」を一手に引き受ける。
+    assert "function setMaskableUrlValue" in html, "表示と実値を分ける関数が無い"
+    assert "el.value = real ? displayStreamUrl(real)" in html, "表示がマスクを通っていない"
+    assert "setMaskableUrlValue(quickUrl, streamUrl" in html, "クイックバーがマスクを通っていない"
+    assert "setMaskableUrlValue(infoStream, streamUrl)" in html, "接続タブがマスクを通っていない"
+    assert "setMaskableUrlValue(destUrlEl, destUrl)" in html, "配信先URL欄がマスクを通っていない"
+    # コピーは本物。value（＝伏字）ではなく dataset.realValue を先に見ること。
     assert "const url = realStreamUrl || document.getElementById('quickStreamUrl').value;" in html,         "コピーがマスク表示値を掴んでいる"
+    assert "const val = (el.dataset && el.dataset.realValue) || el.value;" in html,         "コピーボタンが伏字のまま貼り付けている"
     # 鍵を持たない HLS URL まで潰さないこと
     assert "^rtmps?:|^rtsp[st]?:" in html, "マスク対象が RTMP/RTSP に限定されていない"
 

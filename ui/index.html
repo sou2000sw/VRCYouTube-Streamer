@@ -292,7 +292,7 @@
                             <i class="ri-file-copy-line"></i>
                             <span>コピー</span>
                         </button>
-                        <button onclick="switchTab('info')" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-emerald-400 border border-zinc-700 rounded text-xs transition" title="スマホ共有用QRコードを表示">
+                        <button id="btnGoShareQr" onclick="switchTab('info')" class="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-emerald-400 border border-zinc-700 rounded text-xs transition" title="スマホ共有用QRコードを表示">
                             <i class="ri-qr-code-line"></i>
                             <span>QR共有</span>
                         </button>
@@ -792,7 +792,12 @@
                                 <input type="checkbox" id="hostAllowControl" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
                                 <span class="text-xs text-zinc-200">スキップ等の再生操作</span>
                             </label>
+                            <label class="flex items-center gap-2 cursor-pointer md:col-span-3">
+                                <input type="checkbox" id="hostAllowShareInfo" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                                <span class="text-xs text-zinc-200">「接続 &amp; スマホ共有」タブの閲覧（共有QR・トンネルURL・配信URL）</span>
+                            </label>
                         </div>
+                        <p class="text-[11px] text-zinc-500 -mt-1">※このタブにはPIN付きのリモコンURLが載ります。許可すると、共有された人がさらに他人へ共有できます。「配信・QR設定」タブは常にホストPCのみです。</p>
                         <div class="flex flex-col gap-2">
                             <label class="text-xs text-zinc-400">Webリモコン パスワード / PIN</label>
                             <div class="flex items-center gap-2">
@@ -1308,6 +1313,8 @@
             } catch (e) {}
 
             updatePortLabel();
+            // 最初のステータスが届くまでの間、ゲストにホスト用タブを見せない
+            applyRemoteTabVisibility();
             updateClock();
             setInterval(updateClock, 1000);
             checkServerHealth(true);
@@ -1363,6 +1370,32 @@
             return false;
         }
 
+        // ===================== Webリモコンに見せるタブの制御 =====================
+        // ・「配信・QR設定」: 配信先URL・ストリームキー・権限設定・パスワードが並ぶ。
+        //   ホストPC専用にし、ゲストには常に出さない。
+        // ・「接続 & スマホ共有」: PIN付きリモコンURLと共有QR。ホストが
+        //   allow_web_share_info を明示的に許可したときだけゲストへ出す（既定オフ）。
+        let guestCanSeeShareInfo = false;
+
+        function applyRemoteTabVisibility(isLocalOverride) {
+            const isHost = isHostWindow()
+                || (isLocalOverride === undefined ? isLocalEnvironment() : isLocalOverride === true);
+            const showSettings = isHost;
+            const showInfo = isHost || guestCanSeeShareInfo;
+
+            const navSettings = document.getElementById('nav-settings');
+            if (navSettings) navSettings.classList.toggle('hidden', !showSettings);
+            const navInfo = document.getElementById('nav-info');
+            if (navInfo) navInfo.classList.toggle('hidden', !showInfo);
+            const btnShareQr = document.getElementById('btnGoShareQr');
+            if (btnShareQr) btnShareQr.classList.toggle('hidden', !showInfo);
+
+            // 表示中のタブが隠れた場合はプレイヤーへ戻す（空白の画面が残らないように）
+            if ((!showSettings && activeTabId === 'settings') || (!showInfo && activeTabId === 'info')) {
+                switchTab('player');
+            }
+        }
+
         function updatePortLabel() {
             try {
                 const isLocal = isLocalEnvironment();
@@ -1385,7 +1418,16 @@
         }
 
         // Tab Navigation
+        let activeTabId = 'player';
+
         function switchTab(tabId) {
+            // ナビが隠れているタブは開かせない。onclick を直接叩かれても
+            // 「ホストしか見えない画面」がゲストに出ないようにするため。
+            const nav = document.getElementById('nav-' + tabId);
+            if (tabId !== 'player' && nav && nav.classList.contains('hidden')) {
+                tabId = 'player';
+            }
+            activeTabId = tabId;
             document.querySelectorAll('.tab-pane').forEach(el => el.classList.add('hidden'));
             document.querySelectorAll('.nav-tab').forEach(el => {
                 el.classList.remove('active', 'bg-zinc-800', 'text-zinc-200');
@@ -1782,6 +1824,9 @@
             const permAdd = !data.permissions || data.permissions.allow_web_queue_add !== false;
             const permEdit = !data.permissions || data.permissions.allow_web_queue_edit !== false;
             const permConfig = !data.permissions || data.permissions.allow_web_config !== false;
+            // 未指定なら安全側＝非許可。サーバーが古い場合にゲストへ共有情報を出さない。
+            guestCanSeeShareInfo = !!(data.permissions && data.permissions.allow_web_share_info === true);
+            applyRemoteTabVisibility(isLocal);
 
             // Header Action buttons visibility
             // - サーバー終了: ホスト(isLocal)であれば通常ブラウザでも利用可能
@@ -1870,9 +1915,8 @@
             const shareQr = document.getElementById('shareQrImg');
 
             realStreamUrl = streamUrl;
-            const shownStreamUrl = displayStreamUrl(streamUrl);
-            if (quickUrl) quickUrl.value = shownStreamUrl;
-            if (infoStream) infoStream.value = shownStreamUrl;
+            setMaskableUrlValue(quickUrl, streamUrl, '取得中...');
+            setMaskableUrlValue(infoStream, streamUrl);
             if (infoTunnel) infoTunnel.value = tunnelUrl;
             if (shareQr) refreshShareQr(tunnelUrl);
 
@@ -2051,7 +2095,7 @@
 
             const destUrl = dest.video_url || data.video_url || '';
             const destUrlEl = document.getElementById('destinationVideoUrl');
-            if (destUrlEl) destUrlEl.value = displayStreamUrl(destUrl) || '-';
+            setMaskableUrlValue(destUrlEl, destUrl);
 
             const badgeEl = document.getElementById('destinationStatusBadge');
             const retryBtn = document.getElementById('btnRetryDestination');
@@ -2095,6 +2139,11 @@
 
             const isLocal = isLocalEnvironment();
             const ipcAvailable = isIpcAvailable();
+
+            // オフライン中は許可フラグを取得できない。前回値を引きずるとホストが
+            // 許可を切った直後に見えてしまうので、ゲストには畳んだままにする。
+            guestCanSeeShareInfo = false;
+            applyRemoteTabVisibility(isLocal);
 
             // オフライン時、起動ボタンは IPC利用可能環境 (VRCBeacon) かつ isLocal の時のみ表示
             if (isLocal && ipcAvailable) {
@@ -2913,6 +2962,17 @@
             return (isHostWindow() && !hostUrlRevealed) ? maskStreamUrlForDisplay(url) : url;
         }
 
+        // マスクは「表示」だけの仕組みで、コピーには常に本物を渡す約束になっている。
+        // ところが値を input.value にしか置いていなかったため、value をそのまま読む
+        // コピーボタン（配信URL / VRChat入力用URL）は伏字を貼り付けていた。
+        // 実値は dataset.realValue に持たせ、表示と分離する。
+        function setMaskableUrlValue(el, url, emptyText) {
+            if (!el) return;
+            const real = url || '';
+            el.dataset.realValue = real;
+            el.value = real ? displayStreamUrl(real) : (emptyText || '-');
+        }
+
         function copyStreamUrl() {
             // マスク表示中でもコピーされるのは本物のURL
             const url = realStreamUrl || document.getElementById('quickStreamUrl').value;
@@ -2932,7 +2992,8 @@
         function copyElementText(elId) {
             const el = document.getElementById(elId);
             if (!el) return;
-            const val = el.value;
+            // マスク表示中の欄は dataset に本物を持っている（setMaskableUrlValue 参照）
+            const val = (el.dataset && el.dataset.realValue) || el.value;
             if (val && val !== '-') {
                 navigator.clipboard.writeText(val);
                 showToast('クリップボードにコピーしました', 'success');
@@ -2973,6 +3034,7 @@
             // 終了は「終了」ボタン（プロセスごと閉じる）に一本化する。
             const stopBtn = document.getElementById('btnHeaderStop');
             if (stopBtn && isHostWindow()) stopBtn.classList.add('hidden');
+            applyRemoteTabVisibility();
         }
 
         window.addEventListener('pywebviewready', () => {
@@ -3045,10 +3107,12 @@
         }
 
         function applyStreamUrlDisplay() {
-            const shown = displayStreamUrl(realStreamUrl);
             for (const id of ['quickStreamUrl', 'infoStreamUrl', 'destinationVideoUrl']) {
                 const el = document.getElementById(id);
-                if (el && el.value && el.value !== '-') el.value = shown;
+                if (!el) continue;
+                const real = (el.dataset && el.dataset.realValue) || '';
+                if (!real) continue;
+                el.value = displayStreamUrl(real);
             }
         }
 
@@ -3107,6 +3171,7 @@
                 set('hostAllowAdd', cfg.allow_web_queue_add);
                 set('hostAllowEdit', cfg.allow_web_queue_edit);
                 set('hostAllowControl', cfg.allow_web_playback_control);
+                set('hostAllowShareInfo', cfg.allow_web_share_info);
                 set('hostWebPassword', cfg.web_password || '');
 
                 const pathEl = document.getElementById('hostStandbyImagePath');
@@ -3146,6 +3211,7 @@
                 allow_web_queue_add: bool('hostAllowAdd'),
                 allow_web_queue_edit: bool('hostAllowEdit'),
                 allow_web_playback_control: bool('hostAllowControl'),
+                allow_web_share_info: bool('hostAllowShareInfo'),
                 web_password: (document.getElementById('hostWebPassword') || {}).value || ''
             };
 

@@ -400,6 +400,13 @@ class SettingsWindow(ctk.CTkToplevel):
             self.switch_web_control.select()
         self.switch_web_control.pack(anchor="w", padx=15, pady=(2, 8))
 
+        # 既定オフ。このタブにはPIN付きのリモコンURLと配信先の再生URLが並ぶため、
+        # 「共有された人がさらに他人へ共有できる」状態はホストが明示的に選ぶ。
+        self.switch_web_share_info = ctk.CTkSwitch(sec8_body, text="Allow Sharing Info (接続情報・共有QRコードの閲覧を許可)")
+        if cfg.get("allow_web_share_info", False):
+            self.switch_web_share_info.select()
+        self.switch_web_share_info.pack(anchor="w", padx=15, pady=(2, 8))
+
         self.lbl_web_pw = ctk.CTkLabel(sec8_body, text="🔒 Web Remote Password / PIN (パスワード保護):", font=ctk.CTkFont(weight="bold"), anchor="w")
         self.lbl_web_pw.pack(fill="x", padx=15, pady=(8, 2))
 
@@ -686,6 +693,7 @@ class SettingsWindow(ctk.CTkToplevel):
                 "allow_web_queue_add": bool(self.switch_web_add.get()),
                 "allow_web_queue_edit": bool(self.switch_web_edit.get()),
                 "allow_web_playback_control": bool(self.switch_web_control.get()),
+                "allow_web_share_info": bool(self.switch_web_share_info.get()),
                 "web_password": web_password,
                 "output_mode": output_mode,
                 "rtmp_video_bitrate_kbps": rtmp_vbitrate,

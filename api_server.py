@@ -564,6 +564,20 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         self.send_auth_throttled(remaining)
         return True
 
+    def may_see_share_info(self):
+        """「接続 & スマホ共有」の中身（共有QR・トンネルURL）を返してよい相手か。
+
+        ホストPC本人は常に可。ゲストは config の allow_web_share_info が明示的に
+        True のときだけ。既定を False にしてあるのは、このQRがPIN付きのリモコンURL
+        そのもので、渡した相手がさらに第三者へ配れてしまうため。
+        """
+        if self.is_local_request():
+            return True
+        return bool(
+            self.streamer_core
+            and self.streamer_core.config.get("allow_web_share_info", False)
+        )
+
     def check_web_password_auth(self, input_password=None):
         """
         Webリモコンのパスワード/PIN認証を検証。
@@ -696,6 +710,14 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(401, {
                     "success": False,
                     "error": "Unauthorized: Web password required or invalid."
+                })
+                return
+            # このQRはPIN付きのリモコンURLそのもの。UI側で非表示にしているタブの、
+            # 直叩き経路をここで塞ぐ。
+            if not self.may_see_share_info():
+                self.send_json_response(403, {
+                    "success": False,
+                    "error": "Forbidden: sharing info is disabled by the host."
                 })
                 return
             url = ""

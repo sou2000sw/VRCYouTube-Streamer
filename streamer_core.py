@@ -93,6 +93,11 @@ DEFAULT_CONFIG = {
     "allow_web_queue_add": True,
     "allow_web_queue_edit": True,
     "allow_web_playback_control": True,
+    # 「接続 & スマホ共有」タブ（QRコード・トンネルURL・ワールドへ貼る再生URL）を
+    # ゲスト（Webリモコン）にも見せるか。既定は False。
+    # ここにはPIN付きのリモコンURLと配信先の再生URLが並ぶため、
+    # 「共有された人がさらに他人へ共有できる」状態はホストが明示的に許可したときだけにする。
+    "allow_web_share_info": False,
     "image_display_duration": 15,
     "image_auto_advance": False,
     "overlay_qr_enabled": False,
@@ -1081,7 +1086,8 @@ class StreamerCore:
             "permissions": {
                 "allow_web_queue_add": bool(self.config.get("allow_web_queue_add", True)),
                 "allow_web_queue_edit": bool(self.config.get("allow_web_queue_edit", True)),
-                "allow_web_playback_control": bool(self.config.get("allow_web_playback_control", True))
+                "allow_web_playback_control": bool(self.config.get("allow_web_playback_control", True)),
+                "allow_web_share_info": bool(self.config.get("allow_web_share_info", False))
             }
         }
 
