@@ -2,6 +2,7 @@ import os
 import sys
 import io
 import json
+import re
 import time
 import argparse
 import subprocess
@@ -15,7 +16,7 @@ if sys.platform == "win32" and sys.stdout is not None:
     except Exception:
         pass
 
-APP_VERSION = "2.8.0"
+from version import APP_VERSION  # バージョンの正本は version.py（UI表記もここから配る）
 
 # 配布物に含めてはいけない実行時生成物・作業ファイル。
 # hls_output/ には利用者がアップロードした写真が溜まるため、同梱するとプライバシー漏洩になる。
@@ -112,23 +113,47 @@ def generate_root_shortcuts():
                 'python gui_streamer.py --tunnel\r\n'
                 'pause\r\n')
 
+def _find_bundled_tool(name):
+    """ローカル / dist / PATH の順に <name>.exe を探す"""
+    local = os.path.abspath(f"{name}.exe")
+    if os.path.exists(local):
+        return local
+    dist_local = os.path.abspath(f"dist/{name}.exe")
+    if os.path.exists(dist_local):
+        return dist_local
+    found = shutil.which(name)
+    if found:
+        if sys.platform == "win32" and not found.lower().endswith(".exe"):
+            found_exe = found + ".exe"
+            if os.path.exists(found_exe):
+                return found_exe
+        if os.path.exists(found):
+            return found
+    return None
+
 def get_ffmpeg_source():
     """ローカルまたはPATH内のffmpeg.exeパスを取得"""
-    local_ffmpeg = os.path.abspath("ffmpeg.exe")
-    if os.path.exists(local_ffmpeg):
-        return local_ffmpeg
-    dist_ffmpeg = os.path.abspath("dist/ffmpeg.exe")
-    if os.path.exists(dist_ffmpeg):
-        return dist_ffmpeg
-    ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path:
-        if sys.platform == "win32" and not ffmpeg_path.lower().endswith(".exe"):
-            ffmpeg_path_exe = ffmpeg_path + ".exe"
-            if os.path.exists(ffmpeg_path_exe):
-                return ffmpeg_path_exe
-        if os.path.exists(ffmpeg_path):
-            return ffmpeg_path
-    return None
+    return _find_bundled_tool("ffmpeg")
+
+def get_ffprobe_source():
+    """ローカルまたはPATH内のffprobe.exeパスを取得。
+
+    ffprobe が同梱されていないと streamer_core は `ffmpeg -i` フォールバックに
+    落ちる。実測でローカルSSDでも約3秒（ffprobe は約0.3秒）かかり、外付けHDDや
+    USB上の長尺ファイルでは probe タイムアウトに達して尺が取れなくなるため、
+    ffmpeg と必ず対で配布する。
+    """
+    return _find_bundled_tool("ffprobe")
+
+def copy_media_tools(target_dir, label):
+    """ffmpeg.exe / ffprobe.exe を配布先へコピーする"""
+    for name, finder in (("ffmpeg", get_ffmpeg_source), ("ffprobe", get_ffprobe_source)):
+        src_path = finder()
+        if src_path and os.path.exists(src_path):
+            shutil.copy2(src_path, os.path.join(target_dir, f"{name}.exe"))
+            print(f"[OK] Copied {name}.exe -> {label}", flush=True)
+        else:
+            print(f"[WARN] {name}.exe was not found to package.", flush=True)
 
 def package_plugin(version=APP_VERSION):
     """plugin/ フォルダの資材を整理し、VRCBeacon用プラグインZIPパッケージを生成"""
@@ -150,16 +175,27 @@ def package_plugin(version=APP_VERSION):
         shutil.copy2(src_ui, os.path.join(plugin_ui_dir, "index.html"))
         print("[OK] Copied ui/index.html -> plugin/ui/index.html", flush=True)
 
+    # index.html は Tailwind / RemixIcon / hls.js を ./vendor/ から読む。
+    # ここを同期し忘れると、プラグイン配布側だけ CDN フォールバックに落ち、
+    # オフライン環境で UI が素の HTML になる（症状が出るのは配布後）。
+    src_vendor = os.path.abspath(os.path.join("ui", "vendor"))
+    if os.path.isdir(src_vendor):
+        dst_vendor = os.path.join(plugin_ui_dir, "vendor")
+        if os.path.isdir(dst_vendor):
+            shutil.rmtree(dst_vendor, ignore_errors=True)
+        shutil.copytree(src_vendor, dst_vendor)
+        print(f"[OK] Copied ui/vendor/ -> plugin/ui/vendor/ "
+              f"({len(os.listdir(dst_vendor))} files)", flush=True)
+    else:
+        print("[WARN] ui/vendor/ not found; plugin UI will fall back to CDN.", flush=True)
+
     # 2. dist/ から plugin/bin/ へバイナリを同期
     src_exe = os.path.abspath("dist/VRC_Media_Streamer.exe")
     if os.path.exists(src_exe):
         shutil.copy2(src_exe, os.path.join(plugin_bin, "VRC_Media_Streamer.exe"))
         print("[OK] Copied VRC_Media_Streamer.exe -> plugin/bin/", flush=True)
 
-    ffmpeg_src = get_ffmpeg_source()
-    if ffmpeg_src and os.path.exists(ffmpeg_src):
-        shutil.copy2(ffmpeg_src, os.path.join(plugin_bin, "ffmpeg.exe"))
-        print(f"[OK] Copied ffmpeg.exe -> plugin/bin/", flush=True)
+    copy_media_tools(plugin_bin, "plugin/bin/")
 
     # プラグインは VRCBeacon がローカルでプロセス起動するため、
     # plugin.json の --port 8000 に合わせつつトンネルは既定で無効にする。
@@ -205,12 +241,7 @@ def create_versioned_release(version=APP_VERSION):
         print("[WARN] dist/VRC_Media_Streamer.exe not found!", flush=True)
 
     # 2. ffmpeg.exe のコピー
-    ffmpeg_src = get_ffmpeg_source()
-    if ffmpeg_src and os.path.exists(ffmpeg_src):
-        shutil.copy2(ffmpeg_src, os.path.join(target_dir, "ffmpeg.exe"))
-        print(f"[OK] Copied ffmpeg.exe from {ffmpeg_src}", flush=True)
-    else:
-        print("[WARN] ffmpeg.exe was not found to package.", flush=True)
+    copy_media_tools(target_dir, os.path.basename(target_dir) + "/")
 
     # 3. config.json の生成 (配布用テンプレート config.dist.json から)
     if write_dist_config(os.path.join(target_dir, "config.json")):
@@ -222,6 +253,9 @@ def create_versioned_release(version=APP_VERSION):
     doc_candidates = [
         ["README.txt", "dist/README.txt"],
         ["FFmpeg_LICENSE.txt", "dist/FFmpeg_LICENSE.txt"],
+        # v2.1.0 以降このファイルが配布物から抜けていた。README の「内容物」には
+        # 載ったままで、同梱ライブラリの帰属表示が配布物に無い状態だった。
+        ["THIRD_PARTY_LICENSES.txt", "dist/THIRD_PARTY_LICENSES.txt"],
         ["CHANGELOG.md"],
         ["README.md"],
     ]
@@ -341,7 +375,28 @@ def verify_release(target_dir, port=8991, timeout=45):
             print(f"[FAIL] Access-Control-Allow-Origin appears {len(acao)} times (must be exactly 1).", flush=True)
             return False
 
+        # 4. 同梱アセット (Tailwind / RemixIcon / hls.js) が EXE から配信できるか
+        #    v2.6.0 の「UI が EXE に入っていなかった」と同じ事故が vendor/ でも起こり得る。
+        #    こちらは CDN フォールバックがあるぶん online では気付けず、
+        #    オフラインの利用者環境でだけ UI が崩れるので、ビルド時に必ず確かめる。
+        vendor_refs = sorted(set(re.findall(r"\./vendor/([A-Za-z0-9_.-]+)", expected_ui)))
+        if not vendor_refs:
+            print("[FAIL] ui/index.html does not reference any ./vendor/ asset "
+                  "(reverted to CDN links?).", flush=True)
+            return False
+        for name in vendor_refs:
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/vendor/{name}", timeout=5) as r:
+                    size = len(r.read())
+                    if r.status != 200 or size < 1024:
+                        print(f"[FAIL] Vendor asset /vendor/{name}: status={r.status}, {size} bytes.", flush=True)
+                        return False
+            except Exception as e:
+                print(f"[FAIL] Vendor asset /vendor/{name} is not served: {e}", flush=True)
+                return False
+
         print(f"[OK] Served UI: {len(served)} chars, script tags balanced ({opens}/{closes}).", flush=True)
+        print(f"[OK] Bundled vendor assets served: {', '.join(vendor_refs)}", flush=True)
         print(f"[OK] CORS headers are not duplicated.", flush=True)
         print(f"[OK] Release package verified.", flush=True)
         return True
@@ -402,18 +457,43 @@ def build(version=APP_VERSION):
         except Exception as e:
             print(f"Failed to install PyInstaller: {e}", flush=True)
             sys.exit(1)
-        
+
+    # モダンUI（WebView2 ホスト画面）の依存。無いまま黙ってビルドすると、
+    # 配布物だけが従来の CustomTkinter 画面に落ちる——しかも起動はするので
+    # 気付けない。ここで止めるか入れるかを必ず決める。
+    try:
+        import webview  # noqa: F401
+        print("pywebview is already installed (modern host UI enabled)", flush=True)
+    except ImportError:
+        print("pywebview is not installed. Installing it via pip...", flush=True)
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", "pywebview"], check=True)
+            print("Successfully installed pywebview.", flush=True)
+        except Exception as e:
+            print(f"Failed to install pywebview: {e}", flush=True)
+            print("      -> The build would silently fall back to the classic UI. Aborting.", flush=True)
+            sys.exit(1)
+
     cmd = [
         "pyinstaller",
         "--onefile",
         "--noconsole",
         "--name", "VRC_Media_Streamer",
+        # EXE / タスクバー / Alt+Tab のアイコン。WebViewホスト画面のウィンドウアイコンも
+        # ここから来る（pywebview 側で個別指定する経路が無いため）。
+        "--icon", os.path.abspath(os.path.join("assets", "app_icon.ico")),
         "--add-data", "cloudflared.exe;.",
         "--add-data", "ui;ui",
         "--add-data", "assets;assets",
         "--collect-all", "customtkinter",
         "--collect-all", "qrcode",
         "--collect-all", "PIL",
+        # モダンUI（WebView2 ホスト画面）。pywebview は実行時に
+        # webview.platforms.winforms と pythonnet(clr) を動的 import するため、
+        # 明示しないと EXE に入らず、配布物だけ従来画面へ落ちる。
+        "--collect-all", "webview",
+        "--collect-all", "clr_loader",
+        "--hidden-import", "clr",
         "--clean",
         "gui_streamer.py"
     ]
@@ -430,12 +510,10 @@ def build(version=APP_VERSION):
     # dist フォルダの更新
     generate_startup_shortcuts(os.path.abspath("dist"))
     generate_root_shortcuts()
-    ffmpeg_src = get_ffmpeg_source()
-    if ffmpeg_src and os.path.exists(ffmpeg_src):
-        try:
-            shutil.copy2(ffmpeg_src, os.path.abspath("dist/ffmpeg.exe"))
-        except Exception:
-            pass
+    try:
+        copy_media_tools(os.path.abspath("dist"), "dist/")
+    except Exception:
+        pass
 
     # バージョン別配布用パッケージ (releases/VRC_Media_Streamer_v<version>/) の生成
     create_versioned_release(version)

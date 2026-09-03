@@ -34,8 +34,12 @@ AIバイブコーディング製のため手厚いサポートはできません
   起動するだけで外部アクセス可能なストリームURLが自動生成されます。ポート開放やDDNSの設定は不要です。生成されたURLをVRChat内の動画プレイヤーに貼るだけで共有できます。
 * **📱 スマホQRコードでフレンドからリクエスト受付**
   キューが空になると、待機画面にQRコード＆WebURLが表示されます。フレンドがスマホで読み取ると、Webリモコン画面から動画のリクエストを送れます。アプリ画面上にもQRコード＆WebURLは常時表示されています。
+* **🖥 ホスト画面もWebリモコンと同じモダンUI**
+  ホストPCのアプリ画面は、スマホで開くWebリモコンとまったく同じ画面です（サイドバーナビ、配信プレビュー、キュー操作、QR共有）。ホスト画面からは加えて、**容量上限なしでPC内の動画・写真を直接追加**でき、待機画像の選択やサーバー設定（ポート・トンネル・Webリモコンの権限やパスワード等）も行えます。
+  ※WebView2 が使えない環境では、従来のデスクトップ画面が自動的に開きます（`--classic-ui` で明示指定も可能）。
 * **🌐 Webリモコン＆ブラウザ再生**
   ブラウザで `http://localhost:8000/`（またはトンネルURL）にアクセスすると、HLS Web Player による配信プレビューとキュー操作・動画/写真追加が可能です。スマホ縦画面にも最適化されたレスポンシブUIです。
+  UIに必要な部品（CSS・アイコン・プレイヤー）はすべてEXEに同梱されているため、ホストPCがインターネットに繋がっていない場面や、外部CDNが遮断された回線でも画面が崩れません。
 * **📻 BGM / ラジオモード（超低帯域配信 & サムネイル自動生成）**
   YouTube動画から高音質音声ストリームのみを抽出し、自動生成された「サムネイル＆楽曲情報カード画面」（または待機画面/写真スライドショー）と合成して超低帯域（約250〜350kbps、通常動画比90%以上削減）でHLS配信。VRChatでのバッファ詰まりや多人数インスタンスでの遅延を極小化します。
 * **🖼️ 写真・画像アップロード＆スライドショー配信**
@@ -137,6 +141,40 @@ python gui_streamer.py --headless --port 8080
 | `--tunnel` | Cloudflareトンネルを明示的に有効化 | 有効 (デフォルト) |
 | `--port` / `-p` | APIサーバーおよびHLS配信サーバーのポート番号 | `8000` (または `config.json`) |
 | `--host` | サーバーのホストアドレス (LAN内共有時は `0.0.0.0`) | `127.0.0.1` |
+| `--config` | 使用する `config.json` のパス | 実行ファイルと同じ場所 |
+| `--output-mode` | 配信先を一時的に指定 (`hls` / `topaz` / `generic_rtmp`) | `config.json` の値 |
+| `--resolution` | RTMP出力の解像度 (`1280x720` 形式) | `1280x720` |
+| `--bitrate` | RTMP映像ビットレート (kbps) | `1500` |
+| `--fps` | RTMP出力のフレームレート | `30` |
+| `--radio` / `--no-radio` | BGM/ラジオモードで起動する / しない | `config.json` の値 |
+| `--set KEY=VALUE` | `config.json` の任意の項目を一時的に上書き（複数回指定可） | なし |
+
+#### 設定の優先順位
+
+**CLI引数 ＞ 環境変数 ＞ `config.json` ＞ 既定値** の順で強く、上の層が下の層を上書きします。
+
+> [!IMPORTANT]
+> **CLI引数・環境変数で指定した値は「その起動限り」で、`config.json` には保存されません。**
+> `--no-tunnel` でローカル検証したあと設定画面から別の項目を保存しても、トンネル設定が
+> 書き換わることはありません。逆に、設定画面でその項目自体を明示的に変更した場合は
+> 通常どおり保存され、その起動中も変更が反映されます。
+
+環境変数は `VRCMS_` に続けて設定キーを大文字にした名前で指定します
+（例: `VRCMS_PORT=8080`、`VRCMS_ENABLE_TUNNEL=0`）。
+
+> [!WARNING]
+> ストリームキーやWebリモコンのパスワード（`topaz_stream_key` / `generic_rtmp_key` /
+> `web_password`）は **`--set` では指定できません**。コマンドライン引数はOSのプロセス一覧から
+> 他の利用者に見えてしまうためです。これらは環境変数
+> （`VRCMS_TOPAZ_STREAM_KEY` 等）でのみ指定できます。
+
+```bash
+# 例: ローカル検証用に、ポートと配信先だけをその場で変える
+VRC_Media_Streamer.exe --no-tunnel --port 8080 --output-mode hls
+
+# 例: config.json の任意の項目を一時的に上書きする
+VRC_Media_Streamer.exe --set loop_queue=true --set image_display_duration=30
+```
 
 ---
 
@@ -154,6 +192,10 @@ python gui_streamer.py --headless --port 8080
   "status_detail": "Active (Streaming)",
   "tunnel_url": "https://xxxx.trycloudflare.com",
   "stream_url": "https://xxxx.trycloudflare.com/stream.m3u8",
+  "video_url": "rtspt://topaz.chat/live/<KEY>",
+  "remote_url": "https://xxxx.trycloudflare.com",
+  "output_mode": "topaz",
+  "active_output_mode": "topaz",
   "current_video": {
     "title": "Rick Astley - Never Gonna Give You Up",
     "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -226,9 +268,38 @@ python gui_streamer.py --headless --port 8080
 * **GET `/api/config`**: 現在の設定JSONを取得
 * **POST `/api/config`**: 設定JSONを更新して保存（`config.json` に永続化）
 
-### 7. サーバー終了
+### 7. 配信先の操作（ローカルホスト限定）
+* **Method**: `POST`
+* **Path**: `/api/destination`
+* **Body**:
+  * `{"action": "generate_key"}` … TopazChat のストリームキーを新規生成
+  * `{"action": "reveal_key"}` … 生のストリームキーを取得（ホスト本人のみ）
+  * `{"action": "retry"}` … HLSへ退避中の状態から本来の配信先へ即時復帰を試みる
+
+### 8. サーバー終了
 * **Method**: `POST`
 * **Path**: `/api/shutdown`
+
+---
+
+## 📡 配信先（ストリーミング出力先）の切り替え
+
+`config.json` の `output_mode`、またはWebリモコン「配信・QR設定」タブ／ホストGUIの設定画面から切り替えます。
+
+| モード | 位置付け | VRChat側の遅延 | 備考 |
+| :--- | :--- | :---: | :--- |
+| `hls`（既定） | **Cloudflare Quick Tunnel 経由**で配信。他経路が失敗したときの退避先 | 約9〜12秒 | 従来どおりの動作。トンネルを無効(`enable_tunnel: false`)にすると同一LAN内のみの配信になる |
+| `topaz` | TopazChat（VRChat向けRTMP→RTSP中継） | 約1〜2秒 | AVProプレイヤーで `rtspt://topaz.chat/live/<KEY>` を再生 |
+| `generic_rtmp` | 自前の nginx-rtmp / MediaMTX 等（上級者向け） | 任意 | URLとキーを手入力。規約・著作権の順守は利用者の責任 |
+
+- **接続できないときは自動的に `hls` へ退避**し、配信自体は途切れません（復帰は指数バックオフで再試行）。
+- **ストリームキー**は32文字以上のランダム値を自動生成します。短いキーは第三者に配信を乗っ取られます。
+  キーは `/api/status` や設定画面ではマスク表示され、生の値はホスト本人のみが取得できます。
+- **TopazChat について**: 本ソフトは TopazChat の公式ツールではありません。TopazChat は個人運営の
+  無償サービスであり、**法人が運営主体のイベント・番組制作等での利用には別途 TopazChat への問い合わせが
+  必要**です。映像は最大2Mbps・音声は最大320kbpsで、超過すると配信が強制切断されます（本ソフトは
+  この上限を超える設定値を保存時に自動で丸めます）。
+  参考: [TopazChat 公式サイト](https://topaz.chat/) / [GitHub](https://github.com/TopazChat/TopazChat)
 
 ---
 

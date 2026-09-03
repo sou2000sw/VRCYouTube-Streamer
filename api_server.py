@@ -10,6 +10,7 @@ import ipaddress
 import hmac
 from urllib.parse import urlparse
 from streamer_core import BASE_PATH, HLS_DIR, StreamerCore, log_print, is_video_url_or_file, is_image_url_or_file
+from version import APP_VERSION
 
 def _ui_html_candidates():
     """
@@ -56,6 +57,108 @@ def get_ui_html():
                 log_print(f"[APIServer] Failed to read UI asset {path}: {e}")
     log_print("[APIServer] UI asset 'ui/index.html' not found. Serving diagnostic page.")
     return UI_MISSING_TEMPLATE
+
+
+# --- Web リモコンの同梱アセット (ui/vendor/) ---------------------------------
+# Tailwind / RemixIcon / hls.js は v2.9.4 まで CDN 直リンクだった。
+# ホストPCがオフライン、あるいは CDN が塞がれた回線（社内・学校・一部モバイル）では
+# UI が「素の HTML」になって操作不能になるため、同梱ファイルから配信する。
+# 拡張子は許可制。ui/ 配下を何でも配ると index.html 以外の同梱物まで露出する。
+VENDOR_ALLOWED_TYPES = {
+    ".js": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+}
+# gzip して意味があるのはテキストだけ。woff2 は既に圧縮済みで、掛け直すと逆に増える。
+VENDOR_GZIP_TYPES = (".js", ".css")
+_VENDOR_CACHE = {}          # {abs_path: (mtime, size, raw_bytes, gzip_bytes|None)}
+_VENDOR_CACHE_LOCK = threading.Lock()
+
+
+def _ui_vendor_path(rel_name):
+    """ui/vendor/<rel_name> の実体パスを返す（見つからなければ None）。
+
+    探索順は _ui_html_candidates() と同じ思想（EXE 隣 → スクリプト隣 → cwd → 同梱）。
+    UI を差し替えたい利用者が index.html だけ置き換えると vendor が食い違うため、
+    index.html を採用したフォルダの vendor を優先する。
+    """
+    if not rel_name or "/" in rel_name or "\\" in rel_name or rel_name.startswith("."):
+        return None
+    if os.path.splitext(rel_name)[1].lower() not in VENDOR_ALLOWED_TYPES:
+        return None
+
+    for html_path in _ui_html_candidates():
+        candidate = os.path.join(os.path.dirname(html_path), "vendor", rel_name)
+        if os.path.isfile(candidate):
+            # 念のため、正規化後も vendor ディレクトリ配下に留まっていることを確認する。
+            vendor_root = os.path.realpath(os.path.join(os.path.dirname(html_path), "vendor"))
+            real = os.path.realpath(candidate)
+            if os.path.commonpath([vendor_root, real]) == vendor_root:
+                return real
+    return None
+
+
+def _app_asset_path(rel_name):
+    """assets/<rel_name> の実体パスを返す（見つからなければ None）。
+
+    アプリ自身の画像（アイコン等）。第三者ライブラリの ui/vendor/ とは出所が違うので
+    置き場も配信経路も分けてある。探索順は UI と同じ思想
+    （EXE 隣 → スクリプト隣 → cwd → PyInstaller 同梱）。
+    """
+    if not rel_name or "/" in rel_name or "\\" in rel_name or rel_name.startswith("."):
+        return None
+
+    roots = []
+    if getattr(sys, "frozen", False):
+        roots.append(os.path.dirname(os.path.abspath(sys.executable)))
+    roots.append(os.path.dirname(os.path.abspath(__file__)))
+    roots.append(os.getcwd())
+    roots.append(BASE_PATH)
+
+    for root in roots:
+        if not root:
+            continue
+        candidate = os.path.join(root, "assets", rel_name)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def read_vendor_asset(rel_name, accept_gzip=False):
+    """同梱アセットを (bytes, content_type, encoding) で返す。無ければ None。
+
+    毎リクエストで 450KB を読み直す/圧縮し直すのは無駄なので、mtime+size をキーに
+    メモリキャッシュする（ファイルを差し替えたら自動で読み直す）。
+    """
+    path = _ui_vendor_path(rel_name)
+    if not path:
+        return None
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        st = os.stat(path)
+        key = path
+        with _VENDOR_CACHE_LOCK:
+            cached = _VENDOR_CACHE.get(key)
+            if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+                _, _, raw, gz = cached
+            else:
+                with open(path, "rb") as f:
+                    raw = f.read()
+                gz = None
+                if ext in VENDOR_GZIP_TYPES:
+                    import gzip
+                    gz = gzip.compress(raw, 6)
+                    if len(gz) >= len(raw):
+                        gz = None
+                _VENDOR_CACHE[key] = (st.st_mtime, st.st_size, raw, gz)
+    except Exception as e:
+        log_print(f"[APIServer] Failed to read vendor asset {path}: {e}")
+        return None
+
+    if accept_gzip and gz is not None:
+        return gz, VENDOR_ALLOWED_TYPES[ext], "gzip"
+    return raw, VENDOR_ALLOWED_TYPES[ext], None
 
 
 UI_MISSING_TEMPLATE = """<!DOCTYPE html>
@@ -137,6 +240,27 @@ GLOBAL_AUTH_BLOCKED_UNTIL = 0.0
 MAX_REQUEST_BODY_BYTES = 64 * 1024
 MAX_UPLOAD_BODY_BYTES = 20 * 1024 * 1024 # 20MB
 MAX_VIDEO_UPLOAD_BODY_BYTES = 200 * 1024 * 1024 # 200MB
+
+SENSITIVE_BODY_KEYS = ("topaz_stream_key", "generic_rtmp_key", "web_password", "password")
+
+
+def redact_sensitive(payload):
+    """ログへ出す前に機密値を伏せる。
+
+    ストリームキーは「知っていれば誰でもそのキーで配信を投稿できる」ため、
+    パスワードと同格に扱う必要がある。ログファイルは配布物と一緒に
+    第三者へ渡ることがあるので、平文で残してはいけない。
+    """
+    if not isinstance(payload, dict):
+        return payload
+    safe = {}
+    for key, value in payload.items():
+        if key in SENSITIVE_BODY_KEYS and value:
+            safe[key] = "***redacted***"
+        else:
+            safe[key] = value
+    return safe
+
 
 def parse_multipart_file(body_bytes, content_type_header):
     """multipart/form-data からファイルバイナリとファイル名を取得"""
@@ -440,6 +564,20 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
         self.send_auth_throttled(remaining)
         return True
 
+    def may_see_share_info(self):
+        """「接続 & スマホ共有」の中身（共有QR・トンネルURL）を返してよい相手か。
+
+        ホストPC本人は常に可。ゲストは config の allow_web_share_info が明示的に
+        True のときだけ。既定を False にしてあるのは、このQRがPIN付きのリモコンURL
+        そのもので、渡した相手がさらに第三者へ配れてしまうため。
+        """
+        if self.is_local_request():
+            return True
+        return bool(
+            self.streamer_core
+            and self.streamer_core.config.get("allow_web_share_info", False)
+        )
+
     def check_web_password_auth(self, input_password=None):
         """
         Webリモコンのパスワード/PIN認証を検証。
@@ -533,10 +671,12 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 })
                 return
             if self.streamer_core:
-                data = self.streamer_core.get_status_data()
                 # ホスト本人かどうかはリクエスト単位でしか判定できないので、ここで載せる。
                 # これが無いと UI 側が「常にホスト」と誤認し、ゲストにサーバー終了/再起動ボタンを見せてしまう。
                 is_local = self.is_local_request()
+                # ストリームキーはリモートのゲストにも届くレスポンスに載るため、
+                # ホスト本人のリクエスト以外では必ずマスクされた状態で返す。
+                data = self.streamer_core.get_status_data(include_secrets=is_local)
                 data["is_local"] = is_local
                 if isinstance(data.get("permissions"), dict):
                     data["permissions"]["is_local"] = is_local
@@ -551,7 +691,15 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(403, {"error": "Forbidden: Configuration access is restricted to localhost."})
                 return
             if self.streamer_core:
-                self.send_json_response(200, self.streamer_core.config)
+                # localhost 限定のエンドポイントではあるが、ストリームキーは
+                # 画面共有・スクリーンショット経由でも漏れる。表示用にはマスクを返し、
+                # 生のキーは /api/destination (action=reveal_key) でのみ取得させる。
+                safe_config = dict(self.streamer_core.config)
+                for key_field in ("topaz_stream_key", "generic_rtmp_key"):
+                    raw = str(safe_config.get(key_field, "") or "")
+                    safe_config[key_field] = self.streamer_core.mask_stream_key(raw)
+                    safe_config[f"{key_field}_set"] = bool(raw)
+                self.send_json_response(200, safe_config)
             else:
                 self.send_json_response(500, {"error": "Core not initialized"})
             return
@@ -562,6 +710,14 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(401, {
                     "success": False,
                     "error": "Unauthorized: Web password required or invalid."
+                })
+                return
+            # このQRはPIN付きのリモコンURLそのもの。UI側で非表示にしているタブの、
+            # 直叩き経路をここで塞ぐ。
+            if not self.may_see_share_info():
+                self.send_json_response(403, {
+                    "success": False,
+                    "error": "Forbidden: sharing info is disabled by the host."
                 })
                 return
             url = ""
@@ -595,6 +751,56 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json_response(500, {"error": "Failed to generate QR code"})
                 return
 
+        # 3.4 アプリの意匠（favicon 用のタイル / ヘッダーの透過マーク）
+        # 認証の外。ログイン画面のヘッダーにも出るうえ、機密性は無い。
+        # 2枚あるのは用途が違うため: favicon は背景付きの正方形、
+        # ヘッダーは背景なし（カードの色に溶けないよう白抜きの線だけ）。
+        elif path in ("/app-icon.png", "/app-mark.png"):
+            icon_path = _app_asset_path(
+                "app_icon.png" if path == "/app-icon.png" else "app_mark.png"
+            )
+            if not icon_path:
+                self.send_error(404, "App icon not found")
+                return
+            try:
+                with open(icon_path, "rb") as f:
+                    data = f.read()
+            except Exception as e:
+                log_print(f"[APIServer] Failed to read app icon: {e}")
+                self.send_error(404, "App icon not readable")
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Cache-Control", "public, max-age=604800")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
+        # 3.5 Web リモコンの同梱アセット (Tailwind / RemixIcon / hls.js)
+        # 認証の外に置く。ログイン画面自体がこれらを使って描画されるため、
+        # ここを閉じるとパスワードを入れる画面すら崩れる（機密性のない第三者ライブラリ）。
+        elif path.startswith("/vendor/"):
+            rel_name = path[len("/vendor/"):]
+            accept_gzip = "gzip" in self.headers.get("Accept-Encoding", "")
+            asset = read_vendor_asset(rel_name, accept_gzip=accept_gzip)
+            if not asset:
+                self.send_error(404, "Vendor asset not found")
+                return
+            data, content_type, encoding = asset
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            if encoding:
+                self.send_header("Content-Encoding", encoding)
+                self.send_header("Vary", "Accept-Encoding")
+            # 中身はアプリのバージョンでしか変わらず、URL に ?v=<version> が付く。
+            # トンネル経由のゲストが毎回 1.4MB を引かないよう長めにキャッシュさせる。
+            self.send_header("Cache-Control", "public, max-age=604800")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
         # 4. HTML Player (Root or /stream.m3u8 directly navigated in browser)
         # /stream.m3u8 はブラウザのアドレスバー直接入力（Sec-Fetch-Dest: document 等）の場合のみ UI を返し、
         # メディアプレイヤー・XHR・Fetch 等によるリクエストには HLS マニフェスト（m3u8）を返す
@@ -622,6 +828,8 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 tunnel_stream_url = "(サーバー初期化中)"
 
             html = get_ui_html()
+            # 同梱アセットの ?v= に使う。バージョンが上がった時だけブラウザに取り直させる。
+            html = html.replace("__APP_VERSION__", APP_VERSION)
             html = html.replace("__LIVE_SYNC_DURATION_COUNT__", str(live_sync))
             html = html.replace("__TUNNEL_STREAM_URL__", tunnel_stream_url)
             content = html.encode("utf-8")
@@ -770,7 +978,7 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
             log_print(f"[APIServer] Error parsing JSON body: {e}")
             body_json = {}
 
-        log_print(f"[APIServer] POST {path} body: {body_json}")
+        log_print(f"[APIServer] POST {path} body: {redact_sensitive(body_json)}")
 
         # 1.5. API: Auth Check / Login
         if path == "/api/auth":
@@ -999,12 +1207,65 @@ class APIAndHLSHandler(http.server.SimpleHTTPRequestHandler):
                 return
             saved = self.streamer_core.save_config(body_json)
             if saved:
-                self.send_json_response(200, {"success": True, "config": self.streamer_core.config})
+                # 検証で弾いた項目があれば理由を返す（黙って無視すると、利用者は
+                # 「保存したのに反映されない」としか分からない）
+                self.send_json_response(200, {
+                    "success": True,
+                    "config": self.streamer_core.config,
+                    "warnings": list(getattr(self.streamer_core, "last_config_warnings", []))
+                })
             else:
                 self.send_json_response(500, {"success": False, "message": "Failed to save configuration"})
             return
 
-        # 4. API: Shutdown (ローカルホスト限定)
+        # 4. API: Destination (配信先操作 / ローカルホスト限定)
+        elif path == "/api/destination":
+            if not self.is_local_request():
+                self.send_json_response(403, {"success": False, "message": "Forbidden: Destination control is restricted to localhost."})
+                return
+            if not self.streamer_core:
+                self.send_json_response(500, {"success": False, "message": "Streamer core not available"})
+                return
+
+            core = self.streamer_core
+            action = str((body_json or {}).get("action", "")).strip()
+
+            if action == "generate_key":
+                # 既存キーを新しいランダムキーで作り直す（ワールド側の貼り直しが必要）
+                core.config["topaz_stream_key"] = core.generate_stream_key()
+                core.save_config()
+                self.send_json_response(200, {
+                    "success": True,
+                    "destination": core.get_destination_info(include_secrets=True)
+                })
+                return
+
+            if action == "reveal_key":
+                self.send_json_response(200, {
+                    "success": True,
+                    "destination": core.get_destination_info(include_secrets=True)
+                })
+                return
+
+            if action == "retry":
+                # HLSへ退避している状態から、本来の配信先へ即時復帰を試みる
+                core.destination_fallback_active = False
+                core.destination_last_error = ""
+                core._sink_fail_count = 0
+                core._sink_retry_at = 0.0
+                core._sink_force_restart = True
+                ok = core.ensure_stream_sink()
+                core.request_stream_reload()
+                self.send_json_response(200, {
+                    "success": bool(ok),
+                    "destination": core.get_destination_info(include_secrets=True)
+                })
+                return
+
+            self.send_json_response(400, {"success": False, "message": f"Unknown destination action: {action}"})
+            return
+
+        # 5. API: Shutdown (ローカルホスト限定)
         elif path == "/api/shutdown":
             if not self.is_local_request():
                 self.send_json_response(403, {"success": False, "message": "Forbidden: Shutdown command is restricted to localhost."})

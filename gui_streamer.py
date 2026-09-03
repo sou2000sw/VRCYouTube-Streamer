@@ -10,7 +10,8 @@ from tkinter import filedialog, messagebox
 import qrcode
 from PIL import Image
 
-from streamer_core import StreamerCore, CLOUDFLARED_EXE, log_print
+from streamer_core import StreamerCore, CLOUDFLARED_EXE, DEFAULT_CONFIG, log_print, BASE_PATH
+from config_overrides import add_config_arguments, build_overrides, describe_overrides
 from api_server import APIServer
 
 # PyInstallerの --noconsole 対策: sys.stdout / sys.stderr が None になる場合のダミーライター
@@ -37,6 +38,14 @@ if sys.platform == "win32":
     else:
         sys.stderr = DummyWriter()
 
+# 配信先の選択肢。hls は Cloudflare トンネルを経由するため「ローカル」とは書かない
+# （トンネルを無効にしたときだけ本当にローカル完結になる）。
+OUT_MODE_CHOICES = {
+    "hls": "HLS / Cloudflare トンネル経由 (既定・安定)",
+    "topaz": "TopazChat (低遅延/VRChat向け)",
+    "generic_rtmp": "Generic RTMP (上級者向け)",
+}
+
 # 設定ウィンドウ
 class SettingsWindow(ctk.CTkToplevel):
     def __init__(self, parent, streamer_core):
@@ -44,7 +53,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.streamer_core = streamer_core
 
         self.title("Settings & API Reference / 設定・API仕様")
-        self.geometry("520x660")
+        self.geometry("520x560")
         self.minsize(480, 520)
 
         # 最前面表示とモーダル化
@@ -55,74 +64,232 @@ class SettingsWindow(ctk.CTkToplevel):
         self.scroll_container = ctk.CTkScrollableFrame(self)
         self.scroll_container.pack(fill="both", expand=True, padx=15, pady=(10, 5))
 
+        self._sections = []
+
         # タイトル
         title_lbl = ctk.CTkLabel(self.scroll_container, text="Streaming & Server Settings", font=ctk.CTkFont(size=16, weight="bold"))
         title_lbl.pack(pady=(5, 10))
 
-        # 設定フォームフレーム
-        form_frame = ctk.CTkFrame(self.scroll_container)
-        form_frame.pack(fill="x", padx=10, pady=(0, 10))
-
         cfg = self.streamer_core.config
 
-        # 1. サーバーポート
-        self.lbl_port = ctk.CTkLabel(form_frame, text="Server Port (サーバーポート):", anchor="w")
+        # 1. 🌐 サーバー / 接続
+        sec1_body = self._add_section("🌐 サーバー / 接続", opened=False)
+
+        self.lbl_port = ctk.CTkLabel(sec1_body, text="Server Port (サーバーポート):", anchor="w")
         self.lbl_port.pack(fill="x", padx=15, pady=(10, 0))
-        self.entry_port = ctk.CTkEntry(form_frame)
+        self.entry_port = ctk.CTkEntry(sec1_body)
         self.entry_port.insert(0, str(cfg.get("port", 8000)))
         self.entry_port.pack(fill="x", padx=15, pady=(2, 8))
 
-        # 2. HLSセグメント秒数 (バッファリング秒数)
-        self.lbl_seg = ctk.CTkLabel(form_frame, text="HLS Segment Duration [sec] (セグメント秒数):", anchor="w")
-        self.lbl_seg.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_seg = ctk.CTkEntry(form_frame)
+        self.switch_tunnel = ctk.CTkSwitch(sec1_body, text="🌐 Enable Cloudflare Tunnel (トンネル自動起動)")
+        if cfg.get("enable_tunnel", True):
+            self.switch_tunnel.select()
+        self.switch_tunnel.pack(anchor="w", padx=15, pady=(2, 10))
+
+        # 2. 📡 配信先 (Destination)
+        sec2_body = self._add_section("📡 配信先 (Destination)", opened=False)
+
+        self.lbl_dest_section = ctk.CTkLabel(sec2_body, text="📡 Destination (配信先/ストリーミング出力先):", font=ctk.CTkFont(weight="bold"), anchor="w")
+
+        self.lbl_out_mode = ctk.CTkLabel(sec2_body, text="配信先モード (output_mode):", anchor="w")
+        self.lbl_out_mode.pack(fill="x", padx=15, pady=(10, 0))
+
+        curr_out_mode = cfg.get("output_mode", "hls")
+        if curr_out_mode == "topaz":
+            out_mode_val = OUT_MODE_CHOICES["topaz"]
+        elif curr_out_mode == "generic_rtmp":
+            out_mode_val = OUT_MODE_CHOICES["generic_rtmp"]
+        else:
+            out_mode_val = OUT_MODE_CHOICES["hls"]
+
+        self.opt_output_mode = ctk.CTkOptionMenu(
+            sec2_body,
+            values=list(OUT_MODE_CHOICES.values())
+        )
+        self.opt_output_mode.set(out_mode_val)
+        self.opt_output_mode.pack(fill="x", padx=15, pady=(2, 6))
+
+        # TopazChat エンドポイント（個人運営でホストが変わり得るため利用者が変更可能）
+        self.lbl_topaz_endpoint = ctk.CTkLabel(
+            sec2_body,
+            text="🛰 TopazChat サーバー (投稿先RTMP / 再生RTSP):",
+            anchor="w"
+        )
+        self.lbl_topaz_endpoint.pack(fill="x", padx=15, pady=(4, 0))
+
+        self.entry_topaz_rtmp = ctk.CTkEntry(sec2_body, placeholder_text=DEFAULT_CONFIG["topaz_rtmp_base"])
+        self.entry_topaz_rtmp.insert(0, str(cfg.get("topaz_rtmp_base", DEFAULT_CONFIG["topaz_rtmp_base"])))
+        self.entry_topaz_rtmp.pack(fill="x", padx=15, pady=(2, 4))
+
+        self.entry_topaz_rtsp = ctk.CTkEntry(sec2_body, placeholder_text=DEFAULT_CONFIG["topaz_rtsp_base"])
+        self.entry_topaz_rtsp.insert(0, str(cfg.get("topaz_rtsp_base", DEFAULT_CONFIG["topaz_rtsp_base"])))
+        self.entry_topaz_rtsp.pack(fill="x", padx=15, pady=(0, 4))
+
+        self.btn_reset_topaz_endpoint = ctk.CTkButton(
+            sec2_body,
+            text="既定のサーバーに戻す",
+            width=140,
+            fg_color="#64748B",
+            hover_color="#475569",
+            command=self.reset_topaz_endpoint
+        )
+        self.btn_reset_topaz_endpoint.pack(anchor="w", padx=15, pady=(0, 6))
+
+        # TopazChat Stream Key & Generate Button
+        self.lbl_topaz_key = ctk.CTkLabel(sec2_body, text="🔑 TopazChat Stream Key:", anchor="w")
+        self.lbl_topaz_key.pack(fill="x", padx=15, pady=(2, 0))
+
+        topaz_key_frame = ctk.CTkFrame(sec2_body, fg_color="transparent")
+        topaz_key_frame.pack(fill="x", padx=15, pady=(2, 4))
+
+        self.entry_topaz_key = ctk.CTkEntry(topaz_key_frame, show="*")
+        if cfg.get("topaz_stream_key"):
+            self.entry_topaz_key.insert(0, str(cfg.get("topaz_stream_key", "")))
+        self.entry_topaz_key.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_generate_key = ctk.CTkButton(topaz_key_frame, text="キー新規生成", width=100, command=self.generate_topaz_key_gui)
+        self.btn_generate_key.pack(side="right")
+
+        # TopazChat Legal Notices
+        topaz_notice_text = (
+            "※ 本ソフトはTopazChatの公式ツールではありません。\n"
+            "※ TopazChatは個人運営の無償サービスです。法人が運営主体のイベント・番組制作等での利用は、別途TopazChatへの問い合わせが必要です。\n"
+            "※ 映像は最大2Mbps・音声は最大320kbpsです。超過すると配信が強制切断されます。"
+        )
+        self.lbl_topaz_notice = ctk.CTkLabel(
+            sec2_body,
+            text=topaz_notice_text,
+            font=ctk.CTkFont(size=10),
+            text_color="#94A3B8",
+            anchor="w",
+            wraplength=440,
+            justify="left"
+        )
+        self.lbl_topaz_notice.pack(fill="x", padx=15, pady=(0, 6))
+
+        self.sep_dest_topaz = self._add_separator(sec2_body)
+
+        # Generic RTMP URL & Key
+        self.lbl_generic_rtmp_head = ctk.CTkLabel(
+            sec2_body,
+            text="🌐 Generic RTMP (自前サーバーへ送る / 上級者向け)",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w"
+        )
+        self.lbl_generic_rtmp_head.pack(fill="x", padx=15, pady=(0, 2))
+
+        self.lbl_generic_rtmp_desc = ctk.CTkLabel(
+            sec2_body,
+            text=("自分で立てた中継サーバー（MediaMTX / nginx-rtmp 等）へ配信するための枠です。\n"
+                  "投稿先URLとストリームキーは配信先サーバーの設定に合わせて入力してください。\n"
+                  "※ 再生用URLはサーバー構成に依存するため自動生成できません。\n"
+                  "※ 配信先の規約・著作権の順守は利用者の責任です。他者の動画を公開ライブへ\n"
+                  "　 再送出すると、アカウント停止の対象になり得ます。"),
+            font=ctk.CTkFont(size=10),
+            text_color="#94A3B8",
+            anchor="w",
+            wraplength=440,
+            justify="left"
+        )
+        self.lbl_generic_rtmp_desc.pack(fill="x", padx=15, pady=(0, 6))
+
+        self.lbl_generic_rtmp_url = ctk.CTkLabel(sec2_body, text="🌐 Generic RTMP URL (投稿先URL):", anchor="w")
+        self.lbl_generic_rtmp_url.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_generic_rtmp_url = ctk.CTkEntry(sec2_body, placeholder_text="rtmp://localhost/live")
+        if cfg.get("generic_rtmp_url"):
+            self.entry_generic_rtmp_url.insert(0, str(cfg.get("generic_rtmp_url", "")))
+        self.entry_generic_rtmp_url.pack(fill="x", padx=15, pady=(2, 6))
+
+        self.lbl_generic_rtmp_key = ctk.CTkLabel(sec2_body, text="🔑 Generic RTMP Key (ストリームキー):", anchor="w")
+        self.lbl_generic_rtmp_key.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_generic_rtmp_key = ctk.CTkEntry(sec2_body, show="*")
+        if cfg.get("generic_rtmp_key"):
+            self.entry_generic_rtmp_key.insert(0, str(cfg.get("generic_rtmp_key", "")))
+        self.entry_generic_rtmp_key.pack(fill="x", padx=15, pady=(2, 6))
+
+        self.sep_dest_generic = self._add_separator(sec2_body)
+
+        # Bitrates (Video & Audio) — TopazChat / 汎用RTMP 共通の設定
+        self.lbl_bitrate_head = ctk.CTkLabel(
+            sec2_body,
+            text="🎚 ビットレート (RTMP系の配信先で共通)",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w"
+        )
+        self.lbl_bitrate_head.pack(fill="x", padx=15, pady=(0, 4))
+
+        self.lbl_rtmp_vbitrate = ctk.CTkLabel(sec2_body, text="📹 Video Bitrate [kbps] (映像ビットレート):", anchor="w")
+        self.lbl_rtmp_vbitrate.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_rtmp_vbitrate = ctk.CTkEntry(sec2_body)
+        self.entry_rtmp_vbitrate.insert(0, str(cfg.get("rtmp_video_bitrate_kbps", 1500)))
+        self.entry_rtmp_vbitrate.pack(fill="x", padx=15, pady=(2, 6))
+
+        self.lbl_rtmp_abitrate = ctk.CTkLabel(sec2_body, text="🔊 Audio Bitrate [kbps] (音声ビットレート):", anchor="w")
+        self.lbl_rtmp_abitrate.pack(fill="x", padx=15, pady=(2, 0))
+        self.entry_rtmp_abitrate = ctk.CTkEntry(sec2_body)
+        self.entry_rtmp_abitrate.insert(0, str(cfg.get("rtmp_audio_bitrate_kbps", 192)))
+        self.entry_rtmp_abitrate.pack(fill="x", padx=15, pady=(2, 6))
+
+        # Fallback Switch
+        self.switch_rtmp_fallback = ctk.CTkSwitch(sec2_body, text="🛡 Auto Fallback to HLS (失敗時にHLSへ自動退避)")
+        if cfg.get("rtmp_fallback_to_hls", True):
+            self.switch_rtmp_fallback.select()
+        self.switch_rtmp_fallback.pack(anchor="w", padx=15, pady=(2, 10))
+
+        # 3. 🎬 再生 / キュー
+        sec3_body = self._add_section("🎬 再生 / キュー", opened=False)
+
+        self.lbl_seg = ctk.CTkLabel(sec3_body, text="HLS Segment Duration [sec] (セグメント秒数):", anchor="w")
+        self.lbl_seg.pack(fill="x", padx=15, pady=(10, 0))
+        self.entry_seg = ctk.CTkEntry(sec3_body)
         self.entry_seg.insert(0, str(cfg.get("hls_segment_time", 3)))
         self.entry_seg.pack(fill="x", padx=15, pady=(2, 8))
 
-        # 3. 写真スライドショー表示秒数
-        self.lbl_photo_dur = ctk.CTkLabel(form_frame, text="Photo Display Duration [sec] (写真表示秒数):", anchor="w")
-        self.lbl_photo_dur.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_photo_dur = ctk.CTkEntry(form_frame)
-        self.entry_photo_dur.insert(0, str(cfg.get("image_display_duration", 15)))
-        self.entry_photo_dur.pack(fill="x", padx=15, pady=(2, 8))
-
-        # 4. 動画切り替わり時の待機秒数
-        self.lbl_wait = ctk.CTkLabel(form_frame, text="Transition Wait Duration [sec] (動画切替待機秒数):", anchor="w")
+        self.lbl_wait = ctk.CTkLabel(sec3_body, text="Transition Wait Duration [sec] (動画切替待機秒数):", anchor="w")
         self.lbl_wait.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_wait = ctk.CTkEntry(form_frame)
+        self.entry_wait = ctk.CTkEntry(sec3_body)
         self.entry_wait.insert(0, str(cfg.get("video_transition_wait_seconds", 1)))
         self.entry_wait.pack(fill="x", padx=15, pady=(2, 8))
 
-        # 5. プレイヤーバッファ保持セグメント数 (Live Sync Count)
-        self.lbl_sync = ctk.CTkLabel(form_frame, text="Web Player Live Sync Count (再生同期バッファ数):", anchor="w")
+        self.lbl_sync = ctk.CTkLabel(sec3_body, text="Web Player Live Sync Count (再生同期バッファ数):", anchor="w")
         self.lbl_sync.pack(fill="x", padx=15, pady=(2, 0))
-        self.entry_sync = ctk.CTkEntry(form_frame)
+        self.entry_sync = ctk.CTkEntry(sec3_body)
         self.entry_sync.insert(0, str(cfg.get("live_sync_duration_count", 4)))
         self.entry_sync.pack(fill="x", padx=15, pady=(2, 10))
 
-        # 6. ループ再生 & シャッフル再生のデフォルト設定
-        self.switch_loop = ctk.CTkSwitch(form_frame, text="🔁 Loop Queue (キュー保持・繰り返し再生)")
+        self.switch_loop = ctk.CTkSwitch(sec3_body, text="🔁 Loop Queue (キュー保持・繰り返し再生)")
         if cfg.get("loop_queue", False):
             self.switch_loop.select()
         self.switch_loop.pack(anchor="w", padx=15, pady=(4, 6))
 
-        self.switch_shuffle = ctk.CTkSwitch(form_frame, text="🔀 Shuffle Play (シャッフル再生モード)")
+        self.switch_shuffle = ctk.CTkSwitch(sec3_body, text="🔀 Shuffle Play (シャッフル再生モード)")
         if cfg.get("shuffle", False):
             self.switch_shuffle.select()
-        self.switch_shuffle.pack(anchor="w", padx=15, pady=(2, 6))
+        self.switch_shuffle.pack(anchor="w", padx=15, pady=(2, 10))
 
-        self.switch_photo_advance = ctk.CTkSwitch(form_frame, text="⏱ Auto Advance Photos (写真の自動送り)")
+        # 4. 🖼 写真・スライドショー
+        sec4_body = self._add_section("🖼 写真・スライドショー", opened=False)
+
+        self.lbl_photo_dur = ctk.CTkLabel(sec4_body, text="Photo Display Duration [sec] (写真表示秒数):", anchor="w")
+        self.lbl_photo_dur.pack(fill="x", padx=15, pady=(10, 0))
+        self.entry_photo_dur = ctk.CTkEntry(sec4_body)
+        self.entry_photo_dur.insert(0, str(cfg.get("image_display_duration", 15)))
+        self.entry_photo_dur.pack(fill="x", padx=15, pady=(2, 8))
+
+        self.switch_photo_advance = ctk.CTkSwitch(sec4_body, text="⏱ Auto Advance Photos (写真の自動送り)")
         if cfg.get("image_auto_advance", False):
             self.switch_photo_advance.select()
-        self.switch_photo_advance.pack(anchor="w", padx=15, pady=(2, 6))
+        self.switch_photo_advance.pack(anchor="w", padx=15, pady=(2, 10))
 
-        # 6.5. BGM / ラジオモード設定 (音声のみ + 静止画低帯域配信)
-        self.switch_radio = ctk.CTkSwitch(form_frame, text="📻 Radio / BGM Mode (YouTube音声のみ+静止画・超低帯域配信)")
+        # 5. 📻 ラジオ / BGM モード
+        sec5_body = self._add_section("📻 ラジオ / BGM モード", opened=False)
+
+        self.switch_radio = ctk.CTkSwitch(sec5_body, text="📻 Radio / BGM Mode (YouTube音声のみ+静止画・超低帯域配信)")
         if cfg.get("radio_mode", False):
             self.switch_radio.select()
-        self.switch_radio.pack(anchor="w", padx=15, pady=(4, 4))
+        self.switch_radio.pack(anchor="w", padx=15, pady=(10, 4))
 
-        self.lbl_radio_bg = ctk.CTkLabel(form_frame, text="📻 Radio Background (ラジオモード時の背景):", anchor="w")
+        self.lbl_radio_bg = ctk.CTkLabel(sec5_body, text="📻 Radio Background (ラジオモード時の背景):", anchor="w")
         self.lbl_radio_bg.pack(fill="x", padx=15, pady=(2, 2))
 
         curr_radio_bg = cfg.get("radio_bg_source", "card")
@@ -134,14 +301,14 @@ class SettingsWindow(ctk.CTkToplevel):
             radio_bg_val = "Card (サムネイル＆楽曲情報)"
 
         self.seg_radio_bg = ctk.CTkSegmentedButton(
-            form_frame,
+            sec5_body,
             values=["Card (サムネイル＆楽曲情報)", "Standby (待機画面・QR)", "Slideshow (写真スライドショー)"]
         )
         self.seg_radio_bg.set(radio_bg_val)
         self.seg_radio_bg.pack(fill="x", padx=15, pady=(2, 4))
 
         self.lbl_radio_info = ctk.CTkLabel(
-            form_frame,
+            sec5_body,
             text="💡 ラジオモード時は動画を落とさず帯域を約300kbps（通常比90%減）に極小化し、VRChatでのバッファ詰まりを防止します。",
             font=ctk.CTkFont(size=11),
             text_color="#34D399",
@@ -149,22 +316,23 @@ class SettingsWindow(ctk.CTkToplevel):
             wraplength=440,
             justify="left"
         )
-        self.lbl_radio_info.pack(fill="x", padx=15, pady=(0, 8))
+        self.lbl_radio_info.pack(fill="x", padx=15, pady=(0, 10))
 
-        # 6.5. 待機画面 (Standby Screen) 設定
-        self.lbl_standby_section = ctk.CTkLabel(form_frame, text="📺 Standby Screen (キュー空時の待機画面):", font=ctk.CTkFont(weight="bold"), anchor="w")
-        self.lbl_standby_section.pack(fill="x", padx=15, pady=(8, 2))
+        # 6. 📺 待機画面
+        sec6_body = self._add_section("📺 待機画面", opened=False)
+
+        self.lbl_standby_section = ctk.CTkLabel(sec6_body, text="📺 Standby Screen (キュー空時の待機画面):", font=ctk.CTkFont(weight="bold"), anchor="w")
 
         curr_standby_mode = cfg.get("standby_mode", "image")
         standby_mode_val = "QR Code Info (QR案内)" if curr_standby_mode == "qr" else "Custom Image (固定画像)"
-        self.seg_standby_mode = ctk.CTkSegmentedButton(form_frame, values=["Custom Image (固定画像)", "QR Code Info (QR案内)"])
+        self.seg_standby_mode = ctk.CTkSegmentedButton(sec6_body, values=["Custom Image (固定画像)", "QR Code Info (QR案内)"])
         self.seg_standby_mode.set(standby_mode_val)
-        self.seg_standby_mode.pack(fill="x", padx=15, pady=(2, 4))
+        self.seg_standby_mode.pack(fill="x", padx=15, pady=(10, 4))
 
         self.current_standby_img_path = cfg.get("standby_image_path", "")
 
-        standby_img_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
-        standby_img_frame.pack(fill="x", padx=15, pady=(2, 6))
+        standby_img_frame = ctk.CTkFrame(sec6_body, fg_color="transparent")
+        standby_img_frame.pack(fill="x", padx=15, pady=(2, 10))
 
         display_name = os.path.basename(self.current_standby_img_path) if self.current_standby_img_path else "(デフォルト画像)"
         self.lbl_standby_path = ctk.CTkLabel(standby_img_frame, text=f"待機画像: {display_name}", anchor="w", font=ctk.CTkFont(size=12))
@@ -176,31 +344,32 @@ class SettingsWindow(ctk.CTkToplevel):
         self.btn_reset_standby_img = ctk.CTkButton(standby_img_frame, text="初期化", width=60, fg_color="#64748B", hover_color="#475569", command=self.reset_standby_image)
         self.btn_reset_standby_img.pack(side="right", padx=(5, 0))
 
-        # 7. QRコード上書き表示 (ウォーターマーク) 設定
+        # 7. 🔲 オーバーレイ (QR / 時計)
+        sec7_body = self._add_section("🔲 オーバーレイ (QR / 時計)", opened=False)
+
         is_qr_on = bool(cfg.get("overlay_qr_enabled", False) or cfg.get("overlay_qr_video", False) or cfg.get("overlay_qr_image", False))
-        self.switch_qr_overlay = ctk.CTkSwitch(form_frame, text="🔲 QR Overlay (動画・写真にQR・URL上書き表示)")
+        self.switch_qr_overlay = ctk.CTkSwitch(sec7_body, text="🔲 QR Overlay (動画・写真にQR・URL上書き表示)")
         if is_qr_on:
             self.switch_qr_overlay.select()
-        self.switch_qr_overlay.pack(anchor="w", padx=15, pady=(2, 6))
+        self.switch_qr_overlay.pack(anchor="w", padx=15, pady=(10, 6))
 
-        # 7.5. 時計オーバーレイ設定
         is_clock_on = bool(cfg.get("overlay_clock_enabled", False) or cfg.get("overlay_clock_video", False))
-        self.switch_clock_overlay = ctk.CTkSwitch(form_frame, text="⏰ Clock Overlay (動画再生時にJST時刻をオーバーレイ表示)")
+        self.switch_clock_overlay = ctk.CTkSwitch(sec7_body, text="⏰ Clock Overlay (動画再生時にJST時刻をオーバーレイ表示)")
         if is_clock_on:
             self.switch_clock_overlay.select()
         self.switch_clock_overlay.pack(anchor="w", padx=15, pady=(2, 6))
 
-        self.lbl_qr_mode = ctk.CTkLabel(form_frame, text="📐 Overlay Layout (表示レイアウト):", anchor="w")
+        self.lbl_qr_mode = ctk.CTkLabel(sec7_body, text="📐 Overlay Layout (表示レイアウト):", anchor="w")
         self.lbl_qr_mode.pack(fill="x", padx=15, pady=(4, 2))
 
         curr_mode = cfg.get("overlay_qr_mode", "bottom-right")
         mode_val = "Fullscreen (フル画面)" if curr_mode == "fullscreen" else "Compact (右下に小さく)"
-        self.seg_qr_mode = ctk.CTkSegmentedButton(form_frame, values=["Compact (右下に小さく)", "Fullscreen (フル画面)"])
+        self.seg_qr_mode = ctk.CTkSegmentedButton(sec7_body, values=["Compact (右下に小さく)", "Fullscreen (フル画面)"])
         self.seg_qr_mode.set(mode_val)
         self.seg_qr_mode.pack(fill="x", padx=15, pady=(2, 4))
 
         self.lbl_qr_warn = ctk.CTkLabel(
-            form_frame,
+            sec7_body,
             text="⚠️ 注意: 動画オーバーレイ有効時はリアルタイム再エンコード処理のためバッファ（読み込み待ち）が発生しやすくなります。",
             font=ctk.CTkFont(size=11),
             text_color="#F59E0B",
@@ -208,39 +377,41 @@ class SettingsWindow(ctk.CTkToplevel):
             wraplength=440,
             justify="left"
         )
-        self.lbl_qr_warn.pack(fill="x", padx=15, pady=(0, 8))
+        self.lbl_qr_warn.pack(fill="x", padx=15, pady=(0, 10))
 
-        # 8. Cloudflare トンネル起動設定
-        self.switch_tunnel = ctk.CTkSwitch(form_frame, text="🌐 Enable Cloudflare Tunnel (トンネル自動起動)")
-        if cfg.get("enable_tunnel", True):
-            self.switch_tunnel.select()
-        self.switch_tunnel.pack(anchor="w", padx=15, pady=(2, 10))
+        # 8. 📱 Webリモコン (権限 / パスワード)
+        sec8_body = self._add_section("📱 Webリモコン (権限 / パスワード)", opened=False)
 
-        # 9. Webリモコン (外部ブラウザ/スマホ) 権限設定
-        self.lbl_web_perms = ctk.CTkLabel(form_frame, text="📱 Web Remote Permissions (ブラウザ操作権限):", font=ctk.CTkFont(weight="bold"), anchor="w")
-        self.lbl_web_perms.pack(fill="x", padx=15, pady=(8, 4))
+        self.lbl_web_perms = ctk.CTkLabel(sec8_body, text="📱 Web Remote Permissions (ブラウザ操作権限):", font=ctk.CTkFont(weight="bold"), anchor="w")
+        self.lbl_web_perms.pack(fill="x", padx=15, pady=(10, 4))
 
-        self.switch_web_add = ctk.CTkSwitch(form_frame, text="Allow Adding Media (スマホからの動画・写真追加を許可)")
+        self.switch_web_add = ctk.CTkSwitch(sec8_body, text="Allow Adding Media (スマホからの動画・写真追加を許可)")
         if cfg.get("allow_web_queue_add", True):
             self.switch_web_add.select()
         self.switch_web_add.pack(anchor="w", padx=15, pady=(2, 4))
 
-        self.switch_web_edit = ctk.CTkSwitch(form_frame, text="Allow Queue Edit (キューの削除・並び替えを許可)")
+        self.switch_web_edit = ctk.CTkSwitch(sec8_body, text="Allow Queue Edit (キューの削除・並び替えを許可)")
         if cfg.get("allow_web_queue_edit", True):
             self.switch_web_edit.select()
         self.switch_web_edit.pack(anchor="w", padx=15, pady=(2, 4))
 
-        self.switch_web_control = ctk.CTkSwitch(form_frame, text="Allow Playback Control (スキップ・ループ等の操作を許可)")
+        self.switch_web_control = ctk.CTkSwitch(sec8_body, text="Allow Playback Control (スキップ・ループ等の操作を許可)")
         if cfg.get("allow_web_playback_control", True):
             self.switch_web_control.select()
         self.switch_web_control.pack(anchor="w", padx=15, pady=(2, 8))
 
-        # 10. Webリモコン パスワード/PIN保護設定
-        self.lbl_web_pw = ctk.CTkLabel(form_frame, text="🔒 Web Remote Password / PIN (パスワード保護):", font=ctk.CTkFont(weight="bold"), anchor="w")
+        # 既定オフ。このタブにはPIN付きのリモコンURLと配信先の再生URLが並ぶため、
+        # 「共有された人がさらに他人へ共有できる」状態はホストが明示的に選ぶ。
+        self.switch_web_share_info = ctk.CTkSwitch(sec8_body, text="Allow Sharing Info (接続情報・共有QRコードの閲覧を許可)")
+        if cfg.get("allow_web_share_info", False):
+            self.switch_web_share_info.select()
+        self.switch_web_share_info.pack(anchor="w", padx=15, pady=(2, 8))
+
+        self.lbl_web_pw = ctk.CTkLabel(sec8_body, text="🔒 Web Remote Password / PIN (パスワード保護):", font=ctk.CTkFont(weight="bold"), anchor="w")
         self.lbl_web_pw.pack(fill="x", padx=15, pady=(8, 2))
 
         self.lbl_web_pw_desc = ctk.CTkLabel(
-            form_frame,
+            sec8_body,
             text="※空欄の場合は認証なし。PIN番号（例: 1234）やパスワードを設定すると、\n　認証したユーザーのみがリモコン画面の閲覧・操作を行えます（ホスト負荷防止）。",
             font=ctk.CTkFont(size=11),
             text_color="#95A5A6",
@@ -249,7 +420,7 @@ class SettingsWindow(ctk.CTkToplevel):
         )
         self.lbl_web_pw_desc.pack(fill="x", padx=15, pady=(0, 4))
 
-        pw_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        pw_frame = ctk.CTkFrame(sec8_body, fg_color="transparent")
         pw_frame.pack(fill="x", padx=15, pady=(2, 12))
 
         self.entry_web_password = ctk.CTkEntry(pw_frame, placeholder_text="未設定 (誰でもアクセス可能)", width=240, show="*")
@@ -291,6 +462,11 @@ class SettingsWindow(ctk.CTkToplevel):
     "status_detail": "Active (Streaming)",
     "tunnel_url": "https://xxxx.trycloudflare.com",
     "stream_url": "https://xxxx.trycloudflare.com/stream.m3u8",
+    "video_url": "rtspt://topaz.chat/live/<KEY>",  // ワールドの動画プレイヤーに貼るURL(配信先に追従)
+    "remote_url": "https://xxxx.trycloudflare.com", // Webリモコンを開くURL(QRが焼くのはこちら)
+    "output_mode": "topaz",         // 設定上の配信先 (hls / topaz / generic_rtmp)
+    "active_output_mode": "topaz",  // 実際に動いている出口 (退避中は hls)
+    "destination": { ... },         // 配信先の詳細(ストリームキーはホスト以外にはマスク)
     "current_video": { "title": "...", "url": "...", "duration": 213 },
     "queue": [ { "title": "...", "url": "..." } ],
     "loop_queue": true,
@@ -348,6 +524,48 @@ class SettingsWindow(ctk.CTkToplevel):
         self.btn_cancel = ctk.CTkButton(btn_frame, text="Cancel / キャンセル", fg_color="#7F8C8D", hover_color="#707B7C", command=self.destroy)
         self.btn_cancel.pack(side="right")
 
+    def _add_separator(self, parent, pady=(8, 6)):
+        """設定項目のまとまりを視覚的に切る細い横線。"""
+        line = ctk.CTkFrame(parent, height=1, fg_color="#3F4A5A")
+        line.pack(fill="x", padx=15, pady=pady)
+        return line
+
+    def _add_section(self, title, opened=False):
+        """折りたたみ可能なセクションを作り、中身を入れるフレームを返す。
+
+        閉じている間もウィジェットは生存させる（pack_forget のみ）。
+        破棄すると save_settings() が読む属性が消え、設定が保存できなくなる。
+        """
+        state = {"open": bool(opened)}
+        btn = ctk.CTkButton(
+            self.scroll_container,
+            text="",
+            fg_color="#34495E",
+            hover_color="#2C3E50",
+            anchor="w",
+        )
+        btn.pack(fill="x", padx=10, pady=(5, 0))
+
+        body = ctk.CTkFrame(self.scroll_container)
+
+        def render():
+            btn.configure(text=f"{'▼' if state['open'] else '▶'} {title}")
+            if state["open"]:
+                # after=btn を付けないと、pack の順序は「pack を呼んだ順」になるため
+                # 見出しの直下ではなくウィンドウ最下部（他の見出しより後ろ）に開いてしまう。
+                body.pack(fill="x", padx=10, pady=(0, 8), after=btn)
+            else:
+                body.pack_forget()
+
+        def toggle():
+            state["open"] = not state["open"]
+            render()
+
+        btn.configure(command=toggle)
+        render()
+        self._sections.append((title, btn, body, state))
+        return body
+
     def toggle_show_web_password(self):
         if self.chk_show_pw.get():
             self.entry_web_password.configure(show="")
@@ -377,6 +595,22 @@ class SettingsWindow(ctk.CTkToplevel):
             self.api_toggle_btn.configure(text="▼ API 仕様・引数リファレンス (表示 / 折りたたみ)")
             self.is_api_ref_open = True
 
+    def reset_topaz_endpoint(self):
+        """公式既定のサーバーへ戻す（入力欄のみ。保存は Save で確定する）。"""
+        self.entry_topaz_rtmp.delete(0, "end")
+        self.entry_topaz_rtmp.insert(0, DEFAULT_CONFIG["topaz_rtmp_base"])
+        self.entry_topaz_rtsp.delete(0, "end")
+        self.entry_topaz_rtsp.insert(0, DEFAULT_CONFIG["topaz_rtsp_base"])
+
+    def generate_topaz_key_gui(self):
+        try:
+            new_key = self.streamer_core.generate_stream_key()
+            if new_key:
+                self.entry_topaz_key.delete(0, "end")
+                self.entry_topaz_key.insert(0, str(new_key))
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to generate stream key: {e}")
+
     def save_settings(self):
         try:
             port = int(self.entry_port.get().strip())
@@ -397,6 +631,31 @@ class SettingsWindow(ctk.CTkToplevel):
                 radio_bg = "standby"
             else:
                 radio_bg = "card"
+
+            selected_out_mode = self.opt_output_mode.get()
+            output_mode = "hls"
+            for key, text in OUT_MODE_CHOICES.items():
+                if selected_out_mode == text:
+                    output_mode = key
+                    break
+
+            try:
+                rtmp_vbitrate = int(self.entry_rtmp_vbitrate.get().strip())
+            except Exception:
+                rtmp_vbitrate = 1500
+
+            try:
+                rtmp_abitrate = int(self.entry_rtmp_abitrate.get().strip())
+            except Exception:
+                rtmp_abitrate = 192
+
+            rtmp_fallback = bool(self.switch_rtmp_fallback.get())
+
+            if output_mode == "topaz":
+                if rtmp_vbitrate > 2000:
+                    rtmp_vbitrate = 2000
+                if rtmp_abitrate > 320:
+                    rtmp_abitrate = 320
 
             if port <= 0 or port > 65535:
                 raise ValueError("Port must be between 1 and 65535.")
@@ -434,8 +693,40 @@ class SettingsWindow(ctk.CTkToplevel):
                 "allow_web_queue_add": bool(self.switch_web_add.get()),
                 "allow_web_queue_edit": bool(self.switch_web_edit.get()),
                 "allow_web_playback_control": bool(self.switch_web_control.get()),
-                "web_password": web_password
+                "allow_web_share_info": bool(self.switch_web_share_info.get()),
+                "web_password": web_password,
+                "output_mode": output_mode,
+                "rtmp_video_bitrate_kbps": rtmp_vbitrate,
+                "rtmp_audio_bitrate_kbps": rtmp_abitrate,
+                "rtmp_fallback_to_hls": rtmp_fallback
             }
+
+            topaz_rtmp = self.entry_topaz_rtmp.get().strip()
+            topaz_rtsp = self.entry_topaz_rtsp.get().strip()
+            # 空欄なら既定値へ戻す（TopazChat のエンドポイントは空にできない）
+            new_cfg["topaz_rtmp_base"] = topaz_rtmp or DEFAULT_CONFIG["topaz_rtmp_base"]
+            new_cfg["topaz_rtsp_base"] = topaz_rtsp or DEFAULT_CONFIG["topaz_rtsp_base"]
+
+            invalid = []
+            for field, value in (("topaz_rtmp_base", new_cfg["topaz_rtmp_base"]),
+                                 ("topaz_rtsp_base", new_cfg["topaz_rtsp_base"])):
+                _normalized, reason = self.streamer_core.validate_endpoint(field, value)
+                if reason:
+                    invalid.append(reason)
+            if invalid:
+                raise ValueError("\n".join(invalid))
+
+            topaz_key = self.entry_topaz_key.get().strip()
+            if topaz_key:
+                new_cfg["topaz_stream_key"] = topaz_key
+
+            generic_url = self.entry_generic_rtmp_url.get().strip()
+            if generic_url:
+                new_cfg["generic_rtmp_url"] = generic_url
+
+            generic_key = self.entry_generic_rtmp_key.get().strip()
+            if generic_key:
+                new_cfg["generic_rtmp_key"] = generic_key
 
             self.streamer_core.save_config(new_cfg)
             self.streamer_core.generate_standby_image()
@@ -496,8 +787,21 @@ class App(ctk.CTk):
         self.api_server = api_server
 
         self.title("VRC_Media_Streamer")
-        self.geometry("680x620")
-        self.minsize(540, 480)
+        # 動画URLとWebリモコンURLの2段表示ぶん、既定の高さを広げてある
+        self.geometry("680x680")
+        self.minsize(540, 520)
+
+        # ウィンドウアイコン。EXE ではビルド時の --icon が効くが、
+        # ソースから起動した場合は Python の既定アイコンになってしまうため明示する。
+        try:
+            icon_path = os.path.join(BASE_PATH, "assets", "app_icon.ico")
+            if not os.path.exists(icon_path):
+                icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "app_icon.ico")
+            if os.path.exists(icon_path):
+                self.iconbitmap(icon_path)
+        except Exception:
+            # アイコンが無い/読めないだけでアプリを止める理由は無い
+            pass
 
         # ウィンドウの✕ボタンでも on_closing() を通す。
         # これが無いと shutdown() が呼ばれず、cloudflared / ffmpeg の子プロセスが孤児化する。
@@ -545,20 +849,41 @@ class App(ctk.CTk):
         self.now_playing_label = ctk.CTkLabel(self.status_frame, text="None", font=ctk.CTkFont(size=14, weight="bold"), anchor="w")
         self.now_playing_label.pack(fill="x", anchor="w", padx=15, pady=(0, 8))
 
-        self.tunnel_title = ctk.CTkLabel(self.status_frame, text="HLS URL for VRChat:", font=ctk.CTkFont(size=12, weight="bold"), text_color="gray")
+        # 配信先(destination)導入後、「ワールドの動画プレイヤーに貼るURL」と
+        # 「Webリモコンを開くURL」は別物になった。混同すると
+        # ワールドにリモコンURLを貼る事故が起きるため、2段に分けて表示する。
+        self.tunnel_title = ctk.CTkLabel(self.status_frame, text="🌍 ワールド用 動画URL:", font=ctk.CTkFont(size=12, weight="bold"), text_color="gray")
         self.tunnel_title.pack(anchor="w", padx=15, pady=(0, 2))
 
         self.url_frame = ctk.CTkFrame(self.status_frame, fg_color="transparent")
-        self.url_frame.pack(fill="x", padx=15, pady=(0, 8))
+        self.url_frame.pack(fill="x", padx=15, pady=(0, 4))
 
         self.tunnel_label = ctk.CTkLabel(self.url_frame, text="Starting tunnel...", font=ctk.CTkFont(size=12), anchor="w")
         self.tunnel_label.pack(side="left", fill="x", expand=True)
 
-        self.qr_btn = ctk.CTkButton(self.url_frame, text="📱 QR Code", width=85, fg_color="#2E4053", hover_color="#1F2A36", command=self.open_qr_code)
+        self.copy_btn = ctk.CTkButton(self.url_frame, text="Copy URL", width=80, command=self.copy_url)
+        self.copy_btn.pack(side="right", padx=(5, 0))
+
+        # ストリームキーは実質パスワードであり、画面共有・配信で映り込むと乗っ取られる。
+        # 既定はマスク表示にし、必要なときだけ本人が明かす（コピーは常に本物を渡す）。
+        self.video_url_revealed = False
+        self.reveal_btn = ctk.CTkButton(self.url_frame, text="👁 表示", width=60, fg_color="#2E4053", hover_color="#1F2A36", command=self.toggle_video_url_reveal)
+        self.reveal_btn.pack(side="right", padx=(10, 0))
+
+        self.remote_title = ctk.CTkLabel(self.status_frame, text="🔗 Webリモコン URL:", font=ctk.CTkFont(size=12, weight="bold"), text_color="gray")
+        self.remote_title.pack(anchor="w", padx=15, pady=(0, 2))
+
+        self.remote_frame = ctk.CTkFrame(self.status_frame, fg_color="transparent")
+        self.remote_frame.pack(fill="x", padx=15, pady=(0, 8))
+
+        self.remote_label = ctk.CTkLabel(self.remote_frame, text="Starting tunnel...", font=ctk.CTkFont(size=12), anchor="w")
+        self.remote_label.pack(side="left", fill="x", expand=True)
+
+        self.qr_btn = ctk.CTkButton(self.remote_frame, text="📱 QR Code", width=85, fg_color="#2E4053", hover_color="#1F2A36", command=self.open_qr_code)
         self.qr_btn.pack(side="right", padx=(5, 0))
 
-        self.copy_btn = ctk.CTkButton(self.url_frame, text="Copy URL", width=80, command=self.copy_url)
-        self.copy_btn.pack(side="right", padx=(10, 0))
+        self.copy_remote_btn = ctk.CTkButton(self.remote_frame, text="Copy URL", width=80, command=self.copy_remote_url)
+        self.copy_remote_btn.pack(side="right", padx=(10, 0))
 
         # 3. Add to Queue Frame
         self.add_frame = ctk.CTkFrame(self)
@@ -799,16 +1124,58 @@ class App(ctk.CTk):
             url = f"http://localhost:{port}"
         QRCodeWindow(self, url)
 
+    def get_world_video_url(self, include_secrets=True):
+        """ワールドの動画プレイヤーに貼るURL。配信先(destination)に追従する。"""
+        core = self.streamer_core
+        try:
+            url = core.get_video_url(include_secrets=include_secrets)
+        except AttributeError:
+            url = ""
+        if url:
+            return url
+        # HLS 経路のフォールバック（トンネル未確立・トンネル無効時）
+        if core.get_active_output_mode() == "hls":
+            if core.tunnel_url:
+                return core.tunnel_url
+            if not getattr(core, "enable_tunnel", True):
+                port = core.config.get("port", 8000)
+                return f"http://localhost:{port}/stream.m3u8"
+        return ""
+
+    def get_remote_url(self):
+        """Webリモコンを開くURL。QRが焼くのもこちら。"""
+        core = self.streamer_core
+        url = core.tunnel_raw_url
+        if not url and not getattr(core, "enable_tunnel", True):
+            port = core.config.get("port", 8000)
+            url = f"http://localhost:{port}"
+        return url
+
+    def toggle_video_url_reveal(self):
+        self.video_url_revealed = not self.video_url_revealed
+        self.reveal_btn.configure(text="🙈 隠す" if self.video_url_revealed else "👁 表示")
+        # 定期更新(update_ui_loop)は自分で再スケジュールするため、ここから呼ぶと二重に走る。
+        # ラベルだけ即時反映すれば足りる。
+        self.tunnel_label.configure(text=self.get_world_video_url(include_secrets=self.video_url_revealed) or "Starting tunnel...")
+
     def copy_url(self):
-        url = self.streamer_core.tunnel_url
-        if not url and not getattr(self.streamer_core, "enable_tunnel", True):
-            port = self.streamer_core.config.get("port", 8000)
-            url = f"http://localhost:{port}/stream.m3u8"
+        # 表示がマスクされていても、コピーされるのは常に本物のURL
+        url = self.get_world_video_url(include_secrets=True)
         if url:
             self.clipboard_clear()
             self.clipboard_append(url)
             self.copy_btn.configure(text="Copied!")
             self.after(2000, lambda: self.copy_btn.configure(text="Copy URL"))
+        else:
+            messagebox.showwarning("Warning", "URL is not ready yet.")
+
+    def copy_remote_url(self):
+        url = self.get_remote_url()
+        if url:
+            self.clipboard_clear()
+            self.clipboard_append(url)
+            self.copy_remote_btn.configure(text="Copied!")
+            self.after(2000, lambda: self.copy_remote_btn.configure(text="Copy URL"))
         else:
             messagebox.showwarning("Warning", "URL is not ready yet.")
 
@@ -991,8 +1358,30 @@ class App(ctk.CTk):
         title_text = curr.get("title", "None") if curr else "None"
         self.now_playing_label.configure(text=title_text)
 
-        # 2. Tunnel URL
-        self.tunnel_label.configure(text=self.streamer_core.tunnel_url or "Starting tunnel...")
+        # 2. URL 表示（ワールド用 動画URL / Webリモコン URL）
+        core = self.streamer_core
+        mode = core.get_output_mode()
+        active = core.get_active_output_mode()
+        mode_label = core.get_output_mode_label(mode, short=True)
+        active_label = core.get_output_mode_label(active, short=True)
+
+        if getattr(core, "destination_fallback_active", False):
+            self.tunnel_title.configure(
+                text=f"🌍 ワールド用 動画URL  ⚠ {mode_label} へ接続できず {active_label} へ退避中:",
+                text_color="#F39C12",
+            )
+        else:
+            self.tunnel_title.configure(text=f"🌍 ワールド用 動画URL ({active_label}):", text_color="gray")
+
+        video_url = self.get_world_video_url(include_secrets=self.video_url_revealed)
+        if not video_url:
+            if active == "generic_rtmp":
+                video_url = "（汎用RTMPの再生URLは配信先サーバーの構成に依存します）"
+            else:
+                video_url = "Starting tunnel..."
+        self.tunnel_label.configure(text=video_url)
+
+        self.remote_label.configure(text=self.get_remote_url() or "Starting tunnel...")
 
         # 3. Queue List
         with self.streamer_core.queue_lock:
@@ -1194,22 +1583,23 @@ def main():
     parser.add_argument("--no-tunnel", "-nt", action="store_true", help="Disable Cloudflare tunnel (run in local test mode)")
     parser.add_argument("--port", "-p", type=int, default=None, help="Port for API and HLS server (default: 8000 or config.json)")
     parser.add_argument("--host", type=str, default=None, help="Host address to bind (default: 127.0.0.1 or config.json)")
+    parser.add_argument("--classic-ui", action="store_true",
+                        help="Use the legacy CustomTkinter window instead of the modern WebView host UI")
+    add_config_arguments(parser)
 
     args = parser.parse_args()
 
-    # トンネル有効/無効の判定
-    override_tunnel = None
-    if args.tunnel:
-        override_tunnel = True
-    elif args.no_tunnel:
-        override_tunnel = False
+    # CLI引数と環境変数(VRCMS_*)を「その起動限りの上書き」としてまとめる。
+    # config.json へは書かれない（LayeredConfig の上書き層に載る）。
+    try:
+        overrides = build_overrides(args)
+    except ValueError as e:
+        parser.error(str(e))
+    if overrides:
+        log_print(f"[Config] Session overrides: {describe_overrides(overrides)}")
 
     # コアの初期化
-    core = StreamerCore(
-        override_port=args.port,
-        override_host=args.host,
-        override_enable_tunnel=override_tunnel
-    )
+    core = StreamerCore(overrides=overrides, config_path=args.config)
 
     # cloudflared.exeの存在確認 (トンネル有効時のみ必須)
     if core.enable_tunnel and not os.path.exists(CLOUDFLARED_EXE):
@@ -1237,6 +1627,19 @@ def main():
     if args.headless:
         run_headless_mode(core, server)
     else:
+        # 既定はモダンUI（Webリモコンと同じ画面を WebView2 で表示する）。
+        # WebView2 が使えない環境や --classic-ui 指定時は従来の CustomTkinter 画面へ落ちる。
+        # 「起動したのに何も出ない」を避けるため、判断はここ一箇所に集約している。
+        use_classic = args.classic_ui or str(core.config.get("host_ui", "web")).lower() == "classic"
+        if not use_classic:
+            try:
+                from host_window import run_host_window
+                if run_host_window(core, server):
+                    sys.exit(0)
+                log_print("[GUI] Modern host window unavailable. Falling back to the classic UI.")
+            except Exception as e:
+                log_print(f"[GUI] Modern host window failed ({e}). Falling back to the classic UI.")
+
         app = App(core, server)
         app.mainloop()
 

@@ -1,0 +1,151 @@
+﻿==================================================
+ VRC_Media_Streamer — 第三者ソフトウェアのライセンス表記
+==================================================
+
+本パッケージには、以下の第三者ソフトウェアが同梱または内包されています。
+各ソフトウェアはそれぞれの権利者に帰属し、記載のライセンス条件に従って
+再配布されています。
+
+FFmpeg（GPL v3）については、別ファイル「FFmpeg_LICENSE.txt」に
+ソースコードの入手方法を含めた詳細を記載しています。
+
+--------------------------------------------------
+1. cloudflared  （VRC_Media_Streamer.exe に内包）
+--------------------------------------------------
+Copyright (c) Cloudflare, Inc.
+License : Apache License, Version 2.0
+Source  : https://github.com/cloudflare/cloudflared
+License text : https://www.apache.org/licenses/LICENSE-2.0
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+
+--------------------------------------------------
+2. yt-dlp  （VRC_Media_Streamer.exe に内包 / v2026.7.4）
+--------------------------------------------------
+License : The Unlicense（パブリックドメイン相当）
+Source  : https://github.com/yt-dlp/yt-dlp
+
+--------------------------------------------------
+3. Python  （VRC_Media_Streamer.exe に内包 / CPython 3.12）
+--------------------------------------------------
+Copyright (c) 2001-2026 Python Software Foundation. All Rights Reserved.
+License : PSF License Agreement
+Source  : https://www.python.org/downloads/
+
+--------------------------------------------------
+4. Tcl/Tk  （VRC_Media_Streamer.exe に内包 / 8.6）
+--------------------------------------------------
+Copyright (c) The Regents of the University of California and other parties
+License : Tcl/Tk License（BSD類似）
+Source  : https://www.tcl-lang.org/software/tcltk/
+
+--------------------------------------------------
+5. CustomTkinter  （v6.0.0）
+--------------------------------------------------
+Copyright (c) Tom Schimansky
+License : MIT License
+Source  : https://github.com/TomSchimansky/CustomTkinter
+
+--------------------------------------------------
+6. Pillow (PIL Fork)  （v12.3.0）
+--------------------------------------------------
+Copyright (c) 1997-2011 by Secret Labs AB
+Copyright (c) 1995-2011 by Fredrik Lundh and contributors
+Copyright (c) 2010 by Jeffrey A. Clark and contributors
+License : MIT-CMU License
+Source  : https://github.com/python-pillow/Pillow
+
+--------------------------------------------------
+7. python-qrcode  （v8.2）
+--------------------------------------------------
+Copyright (c) 2011, Lincoln Loop
+License : BSD 3-Clause License
+Source  : https://github.com/lincolnloop/python-qrcode
+
+--------------------------------------------------
+8. Requests  （v2.34.2）
+--------------------------------------------------
+Copyright 2019 Kenneth Reitz
+License : Apache License, Version 2.0
+Source  : https://github.com/psf/requests
+
+--------------------------------------------------
+9. urllib3  （v2.7.0）
+--------------------------------------------------
+Copyright (c) 2008-2020 Andrey Petrov and contributors
+License : MIT License
+Source  : https://github.com/urllib3/urllib3
+
+--------------------------------------------------
+10. certifi  （v2026.6.17）
+--------------------------------------------------
+License : Mozilla Public License 2.0 (MPL-2.0)
+Source  : https://github.com/certifi/python-certifi
+License text : https://mozilla.org/MPL/2.0/
+
+--------------------------------------------------
+11. idna  （v3.18）
+--------------------------------------------------
+Copyright (c) 2013-2024, Kim Davies and contributors
+License : BSD 3-Clause License
+Source  : https://github.com/kjd/idna
+
+--------------------------------------------------
+12. darkdetect  （v0.8.0）
+--------------------------------------------------
+Copyright (c) 2019, Alberto Sottile
+License : BSD 3-Clause License
+Source  : https://github.com/albertosottile/darkdetect
+
+--------------------------------------------------
+13. websockets  （v16.0）
+--------------------------------------------------
+Copyright (c) Aymeric Augustin and contributors
+License : BSD 3-Clause License
+Source  : https://github.com/python-websockets/websockets
+
+--------------------------------------------------
+14. packaging  （v26.2）
+--------------------------------------------------
+License : Apache License 2.0 / BSD 2-Clause（デュアルライセンス）
+Source  : https://github.com/pypa/packaging
+
+--------------------------------------------------
+15. Tailwind CSS  （Webリモコンに同梱 / ui/vendor/tailwind.min.js / v3.4.16）
+--------------------------------------------------
+Copyright (c) Tailwind Labs, Inc.
+License : MIT License
+Source  : https://github.com/tailwindlabs/tailwindcss
+
+--------------------------------------------------
+16. Remix Icon  （Webリモコンに同梱 / ui/vendor/remixicon.* / v4.2.0）
+--------------------------------------------------
+Copyright (c) RemixIcon.com
+License : Apache License, Version 2.0
+Source  : https://github.com/Remix-Design/RemixIcon
+
+--------------------------------------------------
+17. hls.js  （Webリモコンに同梱 / ui/vendor/hls.min.js / v1.5.17）
+--------------------------------------------------
+Copyright (c) Dailymotion (video-dev community)
+License : Apache License, Version 2.0
+Source  : https://github.com/video-dev/hls.js
+
+==================================================
+ MIT / BSD ライセンスの全文について
+==================================================
+上記のうち MIT License および BSD License で提供されるソフトウェアは、
+いずれも「著作権表示および許諾表示をソフトウェアのすべての複製または
+重要な部分に記載すること」を条件としています。本ファイルの記載をもって
+その表示とします。各ライセンスの全文は、上記の Source 欄の
+リポジトリに含まれる LICENSE ファイルを参照してください。

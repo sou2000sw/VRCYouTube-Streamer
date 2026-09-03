@@ -14,6 +14,8 @@ import atexit
 import urllib.request
 import urllib.parse
 import hashlib
+import secrets
+import collections
 import yt_dlp
 import qrcode
 import uuid
@@ -28,6 +30,8 @@ if getattr(sys, 'frozen', False):
 else:
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
     APP_DIR = BASE_PATH
+
+from version import APP_VERSION
 
 CONFIG_FILE = os.path.join(APP_DIR, "config.json")
 HLS_DIR = os.path.join(APP_DIR, "hls_output")
@@ -89,6 +93,11 @@ DEFAULT_CONFIG = {
     "allow_web_queue_add": True,
     "allow_web_queue_edit": True,
     "allow_web_playback_control": True,
+    # 「接続 & スマホ共有」タブ（QRコード・トンネルURL・ワールドへ貼る再生URL）を
+    # ゲスト（Webリモコン）にも見せるか。既定は False。
+    # ここにはPIN付きのリモコンURLと配信先の再生URLが並ぶため、
+    # 「共有された人がさらに他人へ共有できる」状態はホストが明示的に許可したときだけにする。
+    "allow_web_share_info": False,
     "image_display_duration": 15,
     "image_auto_advance": False,
     "overlay_qr_enabled": False,
@@ -105,12 +114,103 @@ DEFAULT_CONFIG = {
     "standby_image_path": "",
     "web_password": "",
     "max_video_upload_mb": 200,
-    "max_video_height": 1080
+    "max_video_height": 1080,
+    # ホスト画面の種類。"web" = Webリモコンと同じモダンUIを WebView2 で表示、
+    # "classic" = 従来の CustomTkinter 画面。WebView2 が使えない環境では
+    # "web" を指定していても自動的に classic へ落ちる（gui_streamer.main）。
+    "host_ui": "web",
+
+    # --- 配信先（destination）: タスク14 ---
+    # output_mode を切り替えるだけで出口（シンク）が変わる。
+    # 既定は TopazChat（低遅延）。接続できない場合は自動でHLSへ退避するため、
+    # 相手サーバーが落ちていても配信自体は途切れない。
+    "output_mode": "topaz",
+    # TopazChat のエンドポイントは個人運営でホスト変更・終了があり得るため、
+    # ハードコードせず設定値として持つ（リビルドなしで追随できるようにする）。
+    "topaz_rtmp_base": "rtmp://topaz.chat/live",
+    "topaz_rtsp_base": "rtspt://topaz.chat/live",
+    "topaz_stream_key": "",
+    "generic_rtmp_url": "",
+    "generic_rtmp_key": "",
+    "rtmp_video_bitrate_kbps": 1500,
+    "rtmp_audio_bitrate_kbps": 192,
+    "rtmp_video_width": 1280,
+    "rtmp_video_height": 720,
+    "rtmp_fps": 30,
+    "rtmp_gop_seconds": 2,
+    "rtmp_fallback_to_hls": True,
+    "rtmp_fallback_after_failures": 3,
+    "rtmp_retry_backoff_max_seconds": 300,
+
+    # 初回セットアップ（配信先とストリームキーの確認）を通過したか。
+    # 既定の TopazChat はストリームキーが要る。キーは再生開始時に自動生成されるが、
+    # それだとワールドに貼るURLが「最初の1本を再生するまで空」になり、
+    # 何を貼ればよいのか分からないまま詰まる。初回だけ明示的に確認させる。
+    "setup_completed": False
 }
+
+# --- 配信先（destination）定義: タスク14 ---
+OUTPUT_MODES = ("hls", "topaz", "generic_rtmp")
+RTMP_OUTPUT_MODES = ("topaz", "generic_rtmp")
+
+# TopazChat 公式README（2026-08-28 確認）に明記された上限。
+# 「大きく上回ると配信が強制的に切断されます」とされているため、推奨値ではなく
+# ソフト側のハードリミットとして扱い、設定値がこれを超える場合は保存時点でクランプする。
+TOPAZ_MAX_VIDEO_KBPS = 2000
+TOPAZ_MAX_AUDIO_KBPS = 320
+
+# ストリームキーは「同じキーを知っていれば誰でも投稿できる」ため、短いキーは乗っ取られる。
+# 初回は必ずソフト側で長いランダム文字列を生成する（手入力での上書きは可能）。
+STREAM_KEY_BYTES = 30          # token_urlsafe(30) => 40文字
+STREAM_KEY_MIN_LENGTH = 32
+
+# ★実測（2026-08-28）: 入力が pipe:0 のFFmpegは、ストリーム情報が確定するまで
+# 出力側のRTMPハンドシェイクを開始しない。つまり「起動直後にプロセスが生きている」ことは
+# 接続成功を意味しない（誰もlistenしていない宛先でも2秒間は平然と生きていた）。
+# そのため到達性は起動前にTCPで確かめ、起動後の生存確認は即死検知の保険として短く持つ。
+SINK_STARTUP_PROBE_SECONDS = 1.0
+
+# 中継の先読み秒数。HLSは手元にセグメントを溜める設計なので先行させるが、
+# RTMPはライブ投稿なので実時間に近づける（詰め込むと遅延と映像破綻を招く）。
+HLS_BUFFER_AHEAD_SECONDS = 15.0
+RTMP_BUFFER_AHEAD_SECONDS = 1.0
+RTMP_CONNECT_TIMEOUT_SECONDS = 3.0
+# この秒数以上生き延びたシンクの死は「一度は繋がった上での切断」とみなし、
+# 連続失敗カウントをリセットして再接続サイクルをやり直す。
+SINK_STABLE_SECONDS = 30.0
+
+# 変更されたらシンクを作り直す必要がある設定キー
+DESTINATION_CONFIG_KEYS = (
+    "output_mode",
+    "topaz_rtmp_base", "topaz_rtsp_base", "topaz_stream_key",
+    "generic_rtmp_url", "generic_rtmp_key",
+    "rtmp_video_bitrate_kbps", "rtmp_audio_bitrate_kbps",
+    "rtmp_video_width", "rtmp_video_height", "rtmp_fps", "rtmp_gop_seconds",
+)
+
+# ★--noconsole ビルドでは sys.stdout がダミーに差し替わり、print はどこにも残らない。
+# 配布先で起きた事象を後から追う手段が無くなるため、ファイルへも必ず書く。
+# 無制限に太らせると配布先のディスクを埋めるので、上限を超えたら1世代だけ退避する。
+LOG_FILE_PATH = os.path.join(APP_DIR, "vrc_media_streamer.log")
+LOG_FILE_MAX_BYTES = 2 * 1024 * 1024
+_log_file_lock = threading.Lock()
+
 
 def log_print(msg):
     try:
         print(msg, flush=True)
+    except Exception:
+        pass
+    # ログ出力の失敗で本処理を止めない（配信中に例外を上げる価値は無い）
+    try:
+        with _log_file_lock:
+            try:
+                if os.path.getsize(LOG_FILE_PATH) > LOG_FILE_MAX_BYTES:
+                    os.replace(LOG_FILE_PATH, LOG_FILE_PATH + ".1")
+            except OSError:
+                pass
+            with open(LOG_FILE_PATH, "a", encoding="utf-8", errors="replace") as f:
+                print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {msg}", file=f)
     except Exception:
         pass
 
@@ -226,6 +326,14 @@ MAX_PLAYLIST_ITEMS = 50
 MAX_QUEUE_CAPACITY = 200
 MAX_PHOTO_CAPACITY = 200
 
+# ストリーム再構築要求のデバウンス。
+# 写真の追加/削除は1枚ごとに再構築を要求するため、GUIから70枚まとめて追加すると
+# 約22秒（実測309ms/枚）にわたり毎回 ffmpeg が kill→再起動され、HLSセグメントが
+# 安定して出力されず配信が停止する。最後の要求から静穏になるまで待って1回だけ再構築する。
+RELOAD_DEBOUNCE_SECONDS = 1.0
+# 要求が途切れず続く場合でも、この秒数を超えたら反映する（際限なく先送りしない）。
+RELOAD_MAX_DEFER_SECONDS = 10.0
+
 def is_safe_url(url):
     """URLが安全か（http/https、SSRF・ローカルアドレス拒否）を検証"""
     if not url or not isinstance(url, str):
@@ -298,44 +406,167 @@ def is_video_url_or_file(path_or_url):
     clean = path_or_url.split("?")[0].split("#")[0].lower()
     return clean.endswith((".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".ts", ".flv"))
 
+def _run_probe(cmd, timeout):
+    """probe用の外部プロセスを実行し、呼び出し元を絶対に永久ブロックさせない。
+
+    subprocess.run(timeout=...) は TimeoutExpired を投げる前に kill() したうえで
+    タイムアウト無しの communicate() を呼ぶ。子プロセスが低速な外付けHDD/USB/
+    ネットワークドライブの I/O 待ちで止まっていると TerminateProcess は即座には
+    効かず、この2回目の communicate() が戻らない。呼び出し元スレッドはそこで
+    永久に刺さる。そのため reap 側にもタイムアウトを置き、最後は子を捨てて必ず戻る。
+
+    戻り値: (stdout, stderr) いずれも str。失敗時は ("", "")。
+    """
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,   # --noconsole ビルドでは stdin ハンドルが無効。
+                                        # ffmpeg は対話コマンド用に stdin を読むため必須。
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace",
+            creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
+    except Exception:
+        return "", ""
+
+    try:
+        return proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log_print(f"[Probe] Timed out after {timeout}s: {os.path.basename(str(cmd[-1]))}")
+    except Exception:
+        pass
+
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        # kill が効かない（I/O待ちで停止中）場合でもここで諦めて戻る。
+        # 子はデーモン扱いで放置し、OSがドライブ復帰後に回収する。
+        proc.communicate(timeout=2)
+    except Exception:
+        pass
+    return "", ""
+
+
 def get_video_file_duration(file_path):
     """ffprobe または ffmpeg を用いてローカル動画の再生時間（秒）を取得"""
     if not file_path or not os.path.exists(file_path):
         return 0.0
+
+    # 外付けHDD/USB/NAS 上のファイルはシーク1回が数秒かかる。
+    # ffprobe は 0.3秒前後で終わるが、ffmpeg -i へのフォールバックは
+    # ローカルSSDでも約3秒かかる（実測）ため、遅いメディアを想定した秒数にする。
     try:
-        cmd = [
+        out, _ = _run_probe([
             get_ffprobe_cmd(),
             "-v", "error",
             "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1",
             file_path
-        ]
-        res = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, timeout=5,
-            creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            val = float(res.stdout.strip())
+        ], timeout=20)
+        if out.strip():
+            val = float(out.strip())
             if val > 0:
                 return val
     except Exception:
         pass
 
     try:
-        cmd = [get_ffmpeg_cmd(), "-i", file_path]
-        res = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, timeout=5,
-            creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0
-        )
-        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", res.stderr)
+        _, err = _run_probe([get_ffmpeg_cmd(), "-i", file_path], timeout=30)
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", err)
         if m:
             hours, minutes, seconds = float(m.group(1)), float(m.group(2)), float(m.group(3))
             return hours * 3600 + minutes * 60 + seconds
     except Exception:
         pass
+
+    log_print(f"[Probe] Could not determine duration: {os.path.basename(str(file_path))}")
     return 0.0
+
+
+# ストリームコピーを許す画素フォーマット。yuvj420p はレンジ表記が違うだけの同一構造。
+# 4:2:2 / 10bit は AVPro 側で再生できない環境があるため通さない。
+COPY_SAFE_PIX_FMTS = frozenset({"yuv420p", "yuvj420p"})
+
+
+def probe_video_stream_params(file_path):
+    """ローカル動画の映像ストリーム諸元を取得する。取得できなければ None。
+
+    ここで見るのは「再エンコードせずにそのまま流せるか」の判断に必要な項目だけ。
+    低速メディアで固まらないよう、必ず _run_probe 経由で叩く。
+    """
+    if not file_path or not os.path.exists(file_path):
+        return None
+    try:
+        out, _ = _run_probe([
+            get_ffprobe_cmd(),
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name,pix_fmt,height,r_frame_rate,avg_frame_rate",
+            "-of", "default=noprint_wrappers=1",
+            file_path
+        ], timeout=20)
+    except Exception:
+        return None
+
+    params = {}
+    for line in out.splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            params[k.strip()] = v.strip()
+    return params or None
+
+
+def _parse_fps(value):
+    """ffprobe の "30000/1001" 形式を float にする。不明なら 0.0。"""
+    try:
+        num, _, den = str(value).partition("/")
+        den = float(den) if den else 1.0
+        return float(num) / den if den else 0.0
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def can_stream_copy_local_video(params, max_height):
+    """再エンコードせずにそのまま送出してよいローカル動画かを判定する。
+
+    ローカルファイルを無条件に再エンコードすると、URL追加なら無劣化で届く映像が
+    アップロードした途端に作り直される（実測: 4.76Mbps の原本が 2500kbps へ再圧縮され
+    SSIM 1.000 → 0.9918）。**同じ品質で出す**には、安全に通せるものは通すしかない。
+
+    通す条件は「受信側FFmpegとAVProがそのまま扱える形であること」に限る:
+      - H.264 / yuv420p 系（HEVC・VP9・10bit・4:2:2 は再生できない環境がある）
+      - 配信上限の高さ以内（4K をそのまま投げても VRChat 側で扱えない）
+      - CFR であること。スマホ動画に多い VFR をコピーすると、
+        タイムスタンプがそのまま下流へ渡って音ズレの原因になる。
+    判定できない項目が一つでもあれば「通さない」に倒す（fail-closed）。
+    """
+    if not params:
+        return False, "probe failed"
+    if params.get("codec_name") != "h264":
+        return False, f"codec={params.get('codec_name')}"
+    if params.get("pix_fmt") not in COPY_SAFE_PIX_FMTS:
+        return False, f"pix_fmt={params.get('pix_fmt')}"
+    try:
+        height = int(params.get("height") or 0)
+    except (TypeError, ValueError):
+        height = 0
+    if height <= 0:
+        return False, "height unknown"
+    if max_height and height > max_height:
+        return False, f"height={height}>{max_height}"
+
+    r_fps = _parse_fps(params.get("r_frame_rate"))
+    avg_fps = _parse_fps(params.get("avg_frame_rate"))
+    if r_fps <= 0 or avg_fps <= 0:
+        return False, "fps unknown"
+    # 1%を超えて食い違うものは可変フレームレートとみなす
+    if abs(r_fps - avg_fps) / max(r_fps, avg_fps) > 0.01:
+        return False, f"vfr({r_fps:.2f}/{avg_fps:.2f})"
+
+    return True, f"h264 {height}p {avg_fps:.2f}fps"
+
 
 def extract_pts_from_ts_chunk(chunk):
     """MPEG-TSチャンクから再生位置PTS（秒）を抽出する。
@@ -398,24 +629,153 @@ def extract_pts_from_ts_chunk(chunk):
         return None
     return min(found)
 
+class LayeredConfig(dict):
+    """3層（既定値 < config.json < CLI/環境変数）の設定を、単一の dict として見せる。
+
+    `self.config[...]` の参照箇所がコード全体で200箇所を超えるため、dict を別の型へ
+    差し替えず dict のサブクラスにしている。dict としての中身は常に「実効値」
+    （3層をマージした結果）なので、既存の読み取り・書き込みは無修正で動く。
+
+    書き込みには意味の異なる2種類があり、混ぜると壊れる:
+      - ``cfg[key] = value`` : 利用者が設定を変えた → 永続層(user)へ記録する。
+        ただし CLI で上書き中のキーは、その起動中の実効値を CLI 値のまま保つ。
+      - ``set_override(key, value)`` : その起動限りの指定 → 永続層には絶対に触れない。
+
+    以前は「CLI値を実効設定へ直接載せ、保存直前に元の値へ戻す」方式だったが、
+    GUI の設定画面がフォーム全体（＝CLI上書き後の実効値）を送り返すため、
+    「利用者が変更した」と誤認して CLI 値が config.json へ焼き付いていた。
+    """
+
+    def __init__(self, defaults=None):
+        super().__init__()
+        self._defaults = dict(defaults or {})
+        self._user = {}
+        self._overrides = {}
+        self._override_sources = {}
+        self._recompute()
+
+    # --- 層の入れ替え ---------------------------------------------------
+    def load_user(self, data):
+        """config.json から読んだ内容を永続層として据える（実効値は再計算）。"""
+        self._user = dict(data or {})
+        self._recompute()
+
+    def set_override(self, key, value, source="cli"):
+        """その起動限りの上書きを設定する。永続層には触れない。"""
+        self._overrides[key] = value
+        self._override_sources[key] = source
+        self._recompute()
+
+    def clear_override(self, key):
+        """上書きを解除する（利用者がその項目を明示的に変更したとき）。"""
+        existed = self._overrides.pop(key, None) is not None
+        self._override_sources.pop(key, None)
+        if existed:
+            self._recompute()
+        return existed
+
+    # --- 参照 -----------------------------------------------------------
+    def is_overridden(self, key):
+        return key in self._overrides
+
+    def override_source(self, key):
+        """上書きの出所（"cli" / "env" / "api" 等）。上書きが無ければ None。"""
+        return self._override_sources.get(key)
+
+    def overrides(self):
+        return dict(self._overrides)
+
+    def override_sources(self):
+        return dict(self._override_sources)
+
+    def persistable(self):
+        """config.json へ書き出すべき内容（既定値＋利用者設定。上書きは含めない）。
+
+        既定値も含めるのは、従来どおり人が読める完全な config.json を保つため。
+        含めなくても動作は同じだが、既存ファイルの項目が保存のたびに消えてしまう。
+        """
+        merged = dict(self._defaults)
+        merged.update(self._user)
+        return merged
+
+    def defaults(self):
+        return dict(self._defaults)
+
+    # --- 書き込み（＝永続層への記録） -----------------------------------
+    def __setitem__(self, key, value):
+        self._user[key] = value
+        self._recompute_key(key)
+
+    def __delitem__(self, key):
+        self._user.pop(key, None)
+        self._recompute_key(key)
+
+    def pop(self, key, *args):
+        current = self.get(key, *args) if args else self[key]
+        self._user.pop(key, None)
+        self._recompute_key(key)
+        return current
+
+    def update(self, *args, **kwargs):
+        incoming = dict(*args, **kwargs)
+        for key, value in incoming.items():
+            self[key] = value
+
+    def setdefault(self, key, default=None):
+        if key in self:
+            return self[key]
+        self[key] = default
+        return self[key]
+
+    def clear(self):
+        self._user = {}
+        self._recompute()
+
+    # --- 実効値の再計算 --------------------------------------------------
+    def _effective(self, key):
+        if key in self._overrides:
+            return self._overrides[key]
+        if key in self._user:
+            return self._user[key]
+        return self._defaults.get(key)
+
+    def _recompute_key(self, key):
+        if key in self._overrides or key in self._user or key in self._defaults:
+            dict.__setitem__(self, key, self._effective(key))
+        else:
+            dict.pop(self, key, None)
+
+    def _recompute(self):
+        dict.clear(self)
+        merged = dict(self._defaults)
+        merged.update(self._user)
+        merged.update(self._overrides)
+        dict.update(self, merged)
+
+
 class StreamerCore:
-    def __init__(self, override_port=None, override_host=None, override_enable_tunnel=None):
-        self.config = DEFAULT_CONFIG.copy()
+    def __init__(self, override_port=None, override_host=None, override_enable_tunnel=None,
+                 overrides=None, config_path=None):
+        # config.json のパスは差し替え可能にしてある。モジュール定数のまま固定すると
+        # 単体テストが利用者の実ファイルを書き換えてしまう（実際に汚染が起きた）。
+        self.config_path = config_path or CONFIG_FILE
+        self.config = LayeredConfig(DEFAULT_CONFIG)
         self.load_config()
-        # コマンドライン引数による上書きは「その起動限りの指定」であり、config.json には焼き付けない。
-        # 以前は self.config に直接載せていたため、UI から何か設定を変えて save_config() が走るたびに
-        # --port / --host / --no-tunnel の値が config.json に永続化されていた。
-        # これが「開発者がローカルテストした設定がそのまま配布物の既定値になる」原因だった。
-        self._cli_override_baseline = {}
+        # コマンドライン引数・環境変数による上書きは「その起動限りの指定」であり、
+        # config.json には焼き付けない。LayeredConfig の上書き層に載せることで、
+        # 実効値としては最優先されつつ、保存対象からは構造的に外れる。
         for key, value in (("port", override_port), ("host", override_host)):
             if value is not None:
-                self._cli_override_baseline[key] = self.config.get(key)
-                self.config[key] = value
+                self.config.set_override(key, value, "cli")
         if override_enable_tunnel is not None:
-            self._cli_override_baseline["enable_tunnel"] = self.config.get("enable_tunnel")
-            self.config["enable_tunnel"] = bool(override_enable_tunnel)
-
-        self.enable_tunnel = bool(self.config.get("enable_tunnel", True))
+            self.config.set_override("enable_tunnel", bool(override_enable_tunnel), "cli")
+        # 汎用の上書き（--set / 環境変数 / 追加CLI引数）。{key: (value, source)} 形式。
+        for key, entry in (overrides or {}).items():
+            if isinstance(entry, tuple):
+                value, source = entry
+            else:
+                value, source = entry, "cli"
+            self.config.set_override(key, value, source)
 
         os.makedirs(HLS_DIR, exist_ok=True)
         self.clean_hls_dir(all_files=True, preserve_images=False)
@@ -425,6 +785,20 @@ class StreamerCore:
         self.send_proc = None
         self.tunnel_proc = None
         self.current_stdin = None
+
+        # 配信先（destination）状態: タスク14
+        # active_output_mode は「設定上の配信先」ではなく「今この瞬間に動いている出口」。
+        # HLSへ自動退避しているときに両者がずれるため、必ず分けて持つ。
+        self.active_output_mode = self.get_output_mode()
+        self.destination_fallback_active = False
+        self.destination_last_error = ""
+        self.last_config_warnings = []   # 直近の設定保存で弾いた値の理由（UIへ返す）
+        self._sink_fail_count = 0        # 現在の再接続サイクル内での連続失敗数
+        self._sink_fallback_rounds = 0   # HLSへ退避した回数（バックオフ長の算出に使う）
+        self._sink_started_at = 0.0
+        self._sink_retry_at = 0.0
+        self._sink_force_restart = False
+        self._sink_stderr_tail = collections.deque(maxlen=20)
 
         self.play_queue = [] # list of dict: [{"title": "...", "url": "...", "duration": ..., "type": "video"}]
         self.photo_pool = [] # list of dict: [{"id": "...", "type": "image", "title": "...", "url": "...", "path": "...", "duration": ...}]
@@ -455,7 +829,26 @@ class StreamerCore:
         self.skip_event = threading.Event()
         self.video_done_event = threading.Event()
         self.reload_stream_event = threading.Event()
+        self.reload_requested_at = 0.0       # 直近の要求時刻（デバウンス判定用）
+        self.reload_first_requested_at = 0.0 # 未処理の要求列の先頭時刻（先送り上限用）
         self.current_video_start_time = None
+
+    def request_stream_reload(self):
+        """ストリームの再構築を要求する。連続呼び出しはデバウンスされ1回にまとまる。"""
+        now = time.time()
+        if not self.reload_stream_event.is_set():
+            self.reload_first_requested_at = now
+        self.reload_requested_at = now
+        self.reload_stream_event.set()
+
+    def _reload_due(self):
+        """再構築要求が「もう静穏になった」か。監視ループ側から呼ぶ。"""
+        if not self.reload_stream_event.is_set():
+            return False
+        now = time.time()
+        if now - self.reload_first_requested_at >= RELOAD_MAX_DEFER_SECONDS:
+            return True
+        return (now - self.reload_requested_at) >= RELOAD_DEBOUNCE_SECONDS
 
     def clean_hls_dir(self, all_files=False, preserve_images=False):
         """HLS出力ディレクトリのクリーンアップ。
@@ -497,37 +890,110 @@ class StreamerCore:
                 log_print(f"[Core] Warning cleaning HLS dir: {e}")
                 time.sleep(0.2)
 
+    @property
+    def enable_tunnel(self):
+        """設定の写しを別途持たない。以前は3箇所で代入しており、設定と食い違う余地があった。"""
+        return bool(self.config.get("enable_tunnel", True))
+
+    @enable_tunnel.setter
+    def enable_tunnel(self, value):
+        # 利用者による変更として永続層へ記録する。CLI で上書き中なら
+        # その起動中の実効値は CLI 値のまま（LayeredConfig 側で保証）。
+        self.config["enable_tunnel"] = bool(value)
+
     def load_config(self):
-        if os.path.exists(CONFIG_FILE):
+        path = getattr(self, "config_path", CONFIG_FILE)
+        if os.path.exists(path):
             try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                with open(path, "r", encoding="utf-8") as f:
                     saved = json.load(f)
                     if isinstance(saved, dict):
-                        self.config.update(saved)
-                log_print(f"[Core] Loaded config from {CONFIG_FILE}")
+                        # 永続層として据える。update() だと利用者の変更として扱われ、
+                        # CLI上書きとの区別がつかなくなる。
+                        self.config.load_user(saved)
+                log_print(f"[Core] Loaded config from {path}")
             except Exception as e:
                 log_print(f"[Core] Error reading config: {e}")
 
+    def _write_config_file(self):
+        """config.json への書き出し本体。CLI/環境変数由来の上書きは構造的に含まれない。"""
+        path = getattr(self, "config_path", CONFIG_FILE)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.config.persistable(), f, indent=2, ensure_ascii=False)
+
     def save_config(self, new_config=None):
-        baseline = getattr(self, "_cli_override_baseline", {})
+        destination_changed = False
+        if new_config:
+            # CLI/環境変数で上書き中のキーが「実効値と同じ値」で返ってきた場合は、
+            # 利用者が触ったのではなく設定画面がフォーム全体をそのまま送り返しただけ。
+            # ここで弾かないと、--no-tunnel で起動して別項目を保存しただけで
+            # enable_tunnel:false が config.json に焼き付く（実際に起きていた）。
+            echoed = [
+                k for k, v in new_config.items()
+                if self.config.is_overridden(k) and v == self.config.get(k)
+            ]
+            if echoed:
+                new_config = {k: v for k, v in new_config.items() if k not in echoed}
+                log_print(f"[Config] Ignored echoed override values (not persisted): {', '.join(sorted(echoed))}")
+        if new_config:
+            # UI/GUI が表示用のマスク値をそのまま送り返してきた場合、本物のキーを潰さない
+            for key_field in ("topaz_stream_key", "generic_rtmp_key"):
+                if key_field in new_config and self.is_masked_stream_key(new_config.get(key_field)):
+                    new_config = dict(new_config)
+                    new_config.pop(key_field, None)
+            destination_changed = any(
+                k in new_config and new_config.get(k) != self.config.get(k)
+                for k in DESTINATION_CONFIG_KEYS
+            )
+        endpoint_errors = []
+        if new_config:
+            for field in self.ENDPOINT_SCHEMES:
+                if field not in new_config:
+                    continue
+                normalized, reason = self.validate_endpoint(field, new_config.get(field))
+                if reason:
+                    # 不正な値は採用しない（黙って壊れた設定を保存しない）
+                    endpoint_errors.append(reason)
+                    log_print(f"[Destination] Rejected invalid endpoint: {reason}")
+                    new_config = dict(new_config)
+                    new_config.pop(field, None)
+                elif not normalized and field.startswith("topaz_"):
+                    # TopazChat のエンドポイントは空にできない。既定値へ戻す
+                    new_config = dict(new_config)
+                    new_config[field] = DEFAULT_CONFIG[field]
+                else:
+                    new_config = dict(new_config)
+                    new_config[field] = normalized
+
+        # 検証エラーは「接続状態」とは別物として持つ。destination_last_error に入れると
+        # シンクの起動成功で即座に消されてしまい、利用者に理由が届かない。
+        self.last_config_warnings = list(endpoint_errors)
+
         if new_config:
             self.config.update(new_config)
-            if "enable_tunnel" in new_config:
-                self.enable_tunnel = bool(new_config["enable_tunnel"])
-            # 利用者が明示的に変更した項目は、CLI上書きの対象から外して永続化する
-            for key in [k for k in baseline if k in new_config]:
-                del baseline[key]
+            # 利用者が明示的に「別の値」へ変更した項目は、その起動中も変更を反映させる。
+            # （エコー分は上で除外済みなので、ここに残るのは意図的な変更だけ）
+            for key in list(new_config.keys()):
+                if self.config.is_overridden(key):
+                    self.config.clear_override(key)
+                    log_print(f"[Config] Override for '{key}' released by explicit change.")
         try:
-            persisted = dict(self.config)
-            # CLI 由来の一時的な上書きは、保存前に元の値へ戻す
-            for key, original in baseline.items():
-                if original is None:
-                    persisted.pop(key, None)
-                else:
-                    persisted[key] = original
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(persisted, f, indent=2, ensure_ascii=False)
+            # 上限超過の設定値は「接続した瞬間に切断される」ため、保存前にクランプする
+            self.clamp_rtmp_bitrates()
+            self._write_config_file()
             log_print(f"[Core] Saved config to {CONFIG_FILE}")
+
+            if destination_changed:
+                # 配信先を変えたらシンクを作り直す。退避状態とリトライ計数もここで解除する。
+                log_print(f"[Destination] Destination settings changed. Rebuilding sink (mode={self.get_output_mode()}).")
+                self.destination_fallback_active = False
+                self.destination_last_error = ""
+                self._sink_fail_count = 0
+                self._sink_fallback_rounds = 0
+                self._sink_retry_at = 0.0
+                self._sink_force_restart = True
+                self.ensure_stream_sink()
+                self.request_stream_reload()
 
             # 最新設定でQRオーバーレイ・待機画像を即座に再生成
             self.generate_qr_overlay_image()
@@ -545,14 +1011,18 @@ class StreamerCore:
             elif is_playing:
                 # 動画または写真の再生中なら、即座に現在のストリームをホットリロード
                 log_print("[Core] Triggering hot-reload of active stream with updated settings...")
-                self.reload_stream_event.set()
+                self.request_stream_reload()
 
             return True
         except Exception as e:
             log_print(f"[Core] Failed to save config: {e}")
             return False
 
-    def get_status_data(self):
+    def get_status_data(self, include_secrets=False):
+        """配信状態一式。include_secrets=True はローカルホスト（ホスト本人）専用。
+
+        ストリームキーは /api/status 経由でゲストにも渡るため、既定ではマスクする。
+        """
         with self.queue_lock:
             queue_copy = [dict(item) for item in self.play_queue]
             has_prev = len(self.history_stack) >= 2
@@ -570,11 +1040,29 @@ class StreamerCore:
 
         is_image = bool(self.current_video and self.current_video.get("type") == "image")
 
+        destination = self.get_destination_info(include_secrets=include_secrets)
+        # destination 導入後は「ワールドの動画プレイヤーに貼るURL」と
+        # 「Webリモコンを開くURL」が別物になる。QRが焼くのは後者だけ。
+        video_url = destination.get("video_url", "")
+        if self.get_active_output_mode() == "hls":
+            video_url = stream_url
+
         return {
             "status": self.status,
             "status_detail": self.status_detail,
+            "app_version": APP_VERSION,
             "tunnel_url": public_url,
+            # 「Cloudflareトンネルが実際に張れているか」。UIのトンネル表示はこれを見る。
+            # tunnel_url / tunnel_raw_url は --no-tunnel のとき start_tunnel() が
+            # localhost を代入するため、どちらも真偽判定には使えない
+            # （UIが Local Test 起動でも常に Active と表示していた原因）。
+            "tunnel_active": bool(self.enable_tunnel and self.tunnel_raw_url),
             "stream_url": stream_url,
+            "video_url": video_url,
+            "remote_url": public_url,
+            "destination": destination,
+            "output_mode": destination["output_mode"],
+            "active_output_mode": destination["active_output_mode"],
             "local_url": f"http://localhost:{port}",
             "enable_tunnel": self.enable_tunnel,
             "current_video": self.current_video,
@@ -601,10 +1089,12 @@ class StreamerCore:
             "standby_image_path": str(self.config.get("standby_image_path", "")),
             "has_prev": has_prev,
             "has_web_password": bool(str(self.config.get("web_password", "")).strip()),
+            "setup_completed": self.is_setup_completed(),
             "permissions": {
                 "allow_web_queue_add": bool(self.config.get("allow_web_queue_add", True)),
                 "allow_web_queue_edit": bool(self.config.get("allow_web_queue_edit", True)),
-                "allow_web_playback_control": bool(self.config.get("allow_web_playback_control", True))
+                "allow_web_playback_control": bool(self.config.get("allow_web_playback_control", True)),
+                "allow_web_share_info": bool(self.config.get("allow_web_share_info", False))
             }
         }
 
@@ -626,7 +1116,7 @@ class StreamerCore:
         self.config["playback_mode"] = mode
         self.config["radio_mode"] = (mode == "radio")
         self.save_config()
-        self.reload_stream_event.set()
+        self.request_stream_reload()
         log_print(f"[Core] Playback mode set to: {mode}")
         return mode
 
@@ -727,25 +1217,343 @@ class StreamerCore:
         log_print("[Core] No previous item in history.")
         return False
 
-    def ensure_hls_receiver(self):
-        """HLS受信FFmpegが動いていれば維持し、未起動/停止時のみ起動する（ストリーム連続性を保持）"""
-        with self.process_lock:
-            if self.hls_proc and self.hls_proc.poll() is None and self.current_stdin:
-                return True
+    def _ts_offset_opts(self):
+        """累積PTSオフセットの出力オプション。
 
-            if self.hls_proc:
-                kill_proc(self.hls_proc)
-                self.hls_proc = None
-                self.current_stdin = None
-                time.sleep(0.2)
+        ★実測(2026-08-30): -output_ts_offset は「出力」オプションであり、
+        -i より前に置くと黙って無視される（10秒指定しても出力PTSは素通しだった）。
+        アイテム切替のたびにPTSが 0 付近へ戻るため、受信側は
+        「DTS out of order」「Packet corrupt」を起こす。HLSは寛容で表面化しなかったが、
+        RTMP経路では再エンコード入力が壊れ、音声は無事なのに映像だけが乱れる。
+        """
+        if self.accumulated_pts > 0:
+            return ["-output_ts_offset", f"{self.accumulated_pts:.3f}"]
+        return []
+
+    # ------------------------------------------------------------------
+    # 配信先（destination）: タスク14
+    #
+    # 出口を定義しているのはこのブロックだけである。永続シンクFFmpegが pipe:0 から
+    # MPEG-TS を読み、各再生アイテムのFFmpegが current_stdin へ流し込む構造のため、
+    # 送信側には一切触れずにシンクを差し替えるだけで配信先を切り替えられる。
+    # ------------------------------------------------------------------
+    def get_output_mode(self):
+        """設定上の配信先モード。未知の値は既定の 'hls' へ落とす（fail-safe）。"""
+        mode = str(self.config.get("output_mode", "hls") or "hls").strip().lower()
+        return mode if mode in OUTPUT_MODES else "hls"
+
+    def get_active_output_mode(self):
+        """実際に今動かすべき配信先。HLSへ自動退避中は 'hls'。"""
+        if getattr(self, "destination_fallback_active", False):
+            return "hls"
+        return self.get_output_mode()
+
+    def is_setup_completed(self):
+        """初回セットアップ案内を出す必要がないか。
+
+        判定に **ストリームキーの有無は使えない**。start_background_tasks() が起動時に
+        ensure_stream_sink() を呼び、TopazChat ではその時点で ensure_stream_key() が
+        キーを自動生成して config へ書くため、新規インストールでも初回ポーリングの
+        時点では既にキーが存在する。これを「設定済み」と読むと案内が永久に出ない。
+
+        配信先を TopazChat 以外にしている利用者は、自分で選んだ結果なので案内しない。
+        """
+        if bool(self.config.get("setup_completed", False)):
+            return True
+        return self.get_output_mode() != "topaz"
+
+    @staticmethod
+    def generate_stream_key():
+        """乗っ取り防止のため十分に長いランダムキーを生成する。"""
+        return secrets.token_urlsafe(STREAM_KEY_BYTES)
+
+    @staticmethod
+    def mask_stream_key(key):
+        """ログ・API・GUI・QR の全経路で使う共通マスク。"""
+        key = str(key or "")
+        if not key:
+            return ""
+        if len(key) <= 8:
+            return "*" * len(key)
+        return f"{key[:2]}{'*' * (len(key) - 4)}{key[-2:]}"
+
+    @staticmethod
+    def is_masked_stream_key(value):
+        """UIが表示用のマスク値をそのまま送り返してきた場合に本物のキーを潰さないための判定。"""
+        return "*" in str(value or "")
+
+    @staticmethod
+    def mask_url_key(url):
+        """URL末尾のストリームキーだけを伏せた文字列（ログ出力用）。"""
+        url = str(url or "")
+        if "/" not in url:
+            return url
+        head, _, tail = url.rpartition("/")
+        return f"{head}/{StreamerCore.mask_stream_key(tail)}"
+
+    def ensure_stream_key(self, target="topaz", persist=True):
+        """TopazChat のストリームキーは任意文字列で、公式に決め方の記載がない。
+        短いキーだと第三者に配信を乗っ取られるため、未設定・短すぎる場合は自動生成する。
+        汎用RTMPのキーは相手サーバー側で決まるので生成しない。"""
+        if target == "generic_rtmp":
+            return str(self.config.get("generic_rtmp_key", "") or "")
+
+        current = str(self.config.get("topaz_stream_key", "") or "")
+        if len(current) >= STREAM_KEY_MIN_LENGTH:
+            return current
+
+        new_key = self.generate_stream_key()
+        self.config["topaz_stream_key"] = new_key
+        log_print(f"[Destination] Generated stream key for {target}: {self.mask_stream_key(new_key)}")
+        if persist:
+            try:
+                self._write_config_file()
+            except Exception as e:
+                log_print(f"[Destination] Failed to persist generated stream key: {e}")
+        return new_key
+
+    def get_output_mode_label(self, mode=None, short=False):
+        """配信先の表示名。GUI・Webリモコン・ログで同じ文言を使うためにここへ集約する。
+
+        hls 経路は Cloudflare Quick Tunnel を経由しており「外部サービス不要」ではない。
+        本当にローカル完結なのはトンネルを無効にしたときだけなので、表示を実態に追従させる。
+        """
+        mode = mode or self.get_output_mode()
+        if mode == "topaz":
+            return "TopazChat" if short else "TopazChat（RTMP → RTSP 中継）"
+        if mode == "generic_rtmp":
+            return "汎用RTMP" if short else "汎用RTMP（自前サーバー）"
+        if getattr(self, "enable_tunnel", True):
+            return "Cloudflare HLS" if short else "HLS（Cloudflare トンネル経由）"
+        return "ローカルHLS" if short else "HLS（ローカル配信のみ）"
+
+    ENDPOINT_SCHEMES = {
+        "topaz_rtmp_base": ("rtmp://", "rtmps://"),
+        "topaz_rtsp_base": ("rtsp://", "rtspt://"),
+        "generic_rtmp_url": ("rtmp://", "rtmps://"),
+    }
+
+    @classmethod
+    def validate_endpoint(cls, field, value):
+        """配信先エンドポイントの検証。返り値は (正規化後の値, エラー理由)。
+
+        TopazChat は個人運営でホストが変わり得るため利用者が書き換えられるようにするが、
+        スキームを間違えた値をそのまま保存すると、接続できない理由が分からなくなる。
+        """
+        schemes = cls.ENDPOINT_SCHEMES.get(field, ())
+        text = str(value or "").strip().rstrip("/")
+        if not text:
+            return "", ""
+        if schemes and not text.lower().startswith(schemes):
+            return "", f"{field} は {' / '.join(schemes)} で始まる必要があります: {text}"
+        if " " in text:
+            return "", f"{field} に空白が含まれています: {text}"
+        return text, ""
+
+    def get_rtmp_limits(self, mode=None):
+        """destination ごとの (映像kbps上限, 音声kbps上限)。0 は上限なし。"""
+        mode = mode or self.get_output_mode()
+        if mode == "topaz":
+            return TOPAZ_MAX_VIDEO_KBPS, TOPAZ_MAX_AUDIO_KBPS
+        return 0, 0
+
+    def clamp_rtmp_bitrates(self):
+        """上限超過は「接続した瞬間に切断される」ため、設定値の側をクランプして保存する。"""
+        changed = False
+        max_v, max_a = self.get_rtmp_limits()
+        for field, limit, floor in (
+            ("rtmp_video_bitrate_kbps", max_v, 200),
+            ("rtmp_audio_bitrate_kbps", max_a, 64),
+        ):
+            try:
+                value = int(self.config.get(field, DEFAULT_CONFIG[field]))
+            except (TypeError, ValueError):
+                value = int(DEFAULT_CONFIG[field])
+                changed = True
+            if value < floor:
+                value = floor
+                changed = True
+            if limit and value > limit:
+                log_print(f"[Destination] {field}={value}kbps exceeds the destination limit ({limit}kbps). Clamped.")
+                value = limit
+                changed = True
+            if self.config.get(field) != value:
+                self.config[field] = value
+                changed = True
+        return changed
+
+    def get_rtmp_publish_url(self, mode=None):
+        """RTMP投稿先URL（キー込み）。未設定なら空文字。"""
+        mode = mode or self.get_output_mode()
+        if mode == "topaz":
+            base = str(self.config.get("topaz_rtmp_base", "") or "").strip().rstrip("/")
+            key = self.ensure_stream_key("topaz")
+            if not base or not key:
+                return ""
+            return f"{base}/{key}"
+        if mode == "generic_rtmp":
+            base = str(self.config.get("generic_rtmp_url", "") or "").strip().rstrip("/")
+            key = str(self.config.get("generic_rtmp_key", "") or "").strip()
+            if not base:
+                return ""
+            return f"{base}/{key}" if key else base
+        return ""
+
+    def get_video_url(self, include_secrets=False):
+        """ワールドの動画プレイヤーに貼るURL。Webリモコンを開くURLとは別物である。"""
+        mode = self.get_active_output_mode()
+        port = self.config.get("port", 8000)
+        if mode == "topaz":
+            base = str(self.config.get("topaz_rtsp_base", "") or "").strip().rstrip("/")
+            key = str(self.config.get("topaz_stream_key", "") or "")
+            if not base or not key:
+                return ""
+            return f"{base}/{key if include_secrets else self.mask_stream_key(key)}"
+        if mode == "generic_rtmp":
+            # 再生URLは投稿先サーバーの構成依存であり、こちらでは断定できない
+            return ""
+        if self.tunnel_raw_url:
+            return f"{self.tunnel_raw_url}/stream.m3u8"
+        if not self.enable_tunnel:
+            return f"http://localhost:{port}/stream.m3u8"
+        return ""
+
+    def get_destination_info(self, include_secrets=False):
+        """UI/GUI へ渡す配信先の状態一式。ストリームキーは既定でマスクする。"""
+        mode = self.get_output_mode()
+        active = self.get_active_output_mode()
+        topaz_key = str(self.config.get("topaz_stream_key", "") or "")
+        generic_key = str(self.config.get("generic_rtmp_key", "") or "")
+        return {
+            "output_mode": mode,
+            "active_output_mode": active,
+            "label": self.get_output_mode_label(mode),
+            "label_short": self.get_output_mode_label(mode, short=True),
+            "active_label": self.get_output_mode_label(active),
+            "active_label_short": self.get_output_mode_label(active, short=True),
+            "fallback_active": bool(getattr(self, "destination_fallback_active", False)),
+            "last_error": str(getattr(self, "destination_last_error", "")),
+            "fail_count": int(getattr(self, "_sink_fail_count", 0)),
+            "video_url": self.get_video_url(include_secrets=include_secrets),
+            "topaz_stream_key": topaz_key if include_secrets else self.mask_stream_key(topaz_key),
+            "topaz_stream_key_set": bool(topaz_key),
+            "topaz_rtmp_base": str(self.config.get("topaz_rtmp_base", "") or ""),
+            "topaz_rtsp_base": str(self.config.get("topaz_rtsp_base", "") or ""),
+            "default_topaz_rtmp_base": DEFAULT_CONFIG["topaz_rtmp_base"],
+            "default_topaz_rtsp_base": DEFAULT_CONFIG["topaz_rtsp_base"],
+            "generic_rtmp_url": str(self.config.get("generic_rtmp_url", "") or ""),
+            "generic_rtmp_key": generic_key if include_secrets else self.mask_stream_key(generic_key),
+            "generic_rtmp_key_set": bool(generic_key),
+            "rtmp_video_bitrate_kbps": int(self.config.get("rtmp_video_bitrate_kbps", 1500)),
+            "rtmp_audio_bitrate_kbps": int(self.config.get("rtmp_audio_bitrate_kbps", 192)),
+            "rtmp_fallback_to_hls": bool(self.config.get("rtmp_fallback_to_hls", True)),
+            "max_video_bitrate_kbps": self.get_rtmp_limits()[0],
+            "max_audio_bitrate_kbps": self.get_rtmp_limits()[1],
+        }
+
+    def probe_rtmp_endpoint(self, url):
+        """RTMP投稿先へTCPで到達できるかを起動前に確かめる。
+
+        FFmpeg 側の即死検知だけでは不十分である（実測: pipe:0 入力では、入力データが
+        流れ始めるまで出力側の接続を試みないため、宛先が落ちていても起動直後は生きて見える）。
+        ここで落としておかないと「配信できていないのに配信中に見える」状態になる。
+        返り値は (到達可否, 理由)。
+        """
+        try:
+            parsed = urllib.parse.urlparse(url)
+            host = parsed.hostname
+            port = parsed.port or 1935
+        except Exception as e:
+            return False, f"配信先URLを解釈できません: {e}"
+        if not host:
+            return False, "配信先URLにホスト名がありません"
+
+        # socket.create_connection() にホスト名を渡すと、解決された各アドレス
+        # （IPv4 / IPv6）へ順に「それぞれ満額のタイムアウト」で接続を試みる。
+        # 結果として所要時間が families 倍に伸び、その間ずっと再生スレッドを止めてしまう。
+        # ここでは自分で名前解決し、全体の締切を1本で管理する。
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            return False, f"配信先ホストを解決できません ({host})"
+        if not infos:
+            return False, f"配信先ホストを解決できません ({host})"
+
+        deadline = time.time() + RTMP_CONNECT_TIMEOUT_SECONDS
+        last_error = None
+        for family, socktype, proto, _canonname, sockaddr in infos:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            sock = socket.socket(family, socktype, proto)
+            try:
+                sock.settimeout(min(remaining, RTMP_CONNECT_TIMEOUT_SECONDS))
+                sock.connect(sockaddr)
+                return True, ""
+            except (socket.timeout, TimeoutError):
+                last_error = f"配信先へ接続できません（タイムアウト: {host}:{port}）"
+            except OSError as e:
+                last_error = f"配信先へ接続できません ({host}:{port}): {e}"
+            finally:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+        return False, last_error or f"配信先へ接続できません（タイムアウト: {host}:{port}）"
+
+    def build_sink_command(self, mode):
+        """destination 別のシンクFFmpegコマンドを組み立てる。返り値は (cmd, 表示用の宛先)。
+
+        RTMP系では -c copy の素通しは成立しない:
+          1) TopazChat には映像2Mbps / 音声320kbps の上限があり、超過すると強制切断される
+          2) RTMP は再生アイテム切替時のタイムスタンプ跳躍・解像度/fps変化で切断されやすい
+        そのためシンク側で解像度・fps・GOPを固定して再エンコードし、
+        パラメータ変化そのものを消す。
+        """
+        ffmpeg = get_ffmpeg_cmd()
+        head = [
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "warning", "-nostats",
+            "-fflags", "+nobuffer+flush_packets+genpts+igndts",
+            "-i", "pipe:0",
+        ]
+
+        if mode in RTMP_OUTPUT_MODES:
+            url = self.get_rtmp_publish_url(mode)
+            if not url:
+                return None, ""
+            self.clamp_rtmp_bitrates()
+            v_kbps = int(self.config.get("rtmp_video_bitrate_kbps", 1500))
+            a_kbps = int(self.config.get("rtmp_audio_bitrate_kbps", 192))
+            width = int(self.config.get("rtmp_video_width", 1280))
+            height = int(self.config.get("rtmp_video_height", 720))
+            fps = int(self.config.get("rtmp_fps", 30))
+            gop_sec = max(1, int(self.config.get("rtmp_gop_seconds", 2)))
+            gop = str(fps * gop_sec)
+            vf = (
+                f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p"
+            )
+            cmd = head + [
+                "-vf", vf,
+                # ★実測(2026-08-30): -tune zerolatency はBフレームと先読みを止めるため、
+                # 同じ1500kbpsで SSIM 0.9751→0.9806 / PSNR 36.61→37.58dB と明確に画質を落とす
+                # （ビットレートを2000kまで上げるのと同等の劣化を、帯域を増やさず被っていた）。
+                # 稼ぐはずのレイテンシは数フレーム分で、TopazChatの中継とAVProのバッファに
+                # 比べて無視できるため外す。エンコード速度も 8.6x→9.2x で悪化しない。
+                "-c:v", "libx264", "-preset", "veryfast",
+                "-profile:v", "main", "-pix_fmt", "yuv420p",
+                "-b:v", f"{v_kbps}k", "-maxrate", f"{v_kbps}k", "-bufsize", f"{v_kbps * 2}k",
+                "-g", gop, "-keyint_min", gop, "-sc_threshold", "0",
+                "-c:a", "aac", "-b:a", f"{a_kbps}k", "-ar", "44100", "-ac", "2",
+                "-max_muxing_queue_size", "1024",
+                "-f", "flv", url,
+            ]
+            return cmd, self.mask_url_key(url)
 
         seg_time = str(self.config.get("hls_segment_time", 3))
         list_size = str(self.config.get("hls_list_size", 15))
-
-        cmd = [
-            get_ffmpeg_cmd(), "-y",
-            "-fflags", "+nobuffer+flush_packets+genpts+igndts",
-            "-i", "pipe:0",
+        cmd = head + [
             "-c:v", "copy",
             "-c:a", "copy",
             "-flush_packets", "1",
@@ -759,32 +1567,199 @@ class StreamerCore:
             "-hls_segment_filename", os.path.join(HLS_DIR, "seg_%05d.ts"),
             os.path.join(HLS_DIR, "stream.m3u8"),
         ]
+        via = "Cloudflare tunnel" if getattr(self, "enable_tunnel", True) else "local only"
+        return cmd, f"HLS via {via} (segment {seg_time}s / list {list_size})"
 
+    def _drain_sink_stderr(self, proc):
+        """stderr を読み捨てないとパイプが詰まってFFmpegごと止まる。
+        直近の行だけ保持して、接続失敗の理由を人間が読めるようにする。"""
+        try:
+            for raw in iter(proc.stderr.readline, b""):
+                try:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                except Exception:
+                    continue
+                if line:
+                    self._sink_stderr_tail.append(line)
+        except Exception:
+            pass
+
+    def _start_sink(self, mode):
+        """シンクFFmpegを起動する。RTMP系は起動直後の即死＝接続失敗として検知する。"""
+        cmd, target = self.build_sink_command(mode)
+        if not cmd:
+            msg = "配信先URL / ストリームキーが未設定です"
+            log_print(f"[Sink] Destination '{mode}' is not configured: {msg}")
+            self.destination_last_error = msg
+            return False
+
+        if mode in RTMP_OUTPUT_MODES:
+            reachable, reason = self.probe_rtmp_endpoint(self.get_rtmp_publish_url(mode))
+            if not reachable:
+                log_print(f"[Sink] Destination '{mode}' is unreachable: {reason}")
+                self.destination_last_error = reason
+                return False
+
+        self._sink_stderr_tail.clear()
         try:
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                 creationflags=CREATE_NO_WINDOW
             )
-            with self.process_lock:
-                self.hls_proc = proc
-                self.current_stdin = proc.stdin
-            log_print(f"[Receiver] Persistent HLS FFmpeg started (segment_time: {seg_time}s, list_size: {list_size}).")
-            return True
         except FileNotFoundError:
-            log_print("[Receiver] Error: ffmpeg was not found in system path.")
+            log_print("[Sink] Error: ffmpeg was not found in system path.")
+            self.destination_last_error = "ffmpeg が見つかりません"
             return False
         except Exception as e:
-            log_print(f"[Receiver] Error starting HLS FFmpeg: {e}")
+            log_print(f"[Sink] Error starting sink FFmpeg: {e}")
+            self.destination_last_error = str(e)
             return False
+
+        threading.Thread(target=self._drain_sink_stderr, args=(proc,), daemon=True).start()
+
+        if mode in RTMP_OUTPUT_MODES:
+            deadline = time.time() + SINK_STARTUP_PROBE_SECONDS
+            while time.time() < deadline:
+                if proc.poll() is not None:
+                    detail = " / ".join(list(self._sink_stderr_tail)[-3:])
+                    self.destination_last_error = detail or f"RTMP接続に失敗しました (rc={proc.returncode})"
+                    log_print(f"[Sink] RTMP sink exited immediately (rc={proc.returncode}). {detail}")
+                    return False
+                time.sleep(0.1)
+
+        with self.process_lock:
+            self.hls_proc = proc
+            self.current_stdin = proc.stdin
+        self.active_output_mode = mode
+        self._sink_started_at = time.time()
+        if mode == self.get_output_mode():
+            self.destination_last_error = ""
+        log_print(f"[Sink] Destination '{mode}' started -> {target}")
+        return True
+
+    def _schedule_destination_retry(self):
+        """相手サーバーを叩き続けないよう、復帰試行は指数バックオフで間隔を空ける。
+
+        間隔は「退避した回数」で決める。以前はサイクル内の失敗回数で決めていたが、
+        その値は復帰試行のたびに 0 へ戻す必要があるため、両者を兼ねられない。
+        """
+        self._sink_fallback_rounds += 1
+        cap = max(10, int(self.config.get("rtmp_retry_backoff_max_seconds", 300)))
+        backoff = min(cap, 10 * (2 ** max(0, self._sink_fallback_rounds - 1)))
+        self._sink_retry_at = time.time() + backoff
+        return backoff
+
+    def ensure_stream_sink(self):
+        """配信先シンクFFmpegが動いていれば維持し、未起動/停止時のみ起動する
+        （ストリーム連続性を保持）。destination の切り替え点はここ1箇所だけ。"""
+        with self.process_lock:
+            force = bool(getattr(self, "_sink_force_restart", False))
+            if not force and self.hls_proc and self.hls_proc.poll() is None and self.current_stdin:
+                return True
+            if self.hls_proc:
+                # 先に stdin を閉じてから殺す。閉じずに参照だけ捨てると、
+                # 後片付け(GC)のタイミングで BufferedWriter の finalize が失敗し、
+                # 「Exception ignored while finalizing file」がログに湧く。
+                if self.current_stdin:
+                    try:
+                        self.current_stdin.close()
+                    except Exception:
+                        pass
+                kill_proc(self.hls_proc)
+                self.hls_proc = None
+                self.current_stdin = None
+                time.sleep(0.2)
+            self._sink_force_restart = False
+
+        mode = self.get_active_output_mode()
+        if mode not in RTMP_OUTPUT_MODES:
+            return self._start_sink(mode)
+
+        # RTMP系: 失敗しても配信そのものは止めない。規定回数試して駄目ならHLSへ退避する。
+        # 失敗計数は呼び出しをまたいで持ち越す。そうしないと「起動しては数秒で切断」を
+        # 繰り返す相手に対して永遠に再接続を続け、退避条件に到達できない。
+        attempts = max(1, int(self.config.get("rtmp_fallback_after_failures", 3) or 3))
+        while self._sink_fail_count < attempts:
+            if self._start_sink(mode):
+                return True
+            self._sink_fail_count += 1
+            log_print(f"[Destination] '{mode}' connection failed ({self._sink_fail_count}/{attempts}): {self.destination_last_error}")
+            if self._sink_fail_count < attempts:
+                time.sleep(min(2.0, 0.5 * self._sink_fail_count))
+
+        if not self.config.get("rtmp_fallback_to_hls", True):
+            return False
+
+        backoff = self._schedule_destination_retry()
+        self.destination_fallback_active = True
+        log_print(f"[Destination] Falling back to HLS ({self.get_output_mode_label('hls', short=True)}) "
+                  f"to keep the stream alive. Retrying '{mode}' in {backoff}s.")
+        return self._start_sink("hls")
+
+    # 旧名。外部（テスト・プラグイン）からの呼び出し互換のために残す。
+    def ensure_hls_receiver(self):
+        return self.ensure_stream_sink()
+
+    def destination_watchdog_loop(self):
+        """RTMP配信には、ローカルHLSには存在しなかった障害モード
+        （接続失敗・途中切断・再接続ループ）がある。ここで明示的に面倒を見る。"""
+        while self.is_running:
+            time.sleep(2.0)
+            if not self.is_running:
+                break
+            self._destination_watchdog_tick()
+
+    def _destination_watchdog_tick(self):
+        """ウォッチドッグ1回分。ループと分けてあるのは単体テストから叩けるようにするため。"""
+        try:
+            proc = self.hls_proc
+            if proc is not None and proc.poll() is not None:
+                lived = time.time() - getattr(self, "_sink_started_at", 0.0)
+                log_print(f"[Sink] Destination sink died unexpectedly (rc={proc.returncode}, alive {lived:.1f}s). Restarting...")
+                if self.active_output_mode in RTMP_OUTPUT_MODES:
+                    if lived >= SINK_STABLE_SECONDS:
+                        # 一度は安定して流れていた上での切断。単発の事故として計数をやり直す
+                        self._sink_fail_count = 0
+                        self._sink_fallback_rounds = 0
+                    else:
+                        self._sink_fail_count += 1
+                self._sink_force_restart = True
+                if self.ensure_stream_sink():
+                    self.request_stream_reload()
+                return
+
+            if (getattr(self, "destination_fallback_active", False)
+                    and self.get_output_mode() in RTMP_OUTPUT_MODES
+                    and time.time() >= getattr(self, "_sink_retry_at", 0.0)):
+                log_print("[Destination] Retrying primary destination after backoff...")
+                self.destination_fallback_active = False
+                # 新しい再接続サイクルとして数え直す。ここを 0 に戻さないと
+                # ensure_stream_sink() の試行ループが一度も回らず、
+                # 「接続を試さずに即HLSへ退避し直す」だけの空回りになる
+                # （＝相手が復旧しても永久に戻らない）。
+                self._sink_fail_count = 0
+                self._sink_force_restart = True
+                if self.ensure_stream_sink():
+                    self.request_stream_reload()
+        except Exception as e:
+            log_print(f"[Sink] Watchdog error: {e}")
 
     def relay_stream_data(self, proc_to_read, stdin_to_write, stop_event, is_paced=True):
         """
-        送信側FFmpegから受信側HLS FFmpegへのストリーム中継。
-        is_paced=True の場合、初期バースト（約15秒分）を高速生成後、
-        実時間 + 先読みバッファ（15秒）を維持するようにデータ流量を制御する。
+        送信側FFmpegから配信先シンクへのストリーム中継。
+        is_paced=True の場合、実時間 + 先読みバッファを維持するようにデータ流量を制御する。
+
+        先読み秒数は配信先で変える。HLSは手元でセグメントを溜めてから配るので
+        15秒先行させておくと再生が途切れにくいが、RTMPは「今の映像を今送る」
+        ライブ投稿であり、同じことをすると相手サーバーへ一気に押し込むことになる。
+        ★実測(2026-08-30): 15秒先読みのままRTMPへ送ると、経過4秒の時点で
+        約14秒ぶんを送出していた（実時間の3.5倍）。低遅延のためにTopazChatを
+        使いながら15秒先行で詰め込む形になり、遅延も映像の乱れも招く。
+        OBS等の実配信と同じく、RTMP系では実時間に近いペースで送る。
         """
-        BUFFER_AHEAD_SECONDS = 15.0  # 先行バッファ秒数
+        rtmp_live = self.get_active_output_mode() in RTMP_OUTPUT_MODES
+        BUFFER_AHEAD_SECONDS = RTMP_BUFFER_AHEAD_SECONDS if rtmp_live else HLS_BUFFER_AHEAD_SECONDS
         base_pts = None
         current_stream_pos = 0.0
         max_relative_pts = 0.0
@@ -1340,7 +2315,7 @@ class StreamerCore:
             self.status_detail = "Failed to load audio stream"
             return None
 
-        if not self.ensure_hls_receiver():
+        if not self.ensure_stream_sink():
             self.current_video = {"title": "FFmpeg Error (Check PATH)", "url": url, "duration": 0, "is_radio": True}
             self.status = "error"
             self.status_detail = "FFmpeg Error"
@@ -1436,8 +2411,6 @@ class StreamerCore:
         has_qr = bool(overlay_radio and qr_overlay_file and os.path.exists(qr_overlay_file))
 
         cmd = [get_ffmpeg_cmd()]
-        if self.accumulated_pts > 0:
-            cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
         cmd.extend(video_input_opts)           # [0] = 静止画 or concat
         cmd.extend(input_opts)
         cmd.extend(["-i", audio_url])           # [1] = YouTube音声
@@ -1464,6 +2437,13 @@ class StreamerCore:
                 "-map", "0:v:0",
                 "-map", "1:a:0",
             ])
+        # ★送出経路ごとに画質が大きく違う（ラジオ200k / 写真1500k / 動画2500k）。
+        # VRC側で「これだけ汚い」と感じたとき、どの経路を通ったのかが
+        # 分からないと切り分けができないため、必ず名前とビットレートを残す。
+        log_print(
+            f"[Player] Encoder path=radio 1920x1080@2fps v=200k(max250k/buf200k) "
+            f"baseline/ultrafast bg={'slideshow' if is_slideshow else self.config.get('radio_bg_source', 'card')}"
+        )
         cmd.extend([
             "-c:v", "libx264",
             "-preset", "ultrafast",
@@ -1495,12 +2475,12 @@ class StreamerCore:
             # 受信側FFmpegへ流し込んでいた。受信側HLS multiplexerはそこで
             # セグメント出力を停止し、配信が固まっていた。
             "-max_interleave_delta", "0",
-            "-f", "mpegts", "pipe:1"
+            *self._ts_offset_opts(), "-f", "mpegts", "pipe:1"
         ])
 
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE,
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, bufsize=0,
                 creationflags=CREATE_NO_WINDOW
             )
@@ -1566,7 +2546,7 @@ class StreamerCore:
             return None
 
         # 受信側FFmpegが未起動/停止時のみ起動（ストリームの連続性を維持）
-        if not self.ensure_hls_receiver():
+        if not self.ensure_stream_sink():
             self.current_video = {"title": "FFmpeg Error (Check PATH)", "url": url, "duration": 0}
             self.status = "error"
             self.status_detail = "FFmpeg Error"
@@ -1599,8 +2579,6 @@ class StreamerCore:
         clock_filter = get_clock_filter_for_config(self.config) if has_clock else None
 
         cmd = [get_ffmpeg_cmd(), "-fflags", "+genpts"]
-        if self.accumulated_pts > 0:
-            cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
         cmd.extend(input_opts)
         cmd.extend(["-i", video_url])
         if audio_url:
@@ -1610,7 +2588,20 @@ class StreamerCore:
         has_qr = bool(overlay_video and qr_overlay_file and os.path.exists(qr_overlay_file))
         has_clock = bool(clock_video)
 
-        if has_qr or has_clock or is_local:
+        # ローカルファイルを無条件に再エンコードしていたため、URL追加なら無劣化で
+        # 届く映像が、アップロードした瞬間に作り直されていた。そのまま流せるものは
+        # 流す。判定はファイルごとに1度だけ（低速メディアで毎回プローブを走らせない）。
+        needs_reencode_local = False
+        if is_local:
+            if "can_stream_copy" not in video_info:
+                params = probe_video_stream_params(video_info.get("path") or video_url)
+                ok, why = can_stream_copy_local_video(params, self.get_max_video_height())
+                video_info["can_stream_copy"] = ok
+                video_info["stream_copy_reason"] = why
+                log_print(f"[Player] Local video passthrough {'OK' if ok else 'NG'}: {why}")
+            needs_reencode_local = not video_info.get("can_stream_copy")
+
+        if has_qr or has_clock or needs_reencode_local:
             if has_qr:
                 qr_idx = 2 if audio_url else 1
                 cmd.extend(["-loop", "1", "-i", os.path.abspath(qr_overlay_file)])
@@ -1632,6 +2623,11 @@ class StreamerCore:
                 cmd.extend(["-map", "1:a:0"])
             else:
                 cmd.extend(["-map", "0:a:0?"])
+            reason = ",".join(k for k, v in (("qr", has_qr), ("clock", has_clock),
+                                             ("local:" + str(video_info.get("stream_copy_reason", "?")),
+                                              needs_reencode_local)) if v)
+            log_print(f"[Player] Encoder path=video/reencode v=2500k(max3000k/buf2000k) "
+                      f"baseline/ultrafast reason={reason}")
             cmd.extend([
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
@@ -1656,7 +2652,7 @@ class StreamerCore:
                 "-muxdelay", "0",
                 "-muxpreload", "0",
                 "-max_interleave_delta", "0",
-                "-f", "mpegts", "pipe:1"
+                *self._ts_offset_opts(), "-f", "mpegts", "pipe:1"
             ])
         else:
             cmd.extend(["-map", "0:v:0"])
@@ -1664,16 +2660,17 @@ class StreamerCore:
                 cmd.extend(["-map", "1:a:0"])
             else:
                 cmd.extend(["-map", "0:a:0?"])
+            log_print("[Player] Encoder path=video/copy (no re-encode, source quality preserved)")
             # コピー経路ではIDR位置を制御できない（受信側がキーフレームで分割する）。
             cmd.extend(["-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
                         "-af", "aresample=async=1", "-shortest",
                         "-fflags", "+nobuffer+flush_packets", "-flush_packets", "1",
                         "-muxdelay", "0", "-muxpreload", "0", "-max_interleave_delta", "0",
-                        "-f", "mpegts", "pipe:1"])
+                        *self._ts_offset_opts(), "-f", "mpegts", "pipe:1"])
 
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE,
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, bufsize=0,
                 creationflags=CREATE_NO_WINDOW
             )
@@ -1719,17 +2716,30 @@ class StreamerCore:
         output_path = os.path.join(IMAGE_CACHE_DIR, output_filename)
 
         try:
+            src_bytes = None
             if isinstance(img_input, str):
                 img = Image.open(img_input)
+                try:
+                    src_bytes = os.path.getsize(img_input)
+                except OSError:
+                    pass
             elif isinstance(img_input, (bytes, bytearray)):
                 img = Image.open(io.BytesIO(img_input))
+                src_bytes = len(img_input)
             elif isinstance(img_input, Image.Image):
                 img = img_input
             else:
                 return None
 
+            # ★受け取った時点の素性を必ず残す。ホスト追加とWebアップは
+            # ここから先が完全に同じ経路なので、画質差を疑うときに
+            # 「届いた画像が既に小さいのか」を切り分けられるのはこのログだけ。
+            # exif_transpose は新しい画像を返して format を失うため、先に控える。
+            src_format = getattr(img, "format", None) or "?"
+
             # EXIF回転補正
             img = ImageOps.exif_transpose(img)
+            src_size = img.size
 
             # RGBモードに変換
             if img.mode != "RGB":
@@ -1744,6 +2754,12 @@ class StreamerCore:
             ratio = min(target_w / src_w, target_h / src_h)
             new_w = max(1, int(src_w * ratio))
             new_h = max(1, int(src_h * ratio))
+
+            log_print(
+                f"[Core] Image source: {src_size[0]}x{src_size[1]} {src_format}"
+                f"{f' ({src_bytes / 1024:.0f}KB)' if src_bytes else ''}"
+                f" -> {new_w}x{new_h} on {target_w}x{target_h} (scale x{ratio:.2f})"
+            )
 
             img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
@@ -1813,6 +2829,7 @@ class StreamerCore:
             log_print(f"[Core] Failed to save uploaded video file: {e}")
             return None
 
+        log_print(f"[Core] Uploaded video received: {original_filename} ({len(video_bytes) / (1024 * 1024):.1f}MB)")
         return self.add_video_file(saved_path, original_filename=original_filename, is_uploaded=True)
 
     def add_image_file(self, file_path, title=None):
@@ -1843,7 +2860,7 @@ class StreamerCore:
         with self.photo_lock:
             self.photo_pool.append(item)
         log_print(f"[Core] Added photo to pool: {title} (id: {photo_id}, {duration}s)")
-        self.reload_stream_event.set()
+        self.request_stream_reload()
         return item
 
     def add_image_bytes(self, image_bytes, original_filename="photo.jpg"):
@@ -1872,7 +2889,7 @@ class StreamerCore:
         with self.photo_lock:
             self.photo_pool.append(item)
         log_print(f"[Core] Added uploaded photo to pool: {title} (id: {photo_id}, {duration}s)")
-        self.reload_stream_event.set()
+        self.request_stream_reload()
         return item
 
     def get_photos(self):
@@ -1904,7 +2921,7 @@ class StreamerCore:
                     except Exception:
                         pass
                 log_print(f"[Core] Removed photo from pool: {removed.get('title')}")
-                self.reload_stream_event.set()
+                self.request_stream_reload()
                 return True
             return False
 
@@ -1930,7 +2947,7 @@ class StreamerCore:
             self.photo_pool.clear()
             self.slideshow_index = 0
             log_print("[Core] Cleared all photos from photo pool.")
-            self.reload_stream_event.set()
+            self.request_stream_reload()
             return True
 
     def play_image(self, image_info):
@@ -1946,7 +2963,7 @@ class StreamerCore:
         # QRオーバーレイが有効な場合はQR合成済み画像パスを取得
         playback_image_path = self.get_image_for_playback(image_path)
 
-        if not self.ensure_hls_receiver():
+        if not self.ensure_stream_sink():
             self.current_video = {"title": "FFmpeg Error", "url": "", "duration": 0, "type": "image"}
             self.status = "error"
             self.status_detail = "FFmpeg Error"
@@ -1959,14 +2976,13 @@ class StreamerCore:
         cmd = [
             get_ffmpeg_cmd(), "-re",
         ]
-        if self.accumulated_pts > 0:
-            cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
         cmd.extend([
             "-loop", "1", "-i", os.path.abspath(playback_image_path),
             "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
         ])
         if has_clock and clock_filter:
             cmd.extend(["-vf", clock_filter])
+        log_print("[Player] Encoder path=image 1920x1080@30fps v=1500k(buf1000k) baseline/ultrafast g=30")
         cmd.extend([
             "-c:v", "libx264",
             "-preset", "ultrafast",
@@ -1987,12 +3003,12 @@ class StreamerCore:
             "-flush_packets", "1",
             "-muxdelay", "0",
             "-muxpreload", "0",
-            "-f", "mpegts", "pipe:1"
+            *self._ts_offset_opts(), "-f", "mpegts", "pipe:1"
         ])
 
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE,
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, bufsize=0,
                 creationflags=CREATE_NO_WINDOW
             )
@@ -2573,7 +3589,7 @@ class StreamerCore:
                 time.sleep(0.5)
                 continue
 
-            if not self.ensure_hls_receiver():
+            if not self.ensure_stream_sink():
                 time.sleep(1)
                 continue
 
@@ -2584,8 +3600,6 @@ class StreamerCore:
             cmd = [
                 get_ffmpeg_cmd(), "-re",
             ]
-            if self.accumulated_pts > 0:
-                cmd.extend(["-output_ts_offset", f"{self.accumulated_pts:.3f}"])
             cmd.extend([
                 "-loop", "1", "-i", os.path.abspath(STANDBY_IMAGE_PATH),
                 "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
@@ -2612,12 +3626,12 @@ class StreamerCore:
                 "-flush_packets", "1",
                 "-muxdelay", "0",
                 "-muxpreload", "0",
-                "-f", "mpegts", "pipe:1"
+                *self._ts_offset_opts(), "-f", "mpegts", "pipe:1"
             ])
 
             try:
                 proc = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE,
+                    cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL, bufsize=0,
                     creationflags=CREATE_NO_WINDOW
                 )
@@ -2637,7 +3651,7 @@ class StreamerCore:
 
             url_updated = False
             while self.is_running and not self.skip_event.is_set():
-                if self.reload_stream_event.is_set():
+                if self._reload_due():
                     self.reload_stream_event.clear()
                     break
 
@@ -2724,7 +3738,7 @@ class StreamerCore:
                             break
 
                         # 設定変更・写真更新ホットリロード要求
-                        if self.reload_stream_event.is_set():
+                        if self._reload_due():
                             self.reload_stream_event.clear()
                             log_print("[Monitor] Hot-reloading slideshow photo stream...")
                             stop_event.set()
@@ -2840,7 +3854,7 @@ class StreamerCore:
                         break
 
                     # 設定変更による即時ホットリロード要求
-                    if self.reload_stream_event.is_set():
+                    if self._reload_due():
                         self.reload_stream_event.clear()
                         seek = max(0, time.time() - (self.current_video_start_time or time.time()))
                         is_radio_now = (self.get_playback_mode() == "radio")
@@ -2941,7 +3955,8 @@ class StreamerCore:
         cmd = [os.path.abspath(CLOUDFLARED_EXE), "tunnel", "--url", f"http://localhost:{port}"]
         try:
             proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                cmd, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace",
                 creationflags=CREATE_NO_WINDOW
             )
@@ -2973,11 +3988,12 @@ class StreamerCore:
         return proc
 
     def start_background_tasks(self):
-        """トンネル、常駐HLS受信プロセス、およびキュー監視のバックグラウンド開始"""
-        self.ensure_hls_receiver()
+        """トンネル、常駐シンクプロセス、配信先ウォッチドッグ、キュー監視のバックグラウンド開始"""
+        self.ensure_stream_sink()
         self.start_tunnel()
         t = threading.Thread(target=self.queue_monitor_loop, daemon=True)
         t.start()
+        threading.Thread(target=self.destination_watchdog_loop, daemon=True).start()
 
     def shutdown(self):
         log_print("[Core] Shutting down StreamerCore...")

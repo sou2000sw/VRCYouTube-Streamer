@@ -10,6 +10,7 @@ from streamer_core import (
     is_video_url_or_file,
     get_video_file_duration,
     get_ffmpeg_cmd,
+    can_stream_copy_local_video,
     DEFAULT_CONFIG,
     VIDEO_STORAGE_DIR
 )
@@ -146,7 +147,7 @@ def test_play_video_local_ffmpeg_cmd(core_instance, tmp_path):
         return proc
 
     with patch("subprocess.Popen", side_effect=mock_popen), \
-         patch.object(core, "ensure_hls_receiver", return_value=True), \
+         patch.object(core, "ensure_stream_sink", return_value=True), \
          patch.object(core, "get_stream_urls") as mock_ydl:
         core.play_video(item, seek_seconds=10)
 
@@ -190,7 +191,7 @@ def test_play_radio_local_ffmpeg_cmd(core_instance, tmp_path):
         return proc
 
     with patch("subprocess.Popen", side_effect=mock_popen), \
-         patch.object(core, "ensure_hls_receiver", return_value=True), \
+         patch.object(core, "ensure_stream_sink", return_value=True), \
          patch.object(core, "get_audio_only_stream_urls") as mock_ydl:
         core.play_radio(item)
         mock_ydl.assert_not_called()
@@ -283,3 +284,110 @@ def test_api_upload_video_and_image(core_instance):
     assert handler_img.response_body["type"] == "image"
     assert len(core.play_queue) == 1
     assert len(core.photo_pool) == 1
+
+
+# --- アップロード動画の無劣化パススルー -------------------------------------
+# URL追加は -c:v copy で無劣化のまま届くのに、同じ映像をアップロードすると
+# 問答無用で再エンコードされていた（実測: 4.76Mbps の原本が 2500kbps へ再圧縮され
+# 原本比 SSIM 1.000 → 0.9918）。安全に通せるものは通す。
+
+_H264_OK = {
+    "codec_name": "h264",
+    "pix_fmt": "yuv420p",
+    "height": "1080",
+    "r_frame_rate": "30/1",
+    "avg_frame_rate": "30/1",
+}
+
+
+def test_stream_copy_accepts_plain_h264():
+    ok, why = can_stream_copy_local_video(_H264_OK, 1080)
+    assert ok, why
+
+
+def test_stream_copy_accepts_ntsc_framerate_jitter():
+    """29.97 と 30 の差でCFRをVFR扱いしない（スマホ動画の大半がこれ）。"""
+    params = dict(_H264_OK, r_frame_rate="30/1", avg_frame_rate="30000/1001")
+    ok, why = can_stream_copy_local_video(params, 1080)
+    assert ok, why
+
+
+@pytest.mark.parametrize("override,expected_in_reason", [
+    ({"codec_name": "hevc"}, "codec"),
+    ({"codec_name": "vp9"}, "codec"),
+    ({"pix_fmt": "yuv422p"}, "pix_fmt"),
+    ({"pix_fmt": "yuv420p10le"}, "pix_fmt"),
+    ({"height": "2160"}, "height"),
+    ({"height": "0"}, "height"),
+    ({"avg_frame_rate": "0/0"}, "fps"),
+    ({"avg_frame_rate": "15/1"}, "vfr"),
+])
+def test_stream_copy_rejects_unsafe_sources(override, expected_in_reason):
+    """AVProで再生できない形式・可変フレームレートは通さない。"""
+    ok, why = can_stream_copy_local_video(dict(_H264_OK, **override), 1080)
+    assert not ok
+    assert expected_in_reason in why
+
+
+def test_stream_copy_is_fail_closed_when_probe_fails():
+    """諸元が分からないものを通すと、壊れた配信を送り出してしまう。"""
+    assert can_stream_copy_local_video(None, 1080)[0] is False
+    assert can_stream_copy_local_video({}, 1080)[0] is False
+
+
+def _capture_play_video_cmd(core, item, probe_params):
+    captured = {}
+
+    def mock_popen(cmd, *args, **kwargs):
+        captured["cmd"] = cmd
+        proc = MagicMock()
+        proc.poll.return_value = None
+        proc.stdout = io.BytesIO(b"")
+        return proc
+
+    with patch("subprocess.Popen", side_effect=mock_popen),          patch.object(core, "ensure_stream_sink", return_value=True),          patch("streamer_core.probe_video_stream_params", return_value=probe_params) as probe:
+        core.play_video(item)
+    return captured.get("cmd"), probe
+
+
+def _local_item(tmp_path, name="passthrough.mp4"):
+    f = tmp_path / name
+    f.write_bytes(b"dummy")
+    return {
+        "id": "v_copy", "type": "local_video", "title": "t",
+        "url": str(f), "path": str(f), "duration": 30.0, "is_local": True,
+    }
+
+
+def test_play_video_local_h264_is_stream_copied(core_instance, tmp_path):
+    """通せるローカル動画は URL追加と同じく再エンコードしない。"""
+    cmd, _ = _capture_play_video_cmd(core_instance, _local_item(tmp_path), _H264_OK)
+    assert cmd is not None
+    assert "copy" in cmd
+    assert "libx264" not in cmd
+
+
+def test_play_video_local_hevc_still_reencodes(core_instance, tmp_path):
+    """通せないものは従来どおり再エンコードする（再生できないより劣化した方がまし）。"""
+    params = dict(_H264_OK, codec_name="hevc")
+    cmd, _ = _capture_play_video_cmd(core_instance, _local_item(tmp_path), params)
+    assert "libx264" in cmd
+
+
+def test_play_video_local_overlay_forces_reencode(core_instance, tmp_path):
+    """時計/QRを焼き込むならコピーはできない。"""
+    core_instance.config["overlay_clock_enabled"] = True
+    try:
+        cmd, _ = _capture_play_video_cmd(core_instance, _local_item(tmp_path), _H264_OK)
+    finally:
+        core_instance.config["overlay_clock_enabled"] = False
+    assert "libx264" in cmd
+
+
+def test_play_video_probes_each_file_only_once(core_instance, tmp_path):
+    """低速な外付けHDDで再生のたびにプローブを走らせない。"""
+    item = _local_item(tmp_path)
+    _, probe = _capture_play_video_cmd(core_instance, item, _H264_OK)
+    assert probe.call_count == 1
+    _, probe2 = _capture_play_video_cmd(core_instance, item, _H264_OK)
+    assert probe2.call_count == 0
