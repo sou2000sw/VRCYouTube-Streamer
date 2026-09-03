@@ -256,8 +256,9 @@ def create_versioned_release(version=APP_VERSION):
         # v2.1.0 以降このファイルが配布物から抜けていた。README の「内容物」には
         # 載ったままで、同梱ライブラリの帰属表示が配布物に無い状態だった。
         ["THIRD_PARTY_LICENSES.txt", "dist/THIRD_PARTY_LICENSES.txt"],
-        ["CHANGELOG.md"],
-        ["README.md"],
+        # CHANGELOG.md / README.md は同梱しない。配布物の説明書は README.txt が正本で、
+        # .md を入れると同じ内容が二重に載り、更新漏れでどちらが正しいのか分からなくなる。
+        # 更新履歴は GitHub の CHANGELOG.md を参照してもらう（README.txt 末尾にリンクあり）。
     ]
     for candidates in doc_candidates:
         for doc in candidates:
