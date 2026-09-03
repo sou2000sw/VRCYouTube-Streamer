@@ -140,7 +140,13 @@ DEFAULT_CONFIG = {
     "rtmp_gop_seconds": 2,
     "rtmp_fallback_to_hls": True,
     "rtmp_fallback_after_failures": 3,
-    "rtmp_retry_backoff_max_seconds": 300
+    "rtmp_retry_backoff_max_seconds": 300,
+
+    # 初回セットアップ（配信先とストリームキーの確認）を通過したか。
+    # 既定の TopazChat はストリームキーが要る。キーは再生開始時に自動生成されるが、
+    # それだとワールドに貼るURLが「最初の1本を再生するまで空」になり、
+    # 何を貼ればよいのか分からないまま詰まる。初回だけ明示的に確認させる。
+    "setup_completed": False
 }
 
 # --- 配信先（destination）定義: タスク14 ---
@@ -1083,6 +1089,7 @@ class StreamerCore:
             "standby_image_path": str(self.config.get("standby_image_path", "")),
             "has_prev": has_prev,
             "has_web_password": bool(str(self.config.get("web_password", "")).strip()),
+            "setup_completed": self.is_setup_completed(),
             "permissions": {
                 "allow_web_queue_add": bool(self.config.get("allow_web_queue_add", True)),
                 "allow_web_queue_edit": bool(self.config.get("allow_web_queue_edit", True)),
@@ -1240,6 +1247,20 @@ class StreamerCore:
         if getattr(self, "destination_fallback_active", False):
             return "hls"
         return self.get_output_mode()
+
+    def is_setup_completed(self):
+        """初回セットアップ案内を出す必要がないか。
+
+        判定に **ストリームキーの有無は使えない**。start_background_tasks() が起動時に
+        ensure_stream_sink() を呼び、TopazChat ではその時点で ensure_stream_key() が
+        キーを自動生成して config へ書くため、新規インストールでも初回ポーリングの
+        時点では既にキーが存在する。これを「設定済み」と読むと案内が永久に出ない。
+
+        配信先を TopazChat 以外にしている利用者は、自分で選んだ結果なので案内しない。
+        """
+        if bool(self.config.get("setup_completed", False)):
+            return True
+        return self.get_output_mode() != "topaz"
 
     @staticmethod
     def generate_stream_key():

@@ -15,6 +15,8 @@
 import io
 import os
 import sys
+import threading
+import time
 
 import pytest
 
@@ -143,3 +145,73 @@ def test_gui_falls_back_to_classic_ui():
     assert "run_host_window" in src, "モダンUIの起動経路が無い"
     assert "--classic-ui" in src, "従来画面へ明示的に戻す手段が無い"
     assert "app = App(core, server)" in src, "従来画面へのフォールバックが無い"
+
+
+# --- ×ボタンで閉じたときの後片付け -------------------------------------
+
+class _SlowCore:
+    """shutdown() に時間がかかるコア。×イベント側の処理を「途中」にするため。"""
+
+    def __init__(self, delay=0.3):
+        self.config = {"port": 8000}
+        self._delay = delay
+        self.shutdown_finished = False
+
+    def shutdown(self):
+        time.sleep(self._delay)
+        self.shutdown_finished = True
+
+
+class _RecordingServer:
+    def __init__(self):
+        self.stopped = False
+
+    def stop(self):
+        self.stopped = True
+
+
+def test_second_shutdown_waits_for_the_first_to_finish():
+    """後から来た _shutdown() が、先に始まった方の完了を待つこと。
+
+    ×で閉じると pywebview の closed イベント（別スレッド）から _shutdown() へ入る。
+    その処理が途中のうちに webview.start() が戻り、run_host_window() の保険の
+    呼び出しが**素通り**すると、main の sys.exit(0) でデーモンスレッドごと
+    打ち切られ、FFmpeg / cloudflared の kill や HTTPサーバー停止が飛ぶ。
+    ★実測 2026-09-03: ×で3回閉じたうち、HTTPサーバー停止まで到達したのは1回だけ。
+
+    ここで固定するのは「2回目の呼び出しから戻った時点で、後片付けが終わっている」
+    こと。素通り実装だとサーバー停止前に戻ってくるので落ちる。
+    """
+    core = _SlowCore(delay=0.3)
+    server = _RecordingServer()
+    bridge = HostBridge(core, server)
+
+    # closed イベント相当（別スレッドで開始し、途中の状態を作る）
+    t = threading.Thread(target=bridge._shutdown, daemon=True)
+    t.start()
+    time.sleep(0.05)   # 1本目を shutdown() の最中にする
+
+    # run_host_window() の保険相当。ここから戻った時点で全部終わっていること。
+    bridge._shutdown()
+
+    assert core.shutdown_finished, "コアの停止を待たずに戻っている"
+    assert server.stopped, "HTTPサーバーの停止を待たずに戻っている"
+    t.join(timeout=2.0)
+
+
+def test_shutdown_runs_only_once():
+    """終了ボタンと×の両方から来ても、後片付けは一度だけであること。"""
+    calls = []
+
+    class _CountingCore:
+        config = {"port": 8000}
+
+        def shutdown(self):
+            calls.append("core")
+
+    server = _RecordingServer()
+    bridge = HostBridge(_CountingCore(), server)
+    bridge._shutdown()
+    bridge._shutdown()
+    bridge._shutdown()
+    assert calls == ["core"], f"後片付けが複数回走っている: {calls}"

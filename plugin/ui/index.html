@@ -935,6 +935,96 @@
         </div>
     </div>
 
+    <!-- 初回セットアップ（ホストPCのみ表示 / 配信先とストリームキーの確認） -->
+    <!-- 既定の TopazChat はストリームキーが要る。キー自体は再生開始時に自動生成されるが、
+         それだと「ワールドに何を貼ればいいのか」が最初の1本を再生するまで分からない。
+         初回だけここで確定させ、貼るURLまで見せてから本編に入ってもらう。 -->
+    <div id="setupModal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md transition-opacity duration-200 p-4 overflow-y-auto">
+        <div class="bg-card border border-border rounded-xl max-w-md w-full p-6 shadow-2xl flex flex-col gap-4 my-auto">
+
+            <!-- STEP 1: 配信先とストリームキー -->
+            <div id="setupStep1" class="flex flex-col gap-4">
+                <div class="flex flex-col items-center gap-2 text-center">
+                    <div class="w-12 h-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary text-2xl">
+                        <i class="ri-broadcast-line"></i>
+                    </div>
+                    <h3 class="font-bold text-base text-zinc-100">初回セットアップ：配信先の確認</h3>
+                    <p class="text-xs text-zinc-400 leading-relaxed">
+                        配信先は <b class="text-zinc-200">TopazChat</b>（遅延 約1〜2秒）が既定です。<br>
+                        ワールド側は <b class="text-zinc-200">AVPro</b> 対応プレイヤーが必要です。
+                    </p>
+                </div>
+
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs text-zinc-400 font-medium">TopazChat ストリームキー</label>
+                    <div class="flex gap-2">
+                        <div class="relative flex-1">
+                            <input type="text" id="setupTopazKey" spellcheck="false" class="w-full bg-zinc-900 border border-zinc-700 rounded-lg pl-3 pr-3 py-2 text-xs text-zinc-100 font-mono focus:outline-none focus:border-primary" placeholder="自動生成されます">
+                        </div>
+                        <button type="button" onclick="setupRegenerateKey()" class="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-lg text-xs transition shrink-0 flex items-center gap-1">
+                            <i class="ri-refresh-line"></i>
+                            <span>生成し直す</span>
+                        </button>
+                    </div>
+                    <p class="text-[11px] text-zinc-500 leading-relaxed">
+                        ※ キーを知っている人は誰でもあなたの配信枠へ投稿できます。第三者に見せないでください。<br>
+                        ※ すでに使っているキーがある場合は、上書きして入力してください。
+                    </p>
+                </div>
+
+                <div class="bg-zinc-900/60 border border-zinc-800 rounded p-3 text-[11px] text-zinc-400 leading-relaxed">
+                    ※ 本ソフトはTopazChatの公式ツールではありません。TopazChatは個人運営の無償サービスです。
+                    映像は最大2Mbps・音声は最大320kbpsで、超過すると配信が強制切断されます。
+                </div>
+
+                <div class="flex flex-col gap-2">
+                    <button type="button" id="btnSetupStartTopaz" onclick="setupFinish('topaz')" class="w-full bg-primary text-zinc-950 hover:bg-primary-hover font-semibold py-2.5 rounded-lg text-sm transition flex items-center justify-center gap-2 shadow">
+                        <i class="ri-check-line"></i>
+                        <span>この設定で始める</span>
+                    </button>
+                    <div class="flex items-center justify-between gap-2">
+                        <button type="button" onclick="setupFinish('hls')" class="text-[11px] text-zinc-500 hover:text-primary underline underline-offset-2 transition">
+                            TopazChatを使わない（HLS / Cloudflare で始める）
+                        </button>
+                        <button type="button" onclick="setupFinish('skip')" class="text-[11px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2 transition shrink-0">
+                            あとで設定する
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STEP 2: ワールドに貼るURL -->
+            <div id="setupStep2" class="hidden flex flex-col gap-4">
+                <div class="flex flex-col items-center gap-2 text-center">
+                    <div class="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 text-2xl">
+                        <i class="ri-links-line"></i>
+                    </div>
+                    <h3 class="font-bold text-base text-zinc-100">設定できました</h3>
+                    <p id="setupDoneDesc" class="text-xs text-zinc-400 leading-relaxed">
+                        下のURLを、VRChatワールドの動画プレイヤーに貼り付けてください。
+                    </p>
+                </div>
+
+                <div class="flex flex-col gap-1.5">
+                    <label class="text-xs text-zinc-400 font-medium">VRChat プレイヤー入力用 URL</label>
+                    <div class="flex gap-2">
+                        <input id="setupVideoUrl" readonly class="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-xs text-primary font-mono truncate focus:outline-none focus:border-primary" value="-">
+                        <button type="button" id="btnSetupCopyUrl" onclick="copyElementText('setupVideoUrl')" class="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-lg text-xs transition shrink-0 flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed">
+                            <i class="ri-file-copy-line"></i>
+                            <span>コピー</span>
+                        </button>
+                    </div>
+                    <p id="setupUrlHint" class="text-[11px] text-zinc-500 leading-relaxed"></p>
+                </div>
+
+                <button type="button" onclick="closeSetupModal()" class="w-full bg-primary text-zinc-950 hover:bg-primary-hover font-semibold py-2.5 rounded-lg text-sm transition flex items-center justify-center gap-2 shadow">
+                    <i class="ri-arrow-right-line"></i>
+                    <span>はじめる</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Notification -->
     <div id="toast" class="fixed bottom-4 right-4 bg-zinc-800 border border-zinc-700 text-zinc-100 text-xs px-3.5 py-2 rounded shadow-lg transform translate-y-12 opacity-0 transition-all duration-200 flex items-center gap-2 pointer-events-none z-50">
         <i id="toastIcon" class="ri-check-line text-emerald-400 text-sm"></i>
@@ -1827,6 +1917,7 @@
             // 未指定なら安全側＝非許可。サーバーが古い場合にゲストへ共有情報を出さない。
             guestCanSeeShareInfo = !!(data.permissions && data.permissions.allow_web_share_info === true);
             applyRemoteTabVisibility(isLocal);
+            maybeShowSetupModal(data, isLocal);
 
             // Header Action buttons visibility
             // - サーバー終了: ホスト(isLocal)であれば通常ブラウザでも利用可能
@@ -3006,6 +3097,145 @@
             const m = Math.floor(sec / 60);
             const s = Math.floor(sec % 60);
             return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        }
+
+        // ===================== 初回セットアップ =====================
+        // 既定の配信先 TopazChat はストリームキーが要る。キー自体は再生開始時に
+        // ensure_stream_key() が自動生成するが、それだと「ワールドに何を貼るのか」が
+        // 最初の1本を再生するまで分からない。初回だけここで確定させ、貼るURLまで見せる。
+        let setupModalShown = false;   // ポーリングのたびに開き直さないための一度きりフラグ
+
+        function maybeShowSetupModal(data, isLocal) {
+            if (setupModalShown) return;
+            // ホストPC以外には出さない。設定の保存は localhost 限定なので、
+            // ゲストに見せても「押せないダイアログ」になるだけ。
+            if (!isLocal) return;
+            // 未指定（このフラグを知らない古いサーバー）のときも出さない
+            if (data.setup_completed !== false) return;
+            setupModalShown = true;
+            openSetupModal(data);
+        }
+
+        function generateStreamKeyCandidate() {
+            // token_urlsafe(30) と同じ長さ・強度（40文字）。
+            // サーバーの generate_key を使わないのは、あれが即座に保存してしまい、
+            // 「確定前なのにキーが設定済み扱いになる」ため。確定はカード下部のボタンで行う。
+            const bytes = new Uint8Array(30);
+            crypto.getRandomValues(bytes);
+            let bin = '';
+            for (const b of bytes) bin += String.fromCharCode(b);
+            return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+
+        function openSetupModal(data) {
+            const modal = document.getElementById('setupModal');
+            if (!modal) return;
+            const dest = (data && data.destination) || {};
+            const input = document.getElementById('setupTopazKey');
+            // 既にキーがある場合（＝設定済みだがフラグだけ未設定）はそれを見せる
+            if (input) input.value = dest.topaz_stream_key_set && dest.topaz_stream_key
+                ? dest.topaz_stream_key
+                : generateStreamKeyCandidate();
+            document.getElementById('setupStep1').classList.remove('hidden');
+            document.getElementById('setupStep2').classList.add('hidden');
+            modal.classList.remove('hidden');
+        }
+
+        function closeSetupModal() {
+            const modal = document.getElementById('setupModal');
+            if (modal) modal.classList.add('hidden');
+            checkServerHealth(true);
+        }
+
+        function setupRegenerateKey() {
+            const input = document.getElementById('setupTopazKey');
+            if (input) input.value = generateStreamKeyCandidate();
+        }
+
+        async function setupFinish(choice) {
+            const payload = { setup_completed: true };
+            if (choice === 'topaz') {
+                const key = ((document.getElementById('setupTopazKey') || {}).value || '').trim();
+                // サーバー側の STREAM_KEY_MIN_LENGTH と同じ下限。短いキーは
+                // 「同じキーを知っていれば誰でも投稿できる」ため乗っ取られる。
+                if (key.length < 32) {
+                    showToast('ストリームキーは32文字以上にしてください', 'danger');
+                    return;
+                }
+                payload.output_mode = 'topaz';
+                payload.topaz_stream_key = key;
+            } else if (choice === 'hls') {
+                payload.output_mode = 'hls';
+            }
+            // 'skip' は setup_completed だけ立て、配信先の設定には触らない
+
+            try {
+                const res = await fetch(`${apiBase}/api/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) {
+                    showToast('設定の保存に失敗しました', 'danger');
+                    return;
+                }
+            } catch (e) {
+                showToast('通信エラーが発生しました', 'danger');
+                return;
+            }
+
+            if (choice === 'skip') {
+                closeSetupModal();
+                showToast('「配信・QR設定」タブでいつでも設定できます', 'info');
+                return;
+            }
+            await showSetupStep2(choice);
+        }
+
+        async function showSetupStep2(choice) {
+            document.getElementById('setupStep1').classList.add('hidden');
+            document.getElementById('setupStep2').classList.remove('hidden');
+
+            const urlEl = document.getElementById('setupVideoUrl');
+            const hint = document.getElementById('setupUrlHint');
+            const desc = document.getElementById('setupDoneDesc');
+            if (desc) {
+                desc.innerText = choice === 'hls'
+                    ? '配信先を HLS（Cloudflare トンネル経由）にしました。下のURLをワールドの動画プレイヤーに貼り付けてください。'
+                    : '配信先を TopazChat にしました。下のURLをワールドの動画プレイヤー（AVPro対応）に貼り付けてください。';
+            }
+
+            // 保存直後はシンクの作り直しが走るので、最新のURLを取り直す
+            let url = '';
+            try {
+                const res = await fetch(`${apiBase}/api/status?t=${Date.now()}`, { cache: 'no-store' });
+                if (res.ok) {
+                    const d = await res.json();
+                    url = (d.destination && d.destination.video_url) || d.video_url || '';
+                }
+            } catch (e) {}
+
+            const copyBtn = document.getElementById('btnSetupCopyUrl');
+
+            if (!url) {
+                // まだURLが確定していない状態。プレースホルダをコピーさせないよう
+                // ボタンごと止める（実値が無いので copyElementText は表示文字列を掴む）。
+                setMaskableUrlValue(urlEl, '');
+                if (urlEl) urlEl.value = choice === 'hls' ? 'トンネル準備中...' : '取得中...';
+                if (copyBtn) copyBtn.disabled = true;
+                if (hint) hint.innerText = choice === 'hls'
+                    ? '※ Cloudflareトンネルの準備が終わるとURLが出ます。「接続 & スマホ共有」タブで確認してください。'
+                    : '※ URLは「接続 & スマホ共有」タブでいつでも確認できます。';
+                return;
+            }
+
+            if (copyBtn) copyBtn.disabled = false;
+            setMaskableUrlValue(urlEl, url);
+            if (hint) {
+                hint.innerText = (isHostWindow() && !hostUrlRevealed && url !== urlEl.value)
+                    ? '※ 画面共有への映り込みを防ぐため伏せ字で表示しています。「コピー」を押すと本物のURLがコピーされます。'
+                    : '※ このURLは「接続 & スマホ共有」タブでいつでも確認できます。';
+            }
         }
 
         // ===================== ホストウィンドウ連携 =====================

@@ -68,7 +68,10 @@ class HostBridge:
         self._core = streamer_core
         self._api_server = api_server
         self._window = None
-        self._shutting_down = False
+        # 「開始済みなら素通り」ではなく「先に始まった方を待つ」ためのロック。
+        # 理由は _shutdown() のコメントを参照。
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_done = threading.Event()
 
     # --- 基本情報 ---------------------------------------------------------
     def host_info(self):
@@ -156,19 +159,30 @@ class HostBridge:
         """コアとサーバーを止める。
 
         ×ボタンと終了ボタンの両方から来るので、二重に呼ばれても平気にしてある。
+        ただし **「開始済みなら素通り」にしてはいけない**。×で閉じたときは
+        pywebview の closed イベント（別スレッド）でここへ入るが、その処理が
+        途中のうちに webview.start() が戻り、run_host_window() の保険の呼び出しが
+        素通りして main が sys.exit(0) する。デーモンスレッドはそこで打ち切られ、
+        後片付けが飛ぶ。★実測 2026-09-03: ×で3回閉じたうち、HTTPサーバー停止まで
+        到達したのは1回、コアの「Shutdown complete」は2回だけだった。
+        （FFmpeg の kill は core.shutdown() の先頭にあるため孤児は出ていなかったが、
+        処理順に依存しているだけで、保証されていたわけではない。）
+
+        そのためロックで直列化し、後から来た方は**先に始まった方の完了を待つ**。
         """
-        if self._shutting_down:
-            return
-        self._shutting_down = True
-        log_print("Shutting down streamer server and processes...")
-        try:
-            self._core.shutdown()
-        except Exception as e:
-            log_print(f"[HostWindow] Error during core shutdown: {e}")
-        try:
-            self._api_server.stop()
-        except Exception as e:
-            log_print(f"[HostWindow] Error during server shutdown: {e}")
+        with self._shutdown_lock:
+            if self._shutdown_done.is_set():
+                return
+            log_print("Shutting down streamer server and processes...")
+            try:
+                self._core.shutdown()
+            except Exception as e:
+                log_print(f"[HostWindow] Error during core shutdown: {e}")
+            try:
+                self._api_server.stop()
+            except Exception as e:
+                log_print(f"[HostWindow] Error during server shutdown: {e}")
+            self._shutdown_done.set()
 
     def _pick_files(self, file_types, allow_multiple=True):
         if not self._window:
