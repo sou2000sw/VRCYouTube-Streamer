@@ -28,7 +28,7 @@
 | **18** | ⚡ 性能 | **FFmpeg ハードウェアエンコード（NVENC / QSV / AMF）対応** (HW Encoding) | 未定 | ⚪ **実装予定 📝** |
 | **19** | 🛠️ CLI | **CLI 引数・環境設定オーバーライド機構の総点検・堅牢化** (CLI Overrides Overhaul) | **v2.9.0** | 🟢 **実装完了 ✅** |
 | **20** | 🌐 UI/権限 | **通常ブラウザ利用時のサーバー操作ボタン（再起動・起動）非表示化** (Button Visibility) | v2.6.0 | 🟢 **実装完了 ✅** |
-| **21** | 🛡️ Web制御 | **Webリモコン機能の無効化・ホスト専用スタンドアロンモード** (Disable Web Remote / Host-Only Mode) | 未定 | ⚪ **実装予定 📝** |
+| **21** | 🛡️ Web制御 | **Webリモコン機能の無効化・ホスト専用スタンドアロンモード** (Disable Web Remote / Host-Only Mode) | develop | 🟢 **実装完了 ✅** |
 | **22** | 🎙️ 音声配信 | **PC出力音声（ループバック）＆マイク入力音声の取り込み・配信** (PC Audio & Mic Capture) | 未定 | 🔵 **検討中 📋** |
 | **23** | 🖥️ 画面配信 | **PCデスクトップ画面・ウィンドウのリアルタイムキャプチャ配信** (Desktop Screen Share) | 未定 | 🔵 **検討中 📋** |
 | **24** | 🎤 参加型 | **Webリモコンからの参加型カラオケ・楽器セッション機能** (Remote Karaoke & Session) | 未定 | 🔵 **検討中 📋** |
@@ -689,36 +689,68 @@ WebリモコンUI（`ui/index.html`）を通常のブラウザ（Chrome / Edge �
 
 ---
 
-## 21. 🛡️ Webリモコン機能の無効化・ホスト専用スタンドアロンモード (Disable Web Remote / Host-Only Mode) 【実装予定 📝】
+## 21. 🛡️ Webリモコン機能の無効化・ホスト専用スタンドアロンモード (Disable Web Remote / Host-Only Mode) 【実装完了 ✅】
 
 ### 概要
 ホストPCのデスクトップGUIのみで配信操作を完結させたいユーザー（VJ、イベント配信、プライベート鑑賞等）向けに、Webリモコン画面（`/`）やゲスト向け操作APIへのアクセスを遮断し、完全スタンドアロン（ホスト専用）で運用可能にする機能。
 
 ### 背景と目的
-- **現状**: `enable_tunnel: false` で外部インターネット公開は遮断できるが、同一LAN内の他端末から `http://<ホストIP>:<port>/` にアクセスするとWebリモコン画面が表示される。
+- **前提の訂正（実装時の調査で判明）**: 「トンネルを切ってもLANからリモコンが見える」は既定構成では起きない。
+  `APIServer.start()` は config の `host` をそのまま bind し、既定は `127.0.0.1` のため LAN からは接続自体ができない。
+  この機能が実際に効くのは次の2ケース。
+  1. `host: "0.0.0.0"` にして LAN 公開しているとき。
+  2. **HLS配信 + トンネル** — VRChatが `stream.m3u8` を取りに来るためポートを公開せざるを得ず、
+     その副作用としてリモコン画面まで公開されるとき（**本命**）。
+- **さらに判明した点**: `start_tunnel()` は `output_mode` を見ずに無条件で起動する。
+  そのため既定構成（`output_mode: "topaz"` = RTMP押し出し + `enable_tunnel: true`）では、
+  **配信はRTMPで出ているのに、トンネルはリモコン画面を配るためだけに公開URLを立てている**。
+  ここで本機能をオフにすると、公開URLに残るのは403だけになる。
 - **目的**:
-  1. 他者からのアクセス・リクエスト受付を完全に拒絶し、誤操作や不正アクセスをゼロにする。
-  2. 画面上のQRコードオーバーレイやWebリモコンURL表示を自動で無効化し、クリーンな配信画面を維持する。
+  1. 他者からの操作・リクエスト受付を完全に拒絶する。
+  2. QRオーバーレイやリモコンURL表示を自動で無効化し、クリーンな配信画面を維持する。
 
-### 仕様・実装設計
-1. **設定項目の追加**:
-   - `config.json`: `"enable_web_remote": true` (デフォルト: `true`、`false` で無効化)。
-   - `gui_streamer.py` の設定画面に「Webリモコンを有効にする」チェックボックスを追加。
-2. **Webサーバー（`api_server.py`）のアクセス制御**:
-   - `enable_web_remote: false` 時：
-     - **外部/LANからのアクセス**: `/`（Webリモコン画面）および `/api/*` に対し `403 Forbidden`（または「Webリモコンは無効化されています」の案内画面）を返却。
-     - **ローカルホスト（127.0.0.1）**: ホスト自身のブラウザや内部通信用としてアクセス許可を維持。
-     - **HLSストリーム配信（`/stream.m3u8`, `*.ts`）**: VRChat内プレイヤーの再生を阻害しないよう、メディア配信エンドポイントは正常稼働を維持。
-3. **QRオーバーレイおよびステータス表示の自動連動**:
-   - `enable_web_remote: false` の場合、QRコード生成および画面オーバーレイ（`overlay_qr_enabled`）を自動的にスキップ/非表示化。
-   - ステータス情報（`remote_url` 等）にも無効状態を反映。
+### 実装（v2.9.7+ / develop）
+1. **設定項目**: `enable_web_remote`（既定 `true`）。
+   - 未設定は `true` として扱う。既存ユーザーの `config.json` にキーが無いため、
+     ここを fail-closed にすると更新しただけで全員のリモコンが黙って死ぬ。
+   - GUI（`gui_streamer.py` の「📱 Webリモコン」節）とホストWeb UI（`hostEnableWebRemote`）の両方にトグル。
+   - CLI: `--host-only` / `--web-remote`（両方指定時は安全側＝閉じる）。`VRCMS_ENABLE_WEB_REMOTE` も可。
+2. **アクセス制御（`api_server.py`）**: `reject_if_web_remote_disabled()` を
+   `do_GET` / `do_POST` の**認証判定より前**に置く。閉じているなら、パスワードが合っているかも
+   `allow_web_*` で何が許されているかも問う必要がないため。
+   - **ホスト判定は厳格なループバックのみ**（`_client_is_strict_loopback()`）。
+     `is_local_request()` を流用しないのは `trust_lan_clients` を見ないため。「ホスト専用」なら
+     同一LANの別端末も他人。
+     **`CF-Connecting-IP` / `X-Forwarded-For` の確認は必須**: cloudflared はこのPCの `127.0.0.1` へ
+     繋いでくるので、接続元IPだけを見るとトンネル経由の全員がホスト扱いになりゲートが素通りする。
+   - **通すのは許可リスト方式**で `*.m3u8` / `*.ts` / `*.m4s` / `*.mp4` / `*.aac` のみ。
+     `HLS_DIR` には写真プール `/images/*` が同居しており、「静的ファイルなら通す」にすると
+     共有済みの写真が外へ出る。
+   - ゲストへの応答: リモコン画面は **403 + 案内HTML**（バージョン・製品名を載せない／`/vendor/*` も
+     閉じるためCSSは直書き）、それ以外は **403 JSON**。
+3. **QR・ステータスの自動連動（`streamer_core.py`）**:
+   - `generate_qr_overlay_image()` の冒頭で `None` を返す。**唯一の生成口**なので、
+     動画・写真・ラジオ・待機画面の5箇所を個別に直す必要がない。
+   - `standby_mode: "qr"`（QR案内画面）は画像モードへフォールバック。
+   - `/api/status` の `overlay_qr_*` は消灯を返し、`remote_url` は空。**config の値そのものは
+     書き換えない**ため、再度有効化すれば元の設定に戻る。
+4. **トンネル遊休の警告（自動停止はしない）**: ホスト専用 + RTMP押し出し + HLSフォールバック無効の
+   構成では、トンネルは403を返すだけになる。設定画面に警告を出すに留めた。
+   `rtmp_fallback_to_hls` が有効な間はHLS退避にトンネルが要るうえ、クイックトンネルは張り直すと
+   URLが変わり、ワールドに貼ったURLが死ぬため。
 
-### 変更対象予定ファイル
-- `streamer_core.py`（`enable_web_remote` 設定の管理、QRコード生成のスキップ制御、ステータス反映）
-- `api_server.py`（ゲストからの `/` および `/api/*` リクエストの遮断・403返却）
-- `gui_streamer.py`（設定画面にWebリモコン有効/無効トグル追加）
-- `config.dist.json`（`enable_web_remote: true` 追加）
-- `tests/test_security.py`（Webリモコン無効化時のアクセス遮断テスト）
+### 変更対象ファイル
+- `streamer_core.py`（`enable_web_remote` の管理、QR生成のスキップ、待機画面フォールバック、ステータス反映）
+- `api_server.py`（ゲートと403応答）
+- `gui_streamer.py` / `ui/index.html` / `plugin/ui/index.html`（トグルとトンネル遊休警告）
+- `config.dist.json` / `config_overrides.py`（既定値とCLI）
+- `test_host_only_mode.py`（新規・34件）
+
+### 残った制約（設計上の限界）
+- **視聴は防げない**。HLS配信中は `stream.m3u8` / `*.ts` を開けておく必要があるため、
+  URLを知る第三者の再生までは止められない。完全に inbound をゼロにしたい場合は
+  RTMP押し出し（topaz / generic_rtmp）+ `enable_tunnel: false` + `host: 127.0.0.1` を選ぶ。
+- ポート自体は開いており、403を返す。スキャンの対象にはなる（レートリミットは既存のものが効く）。
 
 ---
 

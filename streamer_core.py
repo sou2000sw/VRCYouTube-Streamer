@@ -90,6 +90,13 @@ DEFAULT_CONFIG = {
     "live_sync_duration_count": 4,
     "loop_queue": False,
     "shuffle": False,
+    # Webリモコン（ゲスト向けの `/` と `/api/*`）そのものを開くかどうか。タスク21。
+    # False で「ホスト専用スタンドアロンモード」: ホストPC本人（厳格なループバック）
+    # 以外からの操作を全部 403 で塞ぐ。allow_web_* は「開いた上で何を許すか」の設定なので、
+    # ここが False のときは一切参照されない（＝より強い上位のスイッチ）。
+    # HLS配信（stream.m3u8 / *.ts）だけは開けたままにする。VRChatのプレイヤーは
+    # 認証ヘッダを付けられず、ここを塞ぐと配信そのものが止まるため。
+    "enable_web_remote": True,
     "allow_web_queue_add": True,
     "allow_web_queue_edit": True,
     "allow_web_playback_control": True,
@@ -1018,6 +1025,15 @@ class StreamerCore:
             log_print(f"[Core] Failed to save config: {e}")
             return False
 
+    def is_web_remote_enabled(self):
+        """Webリモコン（ゲスト向けの画面とAPI）を開いているか。タスク21。
+
+        未設定は True（＝従来どおり開く）。既存ユーザーの設定ファイルには
+        このキーが無いため、ここを fail-closed にすると更新した全員のリモコンが
+        黙って死ぬ。「無効化」は利用者が明示的に選んだときだけ効かせる。
+        """
+        return bool(self.config.get("enable_web_remote", True))
+
     def get_status_data(self, include_secrets=False):
         """配信状態一式。include_secrets=True はローカルホスト（ホスト本人）専用。
 
@@ -1036,6 +1052,12 @@ class StreamerCore:
             public_url = f"http://localhost:{port}"
         else:
             stream_url = ""
+            public_url = ""
+
+        # ホスト専用モードでは誰も開けないURLなので、リモコンURLは配らない。
+        # ここを残すと、UIもQRも「アクセスできないURL」を表示し続ける。
+        web_remote_enabled = self.is_web_remote_enabled()
+        if not web_remote_enabled:
             public_url = ""
 
         is_image = bool(self.current_video and self.current_video.get("type") == "image")
@@ -1073,9 +1095,12 @@ class StreamerCore:
             "image_paused": self.image_paused,
             "image_display_duration": int(self.config.get("image_display_duration", 15)),
             "image_auto_advance": bool(self.config.get("image_auto_advance", False)),
-            "overlay_qr_enabled": bool(self.config.get("overlay_qr_enabled", False) or self.config.get("overlay_qr_video", False) or self.config.get("overlay_qr_image", False)),
-            "overlay_qr_video": bool(self.config.get("overlay_qr_video", False)),
-            "overlay_qr_image": bool(self.config.get("overlay_qr_image", False)),
+            "enable_web_remote": web_remote_enabled,
+            # QRはリモコンURLを焼いたものなので、リモコンが無効なら「消えている」状態を返す。
+            # 設定値そのものは書き換えない（再度有効化したら元の設定に戻る）。
+            "overlay_qr_enabled": web_remote_enabled and bool(self.config.get("overlay_qr_enabled", False) or self.config.get("overlay_qr_video", False) or self.config.get("overlay_qr_image", False)),
+            "overlay_qr_video": web_remote_enabled and bool(self.config.get("overlay_qr_video", False)),
+            "overlay_qr_image": web_remote_enabled and bool(self.config.get("overlay_qr_image", False)),
             "overlay_qr_mode": str(self.config.get("overlay_qr_mode", "bottom-right")),
             "overlay_clock_enabled": bool(self.config.get("overlay_clock_enabled", False) or self.config.get("overlay_clock_video", False)),
             "overlay_clock_video": bool(self.config.get("overlay_clock_video", False)),
@@ -1094,7 +1119,10 @@ class StreamerCore:
                 "allow_web_queue_add": bool(self.config.get("allow_web_queue_add", True)),
                 "allow_web_queue_edit": bool(self.config.get("allow_web_queue_edit", True)),
                 "allow_web_playback_control": bool(self.config.get("allow_web_playback_control", True)),
-                "allow_web_share_info": bool(self.config.get("allow_web_share_info", False))
+                "allow_web_share_info": bool(self.config.get("allow_web_share_info", False)),
+                # リモコン自体が閉じているなら、個別の許可は意味を持たない。
+                # UI が「許可されているのに操作できない」と見せないよう、ここでも落とす。
+                "enable_web_remote": web_remote_enabled
             }
         }
 
@@ -3113,6 +3141,12 @@ class StreamerCore:
 
     def generate_qr_overlay_image(self):
         """動画・写真ストリーム上に重ねて表示するQRコードカード (RGBA) を生成（右下コンパクト/フル画面）"""
+        # ホスト専用モードではQRは焼かない。ここが唯一の生成口なので、
+        # 呼び出し側（動画・写真・ラジオ・待機画面）を1つずつ直す必要はない。
+        # 呼び出し側はいずれも None を「オーバーレイ無し」として扱える作りになっている。
+        if not self.is_web_remote_enabled():
+            return None
+
         is_tunnel_ready = bool(self.tunnel_raw_url and "trycloudflare.com" in self.tunnel_raw_url)
         is_tunnel_enabled = getattr(self, "enable_tunnel", True)
         port = self.config.get("port", 8000)
@@ -3335,6 +3369,11 @@ class StreamerCore:
     def generate_standby_image(self, notice_text=None):
         """待機用画面（固定画像またはQRコード & URL付き 1920x1080）を生成して保存"""
         standby_mode = self.config.get("standby_mode", "image")
+        # QR案内画面は「このURLへスマホでアクセスして」という画面そのもの。
+        # ホスト専用モードでは誰もアクセスできないので、固定画像モードへ倒す。
+        if standby_mode == "qr" and not self.is_web_remote_enabled():
+            log_print("[Core] Web remote is disabled; standby QR screen falls back to image mode.")
+            standby_mode = "image"
 
         if standby_mode == "image":
             # ==================== 固定画像モード (デフォルト) ====================

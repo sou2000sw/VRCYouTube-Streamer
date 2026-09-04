@@ -8,6 +8,7 @@
   "live_sync_duration_count": 4,
   "loop_queue": false,
   "shuffle": false,
+  "enable_web_remote": true,
   "allow_web_queue_add": true,
   "allow_web_queue_edit": true,
   "allow_web_playback_control": true,

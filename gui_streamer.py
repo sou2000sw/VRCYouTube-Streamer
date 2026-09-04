@@ -382,6 +382,23 @@ class SettingsWindow(ctk.CTkToplevel):
         # 8. 📱 Webリモコン (権限 / パスワード)
         sec8_body = self._add_section("📱 Webリモコン (権限 / パスワード)", opened=False)
 
+        # 以下の個別権限より上位のスイッチ。オフにすると、ホストPC本人以外からは
+        # リモコン画面もAPIも見えなくなる（＝下の権限設定はどれも意味を持たなくなる）。
+        self.switch_web_remote = ctk.CTkSwitch(sec8_body, text="🛡️ Enable Web Remote (オフでホスト専用モード / 外部からの操作を全遮断)")
+        if cfg.get("enable_web_remote", True):
+            self.switch_web_remote.select()
+        self.switch_web_remote.pack(anchor="w", padx=15, pady=(10, 2))
+
+        self.lbl_web_remote_desc = ctk.CTkLabel(
+            sec8_body,
+            text="※オフにすると、QRオーバーレイと待機画面のQR案内も自動的に消えます。\n　VRChatへの映像配信（stream.m3u8）は止まりません。",
+            font=ctk.CTkFont(size=11),
+            text_color="#95A5A6",
+            anchor="w",
+            justify="left"
+        )
+        self.lbl_web_remote_desc.pack(fill="x", padx=15, pady=(0, 8))
+
         self.lbl_web_perms = ctk.CTkLabel(sec8_body, text="📱 Web Remote Permissions (ブラウザ操作権限):", font=ctk.CTkFont(weight="bold"), anchor="w")
         self.lbl_web_perms.pack(fill="x", padx=15, pady=(10, 4))
 
@@ -690,6 +707,7 @@ class SettingsWindow(ctk.CTkToplevel):
                 "live_sync_duration_count": sync_count,
                 "loop_queue": loop_queue,
                 "shuffle": shuffle,
+                "enable_web_remote": bool(self.switch_web_remote.get()),
                 "allow_web_queue_add": bool(self.switch_web_add.get()),
                 "allow_web_queue_edit": bool(self.switch_web_edit.get()),
                 "allow_web_playback_control": bool(self.switch_web_control.get()),

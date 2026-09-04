@@ -66,6 +66,10 @@ AIバイブコーディング製のため手厚いサポートはできません
   - Webリモコン（ゲスト側）には**「配信・QR設定」タブを一切出しません**。ストリームキー・パスワード・権限設定が読めてしまうためで、`/api/status` でもストリームキーはゲストには伏せ字で返します。
   - リモコンURLと共有QRを載せた「接続 & スマホ共有」タブは**既定で非公開**。ホストが `allow_web_share_info` を有効にしたときだけゲストに表示されます（`/api/qrcode` も同じ判定で 403）。
   - 許可フラグが取得できない場合は**非表示側に倒す**（fail-closed）設計です。
+  - **🛡️ ホスト専用モード**: `enable_web_remote: false`（設定画面のトグル、または起動時の `--host-only`）で、
+    ホストPC以外からのリモコン画面・APIを**すべて 403 で遮断**します。QRオーバーレイと待機画面のQR案内も自動で消えます。
+    VRChatが再生に使う `stream.m3u8` / `*.ts` だけは開けたままなので、**配信は止まりません**
+    （逆に、視聴そのものを止めたい場合はRTMP押し出し + トンネル無効を選んでください）。
 * **🎬 多様な動画元・SNSプラットフォームに対応（実機検証済み）**
   YouTube動画だけでなく、YouTubeショート、YouTubeライブ、X（旧Twitter）動画、Instagramリール動画等、幅広いWeb動画の再生に対応しています。
 
@@ -233,10 +237,12 @@ VRC_Media_Streamer.exe --set loop_queue=true --set image_display_duration=30
   "image_auto_advance": false,
   "overlay_qr_enabled": false,
   "overlay_qr_mode": "bottom-right",
+  "enable_web_remote": true,
   "permissions": {
     "allow_web_queue_add": true,
     "allow_web_queue_edit": true,
-    "allow_web_playback_control": true
+    "allow_web_playback_control": true,
+    "enable_web_remote": true
   }
 }
 ```

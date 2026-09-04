@@ -779,6 +779,12 @@
                             <i class="ri-shield-user-line text-amber-400 text-base"></i>
                             <span class="text-xs font-semibold text-zinc-200">Webリモコン（フレンド）に許可する操作</span>
                         </div>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" id="hostEnableWebRemote" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
+                            <span class="text-xs text-zinc-200">🛡️ Webリモコンを有効にする（オフ＝ホスト専用モード）</span>
+                        </label>
+                        <p class="text-[11px] text-zinc-500 -mt-1">※オフにすると、ホストPC以外からのリモコン画面・APIをすべて遮断します。QRオーバーレイと待機画面のQR案内も自動で消えます。VRChatへの映像配信は止まりません。</p>
+                        <p id="hostTunnelIdleWarn" class="hidden text-[11px] text-amber-400 -mt-1">⚠️ 現在の構成では、Cloudflareトンネルは何も配っていません（配信はRTMPで直接送出中）。トンネルを無効にすると公開URL自体が無くなります。</p>
                         <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
                             <label class="flex items-center gap-2 cursor-pointer">
                                 <input type="checkbox" id="hostAllowAdd" class="rounded bg-zinc-900 border-zinc-700 text-primary focus:ring-0">
@@ -3365,6 +3371,24 @@
             if (label) label.innerText = reveal ? '隠す' : '表示';
         }
 
+        // トンネルが「誰にも何も配っていない」構成の検知に使う。/api/config からしか取れない。
+        let lastHostOutputMode = 'hls';
+        let lastHostRtmpFallback = true;
+
+        // ホスト専用モード + RTMP押し出し + HLSフォールバック無効 のとき、
+        // Cloudflareトンネルは 403 を返すだけの存在になる（＝公開URLが無駄に立っている）。
+        // 自動で止めはしない。フォールバックが有効な場合はHLS退避にトンネルが要るうえ、
+        // クイックトンネルは張り直すとURLが変わり、ワールドに貼ったURLが死ぬため。
+        function updateTunnelIdleWarning() {
+            const warn = document.getElementById('hostTunnelIdleWarn');
+            if (!warn) return;
+            const remoteOff = !(document.getElementById('hostEnableWebRemote') || {}).checked;
+            const tunnelOn = !!(document.getElementById('hostEnableTunnel') || {}).checked;
+            const isPush = lastHostOutputMode === 'topaz' || lastHostOutputMode === 'generic_rtmp';
+            const idle = remoteOff && tunnelOn && isPush && !lastHostRtmpFallback;
+            warn.classList.toggle('hidden', !idle);
+        }
+
         // ホスト専用設定は /api/status には載っていないので、設定ファイルから直接読む。
         // このエンドポイントは localhost 限定（ゲストには 403）。
         async function loadHostSettings() {
@@ -3401,11 +3425,24 @@
                 set('hostAllowAdd', cfg.allow_web_queue_add);
                 set('hostAllowEdit', cfg.allow_web_queue_edit);
                 set('hostAllowControl', cfg.allow_web_playback_control);
+                // 未設定（キーが無い古い config.json）は有効。ここを false 側に倒すと
+                // 更新しただけでリモコンが消えたように見える。
+                set('hostEnableWebRemote', cfg.enable_web_remote !== false);
                 set('hostAllowShareInfo', cfg.allow_web_share_info);
                 set('hostWebPassword', cfg.web_password || '');
 
                 const pathEl = document.getElementById('hostStandbyImagePath');
                 if (pathEl) pathEl.innerText = cfg.standby_image_path || '（未設定：既定の待機画面）';
+                lastHostOutputMode = cfg.output_mode || 'hls';
+                lastHostRtmpFallback = cfg.rtmp_fallback_to_hls !== false;
+                updateTunnelIdleWarning();
+                ['hostEnableWebRemote', 'hostEnableTunnel'].forEach((id) => {
+                    const el = document.getElementById(id);
+                    if (el && !el.dataset.idleWarnBound) {
+                        el.dataset.idleWarnBound = '1';
+                        el.addEventListener('change', updateTunnelIdleWarning);
+                    }
+                });
                 applyHostWindowMode();
             } catch (e) {
                 card.classList.add('hidden');
@@ -3441,6 +3478,7 @@
                 allow_web_queue_add: bool('hostAllowAdd'),
                 allow_web_queue_edit: bool('hostAllowEdit'),
                 allow_web_playback_control: bool('hostAllowControl'),
+                enable_web_remote: bool('hostEnableWebRemote'),
                 allow_web_share_info: bool('hostAllowShareInfo'),
                 web_password: (document.getElementById('hostWebPassword') || {}).value || ''
             };
