@@ -1,6 +1,6 @@
 # 更新履歴 (CHANGELOG)
 
-## [Unreleased] - develop
+## [2.9.8] - 2026-09-04
 
 ### 🛡️ Webリモコンの無効化（ホスト専用スタンドアロンモード）— タスク21
 - **追加**: `enable_web_remote`（既定 `true`）。`false` にすると、ホストPC以外からの

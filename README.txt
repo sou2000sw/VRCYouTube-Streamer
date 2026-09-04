@@ -255,7 +255,7 @@ CustomTkinter（MIT）、Pillow（HPND）、qrcode（BSD）、hls.js（Apache-2.
 → 詳細は同梱の「THIRD_PARTY_LICENSES.txt」を参照してください。
 
 ==================================================
- VRC_Media_Streamer v2.9.7  (2026-09-03)
+ VRC_Media_Streamer v2.9.8  (2026-09-04)
  更新内容の詳細は GitHub の CHANGELOG.md を参照してください。
  https://github.com/sou2000sw/VRC_Media_Streamer/blob/main/CHANGELOG.md
 ==================================================
