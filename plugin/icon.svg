@@ -1,24 +1,26 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="VRC_Media_Streamer">
+  <!-- VRCBeacon のプラグイン一覧に出るタイル。意匠は `assets/app_icon.png`
+       （EXE/タスクバー用 .ico と同じ絵）をベクタで再現したもの。
+       円・再生三角・電波弧の座標は app_icon.png(128px) から実測して 48px 系へ換算している。
+       アプリの意匠を差し替えるときは、ここも一緒に直すこと（v2.9.7 まで旧絵が残っていた）。 -->
   <defs>
-    <linearGradient id="vrg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#FF0033"/>
-      <stop offset="100%" stop-color="#CC0000"/>
-    </linearGradient>
-    <linearGradient id="sig" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#38BDF8"/>
-      <stop offset="100%" stop-color="#0284C7"/>
+    <linearGradient id="tile" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#262B37"/>
+      <stop offset="55%" stop-color="#1F2531"/>
+      <stop offset="100%" stop-color="#262B37"/>
     </linearGradient>
   </defs>
-  <!-- Background Rounded Square -->
-  <rect x="2" y="2" width="44" height="44" rx="10" fill="#18181B" stroke="#27272A" stroke-width="1.5"/>
-  
-  <!-- YouTube Screen Body -->
-  <rect x="7" y="10" width="34" height="24" rx="6" fill="url(#vrg)"/>
-  
-  <!-- Play Triangle -->
-  <polygon points="21,17 31,22 21,27" fill="#FFFFFF"/>
-  
-  <!-- Broadcast / Stream Waves -->
-  <path d="M 14 38 Q 24 35 34 38" fill="none" stroke="url(#sig)" stroke-width="2.5" stroke-linecap="round"/>
-  <circle cx="24" cy="40" r="1.5" fill="#38BDF8"/>
+
+  <!-- 背景タイル -->
+  <rect width="48" height="48" rx="10" fill="url(#tile)"/>
+
+  <g fill="none" stroke="#EDF1F4" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 外周の円 -->
+    <circle cx="24" cy="23.9" r="17.9"/>
+    <!-- 再生三角（塗りではなく線画） -->
+    <path d="M18.75 16.7 L29.4 23.83 L18.75 30.95 Z"/>
+    <!-- 電波（配信中）を表す2本の弧 -->
+    <path d="M30.97 18.32 A6.66 6.66 0 0 1 30.97 29.36"/>
+    <path d="M33.81 15.30 A11.18 11.18 0 0 1 33.81 32.44"/>
+  </g>
 </svg>

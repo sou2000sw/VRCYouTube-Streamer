@@ -34,6 +34,32 @@ def iter_packagable_files(root_dir):
             yield os.path.join(root, file)
 
 
+def sync_plugin_manifest_version(manifest_path, version=APP_VERSION):
+    """plugin/plugin.json の version を version.py に合わせる。
+
+    VRCBeacon はこの値でプラグインの版数を表示・更新判定する。ここだけ手書きだったため、
+    ZIP名が v2.9.7 でも中身は 2.7.0 のまま、という乖離が3リリース続いた。
+    json.load -> dump で書き戻すとキー順や整形が崩れて差分が読めなくなるので、
+    version の値だけを置換する。
+    """
+    if not os.path.exists(manifest_path):
+        print(f"[WARN] plugin.json not found: {manifest_path}", flush=True)
+        return False
+    with io.open(manifest_path, encoding="utf-8") as f:
+        text = f.read()
+    updated, hit = re.subn(r'("version"\s*:\s*")[^"]*(")',
+                           lambda m: m.group(1) + version + m.group(2), text, count=1)
+    if not hit:
+        print("[WARN] plugin.json に version フィールドが無い（同期をスキップ）", flush=True)
+        return False
+    if updated == text:
+        return False
+    with io.open(manifest_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(updated)
+    print(f"[OK] Synced plugin.json version -> {version}", flush=True)
+    return True
+
+
 def write_dist_config(dest_path, overrides=None):
     """配布用テンプレート config.dist.json から設定ファイルを生成する。
 
@@ -207,6 +233,10 @@ def package_plugin(version=APP_VERSION):
     if os.path.isdir(stale_runtime):
         shutil.rmtree(stale_runtime, ignore_errors=True)
         print("[OK] Removed runtime artifacts: plugin/bin/hls_output/", flush=True)
+
+    # plugin.json の版数を version.py に追随させてから固める。
+    # ui / bin / config.json は同期していたのにここだけ手書きで、更新漏れの常習箇所だった。
+    sync_plugin_manifest_version(os.path.join(plugin_root, "plugin.json"), version)
 
     # 3. プラグインZIPアーカイブ作成
     zip_path = os.path.join(releases_root, f"vrcbeacon-plugin-vrc-media-streamer-v{version}.zip")

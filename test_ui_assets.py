@@ -195,3 +195,37 @@ def test_vendor_assets_served_over_http():
         server.stop()
         core.shutdown()
         time.sleep(0.5)
+
+
+def test_plugin_manifest_version_matches_app_version():
+    """plugin/plugin.json の version が version.py と一致すること。
+
+    VRCBeacon はこの値でプラグインの版数を表示・更新判定する。ここだけ手書きで、
+    ZIP名が v2.9.7 でも中身は 2.7.0 のまま3リリース放置されていた。ビルド時は
+    build_exe.py の sync_plugin_manifest_version() が追随させるが、ビルドを
+    通さずに配る事故もあるので、テストでも止める。
+    """
+    path = os.path.join(BASE_DIR, "plugin", "plugin.json")
+    with io.open(path, encoding="utf-8") as f:
+        manifest = json.load(f)
+    assert manifest["version"] == APP_VERSION, \
+        f"plugin.json の version が {manifest['version']}（version.py は {APP_VERSION}）"
+
+
+def test_plugin_icon_is_current_brand():
+    """プラグインのタイルアイコンが現行意匠であること。
+
+    アプリの意匠を app_icon.ico / app_icon.png へ差し替えたとき、plugin/icon.svg
+    だけ旧絵（YouTube風の赤いタイル）が残った。この絵は VRCBeacon のプラグイン
+    一覧でしか出ないため、こちらの画面をいくら見ても気付けない。旧絵の目印
+    だった赤(#FF0033)の不在と、現行の地色(#1F2531)の存在で検知する。
+    """
+    plugin_dir = os.path.join(BASE_DIR, "plugin")
+    with io.open(os.path.join(plugin_dir, "plugin.json"), encoding="utf-8") as f:
+        icon_name = json.load(f)["icon"]
+    icon_path = os.path.join(plugin_dir, icon_name)
+    assert os.path.isfile(icon_path), f"plugin.json の icon({icon_name}) が実在しない"
+    with io.open(icon_path, encoding="utf-8") as f:
+        svg = f.read().upper()
+    assert "#FF0033" not in svg, "plugin/icon.svg が旧意匠（YouTube風の赤）のまま"
+    assert "#1F2531" in svg, "plugin/icon.svg の地色が assets/app_icon.png と揃っていない"
