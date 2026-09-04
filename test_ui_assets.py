@@ -229,3 +229,69 @@ def test_plugin_icon_is_current_brand():
         svg = f.read().upper()
     assert "#FF0033" not in svg, "plugin/icon.svg が旧意匠（YouTube風の赤）のまま"
     assert "#1F2531" in svg, "plugin/icon.svg の地色が assets/app_icon.png と揃っていない"
+
+
+# ---------------------------------------------------------------------------
+# VRCBeacon 埋め込み時の資材（plugin/ 直下）
+#
+# Beacon の中では UI のオリジンが beacon-plugin://<プラグインid> になるため、
+# ルート絶対パス（/app-mark.png）は api_server のルーティングを通らず、
+# **プラグインフォルダの直下**を見に行く。写しが無いと Beacon の中だけ 404 になり、
+# しかも Web リモコンでは出るので、こちらから再現しないと気付けない。
+# ---------------------------------------------------------------------------
+
+PLUGIN_DIR = os.path.join(BASE_DIR, "plugin")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+
+# 既知のルート絶対参照。新しく増えたらここで落ちるので、そのとき
+# 「plugin/ にも置く」か「置かない理由」かを決めることになる。
+KNOWN_ROOT_ABSOLUTE_REFS = {"/app-mark.png", "/app-icon.png"}
+
+# plugin/ 直下へ写す資材（配布名 -> 正本）。build_exe.py の PLUGIN_ROOT_ASSETS と同じ内容。
+PLUGIN_ROOT_ASSETS = {"app-mark.png": os.path.join(ASSETS_DIR, "app_mark.png")}
+
+# 写さないと決めたもの。favicon は iframe では使われないので、404 が 1 行出るだけ。
+ROOT_ABSOLUTE_REFS_NOT_SHIPPED = {"/app-icon.png"}
+
+
+def _root_absolute_refs():
+    html = _read_ui_html()
+    refs = re.findall(r"""(?:src|href)\s*=\s*["'](/[^"'?#]+)""", html)
+    return {ref for ref in refs if not ref.startswith("//")}
+
+
+def test_root_absolute_refs_are_known():
+    """ルート絶対パスの参照が増えたら気付けること。"""
+    refs = _root_absolute_refs()
+    unknown = refs - KNOWN_ROOT_ABSOLUTE_REFS
+    assert not unknown, (
+        f"ルート絶対パスの参照が増えている: {sorted(unknown)}。"
+        "Beacon の中ではオリジンが beacon-plugin:// になるので、plugin/ 直下へ写すか、"
+        "写さない理由を決めて ROOT_ABSOLUTE_REFS_NOT_SHIPPED へ入れること"
+    )
+
+
+def test_plugin_root_assets_match_source():
+    """plugin/ 直下の写しが正本と一致すること（更新漏れの検出）。"""
+    for dist_name, source in PLUGIN_ROOT_ASSETS.items():
+        dist_path = os.path.join(PLUGIN_DIR, dist_name)
+        assert os.path.isfile(source), f"正本が無い: {source}"
+        assert os.path.isfile(dist_path), (
+            f"plugin/{dist_name} が無い。Beacon の中でだけ 404 になる"
+            "（build_exe.py の sync_plugin_root_assets で写される）"
+        )
+        with open(source, "rb") as f:
+            expected = f.read()
+        with open(dist_path, "rb") as f:
+            actual = f.read()
+        assert actual == expected, (
+            f"plugin/{dist_name} が正本と食い違っている。"
+            f"{os.path.relpath(source, BASE_DIR)} を変えたら写しも更新すること"
+        )
+
+
+def test_not_shipped_refs_are_intentional():
+    """写さないと決めた参照が、既知の一覧に含まれていること。"""
+    assert ROOT_ABSOLUTE_REFS_NOT_SHIPPED <= KNOWN_ROOT_ABSOLUTE_REFS
+    for ref in ROOT_ABSOLUTE_REFS_NOT_SHIPPED:
+        assert ref.lstrip("/") not in PLUGIN_ROOT_ASSETS

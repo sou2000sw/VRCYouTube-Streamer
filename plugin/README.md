@@ -44,3 +44,20 @@ cmd /c mklink /J "E:\Projects\VRCBeacon\plugins\vrc-media-streamer" "E:\Projects
 ## 📖 関連ドキュメント
 - [VRCBeacon 橋渡し仕様・引継ぎ書](BEACON_BRIDGE_HANDOVER.md) (通信契約、セキュリティ検証、動作検証結果)
 
+---
+
+## 📌 VRCBeacon に埋め込むときの決まり（2026-09-04 追記）
+
+**橋渡しの契約は `BEACON_BRIDGE_HANDOVER.md`。** UI の `fetch` や権限まわりを触る前に読むこと。
+`hello` を受け取るまでは「Beacon の外」として直 `fetch` に落ちる作りで、その判定を変えると
+ホスト権限が静かに落ちる。
+
+**資材はオリジンのルートから引かないこと。** Beacon の中ではオリジンが
+`beacon-plugin://vrc-media-streamer` になり、`/app-mark.png` は `api_server.py` ではなく
+**このフォルダの直下**を指す。ルート絶対パスで引く資材は、このフォルダにも実体を置く必要がある。
+
+- `plugin/app-mark.png` は `assets/app_mark.png` の写し。**写すのは `build_exe.py` の
+  `sync_plugin_root_assets`**（`package_plugin` から呼ばれる）。対象を増やすときは
+  そこの `PLUGIN_ROOT_ASSETS` に 1 行足すこと
+- ずれと増加は `test_ui_assets.py` の 3 件が検知する（写しのバイト一致・ルート絶対パスの
+  参照が増えていないこと・写さないと決めたものが明記されていること）

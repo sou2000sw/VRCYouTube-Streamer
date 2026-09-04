@@ -468,3 +468,59 @@ IIFE を直接動かした）。**まだ一度も本物のアプリで動かし�
 
 この引継ぎ書へのポインタ。README に載せないと、この repo で作業するセッションが
 `BEACON_BRIDGE_HANDOVER.md` に気付かない。未実施。
+
+---
+
+# 【2026-09-04】実機（Electron）で通した —— 直した 2 件
+
+**§4「未実施」はここで済んだ。** VRCBeacon を実際に起動し、CDP でプラグインの iframe の中まで
+見て確認した。
+
+## 1. `hello` が 1 通も届いていなかった（VRCBeacon 側の不具合。直済み）
+
+症状は「プラグインの画面は出るが、`Local` 表示なのにゲスト用の画面しか出ない」。
+原因は VRCBeacon 側の `postMessage` が **`DataCloneError`** で落ちていたこと ——
+`hello` に載せる `allowedOrigins` が Pinia のストア由来の **reactive な Proxy** で、
+structured clone に載らなかった。例外は Vue が握って `console.error` に流すだけなので、
+画面には何も出ない。
+
+**このリポジトリ側の変更は要らなかった。** `hello` の判定（`location.protocol` と
+`event.source`）も `request` / `response` の形も契約どおりで、Beacon 側を直したら
+そのまま動いた。修正は VRCBeacon の `src/services/beaconPluginBridge.js`。
+
+## 2. 資材をオリジンのルートから引いている（**こちら側の話**）
+
+`ui/index.html` は次の 2 つをルート絶対パスで引いている:
+
+| 参照 | Web リモコン | Beacon の中 |
+|---|---|---|
+| `<img src="/app-mark.png">` | `api_server.py:758` が `assets/app_mark.png` を返す | `beacon-plugin://<id>/app-mark.png` = **プラグインフォルダ直下**を見る |
+| `<link href="/app-icon.png?v=...">` | 同上（`assets/app_icon.png`） | 同上 |
+
+Beacon の中ではオリジンが `beacon-plugin://vrc-media-streamer` になるので、
+**`api_server.py` のルーティングは通らない**。ヘッダーのロゴが出ていなかったのはこれが原因。
+
+**VRCBeacon 側では直せない** —— 受付口はプラグインフォルダの外を配らない（それが封じ込めの一部）。
+
+対処は 3 つ:
+
+1. **`plugin/app-mark.png` を置いた**（`assets/app_mark.png` の写し。4,908 バイト、SHA-256 一致）
+2. **`build_exe.py` の `package_plugin` が毎回写すようにした**（`sync_plugin_root_assets`。
+   `ui/index.html` や `ui/vendor/` を同期しているのと同じ場所）。写す対象は
+   `PLUGIN_ROOT_ASSETS`（配布名 → 正本）で、増えたらそこへ 1 行足す
+3. **ずれを検知するテストを 3 件足した**（`test_ui_assets.py`）――
+   ①写しが正本とバイト一致すること ②**ルート絶対パスの参照が増えたら落ちる**こと
+   ③写さないと決めたものが一覧に入っていること。ビルドを通さずに直接 `plugin/` を
+   触った場合でも、ここで気付ける
+
+**favicon（`/app-icon.png`）は置いていない** —— iframe の中では favicon は使われないので、
+コンソールに 404 が 1 行出るだけで見た目に影響しない。増やすなら 18KB の重複になる。
+この判断は `ROOT_ABSOLUTE_REFS_NOT_SHIPPED` に書いてあるので、次に見た人が迷わない。
+
+## 3. 実測できたこと
+
+- `beacon-plugin://` の実配信 ―― **○**（`icon.svg` が 48×48 で読める、`ui/index.html` も配られる）
+- 管理タブ → スイッチ → 子プロセス起動 → `/api/status` **200** ―― **○**
+- `postMessage` の往復 ―― **○**（`/api/config` が **200**、`permissions.is_local` が **true**、
+  ホスト用タブ（配信・QR設定／接続 & スマホ共有）が出る）
+- `before-quit` の実発火（子プロセスの後始末）―― **まだ見ていない**

@@ -60,6 +60,34 @@ def sync_plugin_manifest_version(manifest_path, version=APP_VERSION):
     return True
 
 
+# VRCBeacon の中では UI のオリジンが beacon-plugin://<プラグインid> になる。
+# ui/index.html がルート絶対パスで引く資材（/app-mark.png など）は api_server の
+# ルーティングを通らず、**プラグインフォルダの直下**を見に行く。
+# ここで写しておかないと、Web リモコンでは出るロゴが Beacon の中だけ 404 になる。
+# 鍵が配布名、値が正本の場所。
+PLUGIN_ROOT_ASSETS = {
+    "app-mark.png": os.path.join("assets", "app_mark.png"),
+}
+
+
+def sync_plugin_root_assets(plugin_root):
+    """ルート絶対パスで引かれる資材を plugin/ 直下へ写す。
+
+    favicon（/app-icon.png）は写さない。iframe の中では favicon が使われないので、
+    コンソールに 404 が 1 行出るだけで見た目に影響せず、18KB の重複が増えるだけになる。
+    """
+    copied = 0
+    for dist_name, source_rel in PLUGIN_ROOT_ASSETS.items():
+        source = os.path.abspath(source_rel)
+        if not os.path.exists(source):
+            print(f"[WARN] plugin root asset not found: {source_rel}", flush=True)
+            continue
+        shutil.copy2(source, os.path.join(plugin_root, dist_name))
+        print(f"[OK] Copied {source_rel} -> plugin/{dist_name}", flush=True)
+        copied += 1
+    return copied
+
+
 def write_dist_config(dest_path, overrides=None):
     """配布用テンプレート config.dist.json から設定ファイルを生成する。
 
@@ -214,6 +242,10 @@ def package_plugin(version=APP_VERSION):
               f"({len(os.listdir(dst_vendor))} files)", flush=True)
     else:
         print("[WARN] ui/vendor/ not found; plugin UI will fall back to CDN.", flush=True)
+
+    # ルート絶対パスで引かれる資材（/app-mark.png）を plugin/ 直下へ。
+    # Beacon の中ではオリジンが変わり、api_server のルーティングを通らないため。
+    sync_plugin_root_assets(plugin_root)
 
     # 2. dist/ から plugin/bin/ へバイナリを同期
     src_exe = os.path.abspath("dist/VRC_Media_Streamer.exe")
